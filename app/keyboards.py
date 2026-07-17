@@ -1,4 +1,4 @@
-from aiogram.types import CopyTextButton, InlineKeyboardButton, InlineKeyboardMarkup
+from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 
 from app.i18n import tr
@@ -53,20 +53,6 @@ def products_menu(
 
 
 def product_detail(product: Product, language: str, stock: int) -> InlineKeyboardMarkup:
-    if product.fulfillment_source == "9router":
-        amount_label = "💳 Nhập số tiền muốn mua" if language == "vi" else "💳 Enter purchase amount"
-        coupon_label = "🏷 Nhập mã giảm giá" if language == "vi" else "🏷 Apply discount code"
-        return InlineKeyboardMarkup(
-            inline_keyboard=[
-                [InlineKeyboardButton(text=amount_label, callback_data=f"tokenamount:{product.id}")],
-                [InlineKeyboardButton(text=coupon_label, callback_data=f"tokencoupon:{product.id}")],
-                [
-                    InlineKeyboardButton(
-                        text=tr(language, "back"), callback_data=f"cat:{product.category_id}"
-                    )
-                ],
-            ]
-        )
     buy_callback = f"qtymenu:{product.id}" if product.allow_quantity else f"buy:{product.id}:1"
     rows = []
     if stock > 0:
@@ -178,63 +164,6 @@ def purchase_payment_options(
                 )
             ],
         ]
-    )
-
-
-def router_token_payment_options(
-    product_id: int,
-    face_amount: int,
-    language: str,
-    coupon_id: int | None = None,
-) -> InlineKeyboardMarkup:
-    direct_label = "💳 Thanh toán QR cho đơn này" if language == "vi" else "💳 Pay by QR"
-    callback = f"tokenqr:{product_id}:{face_amount}"
-    if coupon_id is not None:
-        callback += f":{coupon_id}"
-    return InlineKeyboardMarkup(
-        inline_keyboard=[
-            [InlineKeyboardButton(text=direct_label, callback_data=callback)],
-            [InlineKeyboardButton(text=tr(language, "deposit"), callback_data="menu:deposit")],
-            [
-                InlineKeyboardButton(
-                    text=tr(language, "back"), callback_data=f"prod:{product_id}"
-                )
-            ],
-        ]
-    )
-
-
-def router_token_delivery_keyboard(
-    *,
-    order_id: int,
-    api_key: str,
-    language: str,
-    usage_url: str = "",
-) -> InlineKeyboardMarkup:
-    copy_label = "📋 Sao chép API key" if language == "vi" else "📋 Copy API key"
-    status_label = "📊 Kiểm tra token còn lại" if language == "vi" else "📊 Check remaining tokens"
-    rows = [
-        [InlineKeyboardButton(text=copy_label, copy_text=CopyTextButton(text=api_key))],
-    ]
-    if usage_url:
-        rows.append(
-            [
-                InlineKeyboardButton(
-                    text="🧬 Xem log & thống kê"
-                    if language == "vi"
-                    else "🧬 Usage logs & statistics",
-                    url=usage_url,
-                )
-            ]
-        )
-    rows.extend(
-        [
-            [InlineKeyboardButton(text=status_label, callback_data=f"routerstatus:{order_id}")],
-            [InlineKeyboardButton(text=tr(language, "back"), callback_data="menu:codes")],
-        ]
-    )
-    return InlineKeyboardMarkup(
-        inline_keyboard=rows
     )
 
 

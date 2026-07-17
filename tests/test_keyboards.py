@@ -2,7 +2,6 @@ from app.keyboards import (
     order_history_menu,
     product_detail,
     quantity_menu,
-    router_token_delivery_keyboard,
 )
 from app.models import Order, Product
 
@@ -64,16 +63,3 @@ def test_order_history_groups_items_under_one_shop_order_code() -> None:
 
     assert first_button.callback_data == "orderdetail:11"
     assert first_button.text == "BORDER123 · Tài khoản · 2 tài khoản"
-
-
-def test_router_token_keyboard_links_to_usage_dashboard() -> None:
-    keyboard = router_token_delivery_keyboard(
-        order_id=12,
-        api_key="sk-test-token",
-        language="vi",
-        usage_url="https://shop.example.com/token-usage",
-    )
-
-    usage_button = keyboard.inline_keyboard[1][0]
-    assert usage_button.text == "🧬 Xem log & thống kê"
-    assert usage_button.url == "https://shop.example.com/token-usage"

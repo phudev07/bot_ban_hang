@@ -129,69 +129,6 @@ class Order(Base):
         return self.batch_code or f"O{self.id}"
 
 
-class RouterTokenPurchase(Base):
-    __tablename__ = "router_token_purchases"
-
-    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
-    shop_order_id: Mapped[str] = mapped_column(String(128), unique=True, index=True)
-    user_id: Mapped[int] = mapped_column(ForeignKey("users.telegram_id"), index=True)
-    product_id: Mapped[int] = mapped_column(ForeignKey("products.id"), index=True)
-    deposit_id: Mapped[int | None] = mapped_column(
-        ForeignKey("deposits.id"), nullable=True, unique=True, index=True
-    )
-    order_id: Mapped[int | None] = mapped_column(
-        ForeignKey("orders.id"), nullable=True, unique=True, index=True
-    )
-    source: Mapped[str] = mapped_column(String(20), default="wallet")
-    face_amount: Mapped[int] = mapped_column(BigInteger)
-    paid_amount: Mapped[int] = mapped_column(BigInteger)
-    cost_amount: Mapped[int] = mapped_column(BigInteger, default=0)
-    token_quota: Mapped[int] = mapped_column(BigInteger)
-    discount_amount: Mapped[int] = mapped_column(BigInteger, default=0)
-    discount_code_id: Mapped[int | None] = mapped_column(
-        ForeignKey("discount_codes.id", ondelete="SET NULL"), nullable=True, index=True
-    )
-    discount_code: Mapped[str | None] = mapped_column(String(64), nullable=True)
-    encrypted_key: Mapped[str | None] = mapped_column(Text, nullable=True)
-    router_key_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
-    status: Mapped[str] = mapped_column(String(24), default="pending", index=True)
-    attempt_count: Mapped[int] = mapped_column(default=0)
-    next_retry_at: Mapped[datetime | None] = mapped_column(
-        DateTime(timezone=True), nullable=True, index=True
-    )
-    last_error: Mapped[str | None] = mapped_column(Text, nullable=True)
-    notification_claimed_at: Mapped[datetime | None] = mapped_column(
-        DateTime(timezone=True), nullable=True
-    )
-    notified_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
-    updated_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
-    )
-
-    product: Mapped[Product] = relationship()
-    order: Mapped[Order | None] = relationship()
-
-
-class RouterCapacityState(Base):
-    __tablename__ = "router_capacity_state"
-
-    id: Mapped[int] = mapped_column(primary_key=True, default=1)
-    total_capacity_tokens: Mapped[int] = mapped_column(BigInteger, default=0)
-    issued_quota_tokens: Mapped[int] = mapped_column(BigInteger, default=0)
-    used_tokens: Mapped[int] = mapped_column(BigInteger, default=0)
-    outstanding_tokens: Mapped[int] = mapped_column(BigInteger, default=0)
-    available_tokens: Mapped[int] = mapped_column(BigInteger, default=0)
-    active_keys: Mapped[int] = mapped_column(default=0)
-    failed_keys: Mapped[int] = mapped_column(default=0)
-    status: Mapped[str] = mapped_column(String(24), default="unknown")
-    last_error: Mapped[str | None] = mapped_column(Text, nullable=True)
-    checked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
-    low_notified_at: Mapped[datetime | None] = mapped_column(
-        DateTime(timezone=True), nullable=True
-    )
-
-
 class Deposit(Base):
     __tablename__ = "deposits"
 

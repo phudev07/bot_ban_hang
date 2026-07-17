@@ -21,8 +21,6 @@ from app.models import (
     Order,
     PaymentTransaction,
     Product,
-    RouterCapacityState,
-    RouterTokenPurchase,
     User,
 )
 from app.suppliers import SumistoreClient
@@ -158,7 +156,11 @@ async def financial_summary(
         func.coalesce(func.sum(Order.amount), 0),
         func.coalesce(func.sum(Order.cost_amount), 0),
         func.coalesce(func.sum(Order.discount_amount), 0),
-    ).where(Order.status == "completed")
+    ).join(Product, Product.id == Order.product_id).where(
+        Order.status == "completed",
+        Product.fulfillment_source.in_(("local", "sumistore")),
+        Product.product_type == "account",
+    )
     if start_at is not None:
         statement = statement.where(Order.created_at >= start_at)
     order_count, revenue, cost, discount = (await session.execute(statement)).one()
@@ -203,7 +205,11 @@ async def financial_summaries(
         func.coalesce(func.sum(Order.amount), 0).label("all_revenue"),
         func.coalesce(func.sum(Order.cost_amount), 0).label("all_cost"),
         func.coalesce(func.sum(Order.discount_amount), 0).label("all_discount"),
-    ).where(Order.status == "completed")
+    ).join(Product, Product.id == Order.product_id).where(
+        Order.status == "completed",
+        Product.fulfillment_source.in_(("local", "sumistore")),
+        Product.product_type == "account",
+    )
     values = (await session.execute(statement)).one()
     fields = values._mapping
     result: dict[str, dict[str, int | float]] = {}
@@ -269,12 +275,12 @@ def split_inventory_items(raw: str) -> list[str]:
 
 def normalize_product_type(value: str) -> str | None:
     normalized = value.strip().lower()
-    return normalized if normalized in {"account", "key", "token", "other"} else None
+    return normalized if normalized == "account" else None
 
 
 def normalize_fulfillment_source(value: str) -> str | None:
     normalized = value.strip().lower()
-    return normalized if normalized in {"local", "sumistore", "9router"} else None
+    return normalized if normalized in {"local", "sumistore"} else None
 
 
 def create_dashboard_router(
@@ -373,61 +379,23 @@ def create_dashboard_router(
                 )
                 or 0
             )
-            orders = int(await session.scalar(select(purchase_order_count())) or 0)
-            orders_today = int(
-                await session.scalar(
-                    select(purchase_order_count()).where(
-                        Order.created_at >= periods["today"]
-                    )
-                )
-                or 0
-            )
-            orders_month = int(
-                await session.scalar(
-                    select(purchase_order_count()).where(
-                        Order.created_at >= periods["month"]
-                    )
-                )
-                or 0
-            )
-            orders_year = int(
-                await session.scalar(
-                    select(purchase_order_count()).where(
-                        Order.created_at >= periods["year"]
-                    )
-                )
-                or 0
-            )
-            revenue = int(
-                await session.scalar(select(func.coalesce(func.sum(Order.amount), 0))) or 0
-            )
-            revenue_today = int(
-                await session.scalar(
-                    select(func.coalesce(func.sum(Order.amount), 0)).where(
-                        Order.created_at >= periods["today"]
-                    )
-                )
-                or 0
-            )
-            revenue_month = int(
-                await session.scalar(
-                    select(func.coalesce(func.sum(Order.amount), 0)).where(
-                        Order.created_at >= periods["month"]
-                    )
-                )
-                or 0
-            )
-            revenue_year = int(
-                await session.scalar(
-                    select(func.coalesce(func.sum(Order.amount), 0)).where(
-                        Order.created_at >= periods["year"]
-                    )
-                )
-                or 0
-            )
+            orders = int(financials["all"]["orders"])
+            orders_today = int(financials["today"]["orders"])
+            orders_month = int(financials["month"]["orders"])
+            orders_year = int(financials["year"]["orders"])
+            revenue = int(financials["all"]["revenue"])
+            revenue_today = int(financials["today"]["revenue"])
+            revenue_month = int(financials["month"]["revenue"])
+            revenue_year = int(financials["year"]["revenue"])
             stock = int(
                 await session.scalar(
-                    select(func.count(InventoryItem.id)).where(InventoryItem.status == "available")
+                    select(func.count(InventoryItem.id))
+                    .join(Product, Product.id == InventoryItem.product_id)
+                    .where(
+                        InventoryItem.status == "available",
+                        Product.fulfillment_source == "local",
+                        Product.product_type == "account",
+                    )
                 )
                 or 0
             )
@@ -465,12 +433,24 @@ def create_dashboard_router(
                 await session.scalar(select(func.coalesce(func.sum(User.balance), 0))) or 0
             )
             buying_users = int(
-                await session.scalar(select(func.count(func.distinct(Order.user_id)))) or 0
+                await session.scalar(
+                    select(func.count(func.distinct(Order.user_id)))
+                    .join(Product, Product.id == Order.product_id)
+                    .where(
+                        Product.fulfillment_source.in_(("local", "sumistore")),
+                        Product.product_type == "account",
+                    )
+                )
+                or 0
             )
             rows = await session.execute(
                 select(Order, Product, User)
                 .join(Product, Product.id == Order.product_id)
                 .join(User, User.telegram_id == Order.user_id)
+                .where(
+                    Product.fulfillment_source.in_(("local", "sumistore")),
+                    Product.product_type == "account",
+                )
                 .order_by(Order.id.desc())
                 .limit(800)
             )
@@ -487,7 +467,11 @@ def create_dashboard_router(
                     func.coalesce(func.sum(Order.discount_amount), 0),
                 )
                 .join(Order, Order.product_id == Product.id)
-                .where(Order.status == "completed")
+                .where(
+                    Order.status == "completed",
+                    Product.fulfillment_source.in_(("local", "sumistore")),
+                    Product.product_type == "account",
+                )
                 .group_by(Product.id)
                 .order_by(func.sum(Order.amount).desc())
                 .limit(5)
@@ -504,9 +488,13 @@ def create_dashboard_router(
                 for product, count, total, cost, discount in top_product_rows
             ]
             sales_rows = await session.execute(
-                select(Order.created_at, Order.amount, Order.cost_amount).where(
+                select(Order.created_at, Order.amount, Order.cost_amount)
+                .join(Product, Product.id == Order.product_id)
+                .where(
                     Order.created_at >= periods["fourteen_days"],
                     Order.status == "completed",
+                    Product.fulfillment_source.in_(("local", "sumistore")),
+                    Product.product_type == "account",
                 )
             )
             year_sales_rows = await session.execute(
@@ -516,9 +504,13 @@ def create_dashboard_router(
                     Order.cost_amount,
                     Order.discount_amount,
                     order_group_key(),
-                ).where(
+                )
+                .join(Product, Product.id == Order.product_id)
+                .where(
                     Order.created_at >= periods["year"],
                     Order.status == "completed",
+                    Product.fulfillment_source.in_(("local", "sumistore")),
+                    Product.product_type == "account",
                 )
             )
 
@@ -765,6 +757,10 @@ def create_dashboard_router(
             .join(Category, Category.id == Product.category_id)
             .outerjoin(stock_query, stock_query.c.product_id == Product.id)
             .outerjoin(coupon_query, coupon_query.c.product_id == Product.id)
+            .where(
+                Product.fulfillment_source.in_(("local", "sumistore")),
+                Product.product_type == "account",
+            )
             .order_by(Product.id.desc())
         )
         return [
@@ -779,12 +775,12 @@ def create_dashboard_router(
                 "coupon_count": int(coupon_count),
                 "unit_cost": (
                     int(product.supplier_price or 0)
-                    if product.fulfillment_source in {"sumistore", "9router"}
+                    if product.fulfillment_source == "sumistore"
                     else 0
                 ),
                 "unit_profit": (
                     product.price - int(product.supplier_price or 0)
-                    if product.fulfillment_source in {"sumistore", "9router"}
+                    if product.fulfillment_source == "sumistore"
                     else product.price
                 ),
             }
@@ -826,7 +822,6 @@ def create_dashboard_router(
         fulfillment_source: str = Form("local"),
         supplier_product_id: str = Form(""),
         supplier_markup: str = Form("0"),
-        supplier_price: str = Form("0"),
         allow_quantity: str | None = Form(None),
         max_quantity: int = Form(10),
     ) -> RedirectResponse:
@@ -840,7 +835,6 @@ def create_dashboard_router(
         normalized_type = normalize_product_type(product_type)
         normalized_source = normalize_fulfillment_source(fulfillment_source)
         parsed_markup = parse_vnd(supplier_markup) or 0
-        parsed_supplier_price = parse_vnd(supplier_price) or 0
         normalized_supplier_id = supplier_product_id.strip() or None
         if (
             not normalized_name
@@ -870,9 +864,7 @@ def create_dashboard_router(
                         normalized_supplier_id if normalized_source == "sumistore" else None
                     ),
                     supplier_markup=(parsed_markup if normalized_source == "sumistore" else 0),
-                    supplier_price=(
-                        parsed_supplier_price if normalized_source == "9router" else None
-                    ),
+                    supplier_price=None,
                     external_stock=0,
                     allow_quantity=allow_quantity is not None,
                     max_quantity=max(1, min(max_quantity, 100)),
@@ -891,7 +883,11 @@ def create_dashboard_router(
             categories = list(
                 await session.scalars(select(Category).order_by(Category.position, Category.id))
             )
-        if product is None:
+        if (
+            product is None
+            or product.fulfillment_source not in {"local", "sumistore"}
+            or product.product_type != "account"
+        ):
             return RedirectResponse("/admin/products", status_code=303)
         return templates.TemplateResponse(
             request,
@@ -920,7 +916,6 @@ def create_dashboard_router(
         fulfillment_source: str = Form("local"),
         supplier_product_id: str = Form(""),
         supplier_markup: str = Form("0"),
-        supplier_price: str = Form("0"),
         allow_quantity: str | None = Form(None),
         max_quantity: int = Form(10),
         active: str | None = Form(None),
@@ -934,7 +929,6 @@ def create_dashboard_router(
         normalized_type = normalize_product_type(product_type)
         normalized_source = normalize_fulfillment_source(fulfillment_source)
         parsed_markup = parse_vnd(supplier_markup) or 0
-        parsed_supplier_price = parse_vnd(supplier_price) or 0
         normalized_supplier_id = supplier_product_id.strip() or None
         async with session_factory() as session:
             product = await session.get(Product, product_id)
@@ -959,18 +953,11 @@ def create_dashboard_router(
             product.product_type = normalized_type
             product.fulfillment_source = normalized_source
             product.supplier_product_id = (
-                normalized_supplier_id
-                if normalized_source == "sumistore"
-                else product.supplier_product_id
-                if normalized_source == "9router"
-                else None
+                normalized_supplier_id if normalized_source == "sumistore" else None
             )
             product.supplier_markup = parsed_markup if normalized_source == "sumistore" else 0
             if normalized_source == "local":
                 product.supplier_price = None
-                product.external_stock = 0
-            elif normalized_source == "9router":
-                product.supplier_price = parsed_supplier_price
                 product.external_stock = 0
             product.allow_quantity = allow_quantity is not None
             product.max_quantity = max(1, min(max_quantity, 100))
@@ -1003,17 +990,9 @@ def create_dashboard_router(
                 )
                 or 0
             )
-            router_purchase_count = int(
-                await session.scalar(
-                    select(func.count(RouterTokenPurchase.id)).where(
-                        RouterTokenPurchase.product_id == product_id
-                    )
-                )
-                or 0
-            )
             if product is None:
                 return RedirectResponse("/admin/products", status_code=303)
-            if order_count or payment_count or router_purchase_count:
+            if order_count or payment_count:
                 flash(
                     request,
                     "Sản phẩm đã có đơn hoặc thanh toán nên không thể xóa. "
@@ -1038,11 +1017,22 @@ def create_dashboard_router(
             return redirect_to_login()
         async with session_factory() as session:
             products = list(
-                await session.scalars(select(Product).order_by(Product.name_vi, Product.id))
+                await session.scalars(
+                    select(Product)
+                    .where(
+                        Product.fulfillment_source.in_(("local", "sumistore")),
+                        Product.product_type == "account",
+                    )
+                    .order_by(Product.name_vi, Product.id)
+                )
             )
             statement = (
                 select(DiscountCode, Product)
                 .join(Product, Product.id == DiscountCode.product_id)
+                .where(
+                    Product.fulfillment_source.in_(("local", "sumistore")),
+                    Product.product_type == "account",
+                )
                 .order_by(DiscountCode.id.desc())
             )
             if product_id is not None:
@@ -1053,13 +1043,24 @@ def create_dashboard_router(
             ]
             active_count = int(
                 await session.scalar(
-                    select(func.count(DiscountCode.id)).where(DiscountCode.active.is_(True))
+                    select(func.count(DiscountCode.id))
+                    .join(Product, Product.id == DiscountCode.product_id)
+                    .where(
+                        DiscountCode.active.is_(True),
+                        Product.fulfillment_source.in_(("local", "sumistore")),
+                        Product.product_type == "account",
+                    )
                 )
                 or 0
             )
             total_uses = int(
                 await session.scalar(
                     select(func.coalesce(func.sum(DiscountCode.used_count), 0))
+                    .join(Product, Product.id == DiscountCode.product_id)
+                    .where(
+                        Product.fulfillment_source.in_(("local", "sumistore")),
+                        Product.product_type == "account",
+                    )
                 )
                 or 0
             )
@@ -1137,7 +1138,12 @@ def create_dashboard_router(
             duplicate = await session.scalar(
                 select(DiscountCode.id).where(DiscountCode.code == normalized_code)
             )
-            if product is None or duplicate is not None:
+            if (
+                product is None
+                or product.fulfillment_source not in {"local", "sumistore"}
+                or product.product_type != "account"
+                or duplicate is not None
+            ):
                 flash(request, "Sản phẩm không tồn tại hoặc mã đã được sử dụng.", "error")
                 return RedirectResponse("/admin/discounts", status_code=303)
             session.add(
@@ -1220,6 +1226,10 @@ def create_dashboard_router(
             inventory_rows = await session.execute(
                 select(InventoryItem, Product)
                 .join(Product, Product.id == InventoryItem.product_id)
+                .where(
+                    Product.fulfillment_source.in_(("local", "sumistore")),
+                    Product.product_type == "account",
+                )
                 .order_by(InventoryItem.id.desc())
                 .limit(100)
             )
@@ -1253,7 +1263,12 @@ def create_dashboard_router(
         parsed_items = split_inventory_items(items)
         async with session_factory() as session:
             product = await session.get(Product, product_id)
-            if product is None or product.fulfillment_source != "local" or not parsed_items:
+            if (
+                product is None
+                or product.fulfillment_source != "local"
+                or product.product_type != "account"
+                or not parsed_items
+            ):
                 flash(request, "Sản phẩm hoặc dữ liệu kho không hợp lệ.", "error")
                 return RedirectResponse("/admin/inventory", status_code=303)
             session.add_all(
@@ -1475,7 +1490,10 @@ def create_dashboard_router(
     ) -> Response:
         if not is_admin(request):
             return redirect_to_login()
-        conditions = []
+        conditions = [
+            Product.fulfillment_source.in_(("local", "sumistore")),
+            Product.product_type == "account",
+        ]
         search_condition = None
         periods = dashboard_periods()
         if q.strip():
@@ -1570,155 +1588,6 @@ def create_dashboard_router(
             ),
         )
 
-    @router.get("/admin/router-tokens", response_class=HTMLResponse)
-    async def router_tokens_page(
-        request: Request,
-        q: str = "",
-        status: str = "",
-    ) -> Response:
-        if not is_admin(request):
-            return redirect_to_login()
-        conditions = []
-        normalized_query = q.strip()
-        if normalized_query:
-            needle = f"%{normalized_query}%"
-            conditions.append(
-                or_(
-                    RouterTokenPurchase.shop_order_id.ilike(needle),
-                    cast(RouterTokenPurchase.id, String).ilike(needle),
-                    cast(RouterTokenPurchase.user_id, String).ilike(needle),
-                    RouterTokenPurchase.discount_code.ilike(needle),
-                )
-            )
-        if status:
-            conditions.append(RouterTokenPurchase.status == status)
-        paid_statuses = ("pending", "provisioning", "retry", "fulfilled")
-        async with session_factory() as session:
-            statement = (
-                select(RouterTokenPurchase, Product, User, Order)
-                .join(Product, Product.id == RouterTokenPurchase.product_id)
-                .join(User, User.telegram_id == RouterTokenPurchase.user_id)
-                .outerjoin(Order, Order.id == RouterTokenPurchase.order_id)
-                .order_by(RouterTokenPurchase.id.desc())
-                .limit(200)
-            )
-            if conditions:
-                statement = statement.where(*conditions)
-            rows = [
-                {"purchase": purchase, "product": product, "user": user, "order": order}
-                for purchase, product, user, order in await session.execute(statement)
-            ]
-            count_statement = select(func.count(RouterTokenPurchase.id))
-            if conditions:
-                count_statement = count_statement.where(*conditions)
-            count = int(await session.scalar(count_statement) or 0)
-            finance_conditions = [
-                *conditions,
-                RouterTokenPurchase.status.in_(paid_statuses),
-            ]
-            revenue, cost, token_quota = (
-                await session.execute(
-                    select(
-                        func.coalesce(func.sum(RouterTokenPurchase.paid_amount), 0),
-                        func.coalesce(func.sum(RouterTokenPurchase.cost_amount), 0),
-                        func.coalesce(func.sum(RouterTokenPurchase.token_quota), 0),
-                    ).where(*finance_conditions)
-                )
-            ).one()
-            capacity_state = await session.get(RouterCapacityState, 1)
-            capacity = {
-                "configured": settings.router_capacity_tokens > 0,
-                "total": int(capacity_state.total_capacity_tokens) if capacity_state else 0,
-                "issued": int(capacity_state.issued_quota_tokens) if capacity_state else 0,
-                "used": int(capacity_state.used_tokens) if capacity_state else 0,
-                "outstanding": int(capacity_state.outstanding_tokens) if capacity_state else 0,
-                "available": int(capacity_state.available_tokens) if capacity_state else 0,
-                "sellable": (
-                    max(
-                        0,
-                        int(capacity_state.available_tokens)
-                        - settings.router_capacity_reserve_tokens,
-                    )
-                    if capacity_state and settings.router_capacity_tokens > 0
-                    else 0
-                ),
-                "active_keys": int(capacity_state.active_keys) if capacity_state else 0,
-                "failed_keys": int(capacity_state.failed_keys) if capacity_state else 0,
-                "status": capacity_state.status if capacity_state else "unknown",
-                "checked_at": capacity_state.checked_at if capacity_state else None,
-                "reserve": settings.router_capacity_reserve_tokens,
-            }
-        return templates.TemplateResponse(
-            request,
-            "router_tokens.html",
-            page_context(
-                request,
-                "GPT token 9Router",
-                "router_tokens",
-                rows=rows,
-                filters={"q": normalized_query, "status": status},
-                summary={
-                    "count": count,
-                    "revenue": int(revenue),
-                    "cost": int(cost),
-                    "profit": int(revenue) - int(cost),
-                    "token_quota": int(token_quota),
-                },
-                capacity=capacity,
-            ),
-        )
-
-    @router.post("/admin/router-tokens/{purchase_id}/retry")
-    async def retry_router_token_purchase(
-        purchase_id: int,
-        request: Request,
-        csrf: str = Form(...),
-    ) -> RedirectResponse:
-        if not is_admin(request):
-            return redirect_to_login()
-        if not valid_csrf(request, csrf):
-            return RedirectResponse("/admin/router-tokens", status_code=303)
-        async with session_factory() as session:
-            purchase = await session.scalar(
-                select(RouterTokenPurchase)
-                .where(RouterTokenPurchase.id == purchase_id)
-                .with_for_update()
-            )
-            if purchase is None or purchase.status != "retry":
-                flash(request, "Đơn không ở trạng thái có thể thử lại.", "error")
-            else:
-                purchase.status = "pending"
-                purchase.next_retry_at = datetime.now(UTC)
-                purchase.last_error = None
-                await session.commit()
-                flash(request, "Đã đưa đơn vào hàng đợi cấp key ngay.")
-        return RedirectResponse("/admin/router-tokens", status_code=303)
-
-    @router.post("/admin/router-tokens/{purchase_id}/resend")
-    async def resend_router_token_delivery(
-        purchase_id: int,
-        request: Request,
-        csrf: str = Form(...),
-    ) -> RedirectResponse:
-        if not is_admin(request):
-            return redirect_to_login()
-        if not valid_csrf(request, csrf):
-            return RedirectResponse("/admin/router-tokens", status_code=303)
-        async with session_factory() as session:
-            purchase = await session.scalar(
-                select(RouterTokenPurchase)
-                .where(RouterTokenPurchase.id == purchase_id)
-                .with_for_update()
-            )
-            if purchase is None or purchase.status != "fulfilled":
-                flash(request, "Đơn chưa có key để gửi lại.", "error")
-            else:
-                purchase.notified_at = None
-                purchase.notification_claimed_at = None
-                await session.commit()
-                flash(request, "Đã xếp lịch gửi lại key cho khách.")
-        return RedirectResponse("/admin/router-tokens", status_code=303)
-
     @router.get("/admin/orders/{order_id}", response_class=HTMLResponse)
     async def order_detail_page(order_id: int, request: Request) -> Response:
         if not is_admin(request):
@@ -1729,7 +1598,11 @@ def create_dashboard_router(
                     select(Order, Product, User)
                     .join(Product, Product.id == Order.product_id)
                     .join(User, User.telegram_id == Order.user_id)
-                    .where(Order.id == order_id)
+                    .where(
+                        Order.id == order_id,
+                        Product.fulfillment_source.in_(("local", "sumistore")),
+                        Product.product_type == "account",
+                    )
                 )
             ).one_or_none()
             if row is None:
@@ -1756,14 +1629,24 @@ def create_dashboard_router(
             )
             user_order_count = int(
                 await session.scalar(
-                    select(purchase_order_count()).where(Order.user_id == user.telegram_id)
+                    select(purchase_order_count())
+                    .join(Product, Product.id == Order.product_id)
+                    .where(
+                        Order.user_id == user.telegram_id,
+                        Product.fulfillment_source.in_(("local", "sumistore")),
+                        Product.product_type == "account",
+                    )
                 )
                 or 0
             )
             user_spent = int(
                 await session.scalar(
-                    select(func.coalesce(func.sum(Order.amount), 0)).where(
-                        Order.user_id == user.telegram_id
+                    select(func.coalesce(func.sum(Order.amount), 0))
+                    .join(Product, Product.id == Order.product_id)
+                    .where(
+                        Order.user_id == user.telegram_id,
+                        Product.fulfillment_source.in_(("local", "sumistore")),
+                        Product.product_type == "account",
                     )
                 )
                 or 0

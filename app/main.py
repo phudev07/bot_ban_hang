@@ -16,11 +16,6 @@ from app.config import get_settings
 from app.database import Base, DatabaseSessionMiddleware, create_database
 from app.handlers import create_router
 from app.models import Category, Product
-from app.router_tokens import (
-    create_router_token_client,
-    ensure_router_token_product,
-    router_token_worker,
-)
 from app.suppliers import (
     SumistoreClient,
     create_sumistore_client,
@@ -196,12 +191,6 @@ async def initialize_database(engine, session_factory, seed_demo_data: bool) -> 
             )
         )
         await connection.execute(
-            text(
-                "ALTER TABLE router_token_purchases ADD COLUMN IF NOT EXISTS "
-                "notification_claimed_at TIMESTAMPTZ NULL"
-            )
-        )
-        await connection.execute(
             text("UPDATE products SET allow_quantity = TRUE WHERE name_en = 'Demo account'")
         )
         await connection.execute(
@@ -221,30 +210,18 @@ async def initialize_database(engine, session_factory, seed_demo_data: bool) -> 
         if await session.scalar(select(Category.id).limit(1)) is not None:
             return
         accounts = Category(name_vi="Tài khoản", name_en="Accounts", position=1)
-        llm = Category(name_vi="Dịch vụ LLM", name_en="LLM services", position=2)
-        session.add_all([accounts, llm])
+        session.add(accounts)
         await session.flush()
-        session.add_all(
-            [
-                Product(
-                    category_id=accounts.id,
-                    name_vi="Tài khoản mẫu",
-                    name_en="Demo account",
-                    description_vi="Sản phẩm mẫu, quản trị viên có thể sửa hoặc thay thế.",
-                    description_en="Demo product. Replace it before opening the shop.",
-                    price=50_000,
-                    allow_quantity=True,
-                ),
-                Product(
-                    category_id=llm.id,
-                    name_vi="Quyền truy cập LLM mẫu",
-                    name_en="Demo LLM access",
-                    description_vi="Chỉ phân phối dịch vụ bạn được phép bán lại.",
-                    description_en="Only distribute services you are authorized to resell.",
-                    price=100_000,
-                    product_type="key",
-                ),
-            ]
+        session.add(
+            Product(
+                category_id=accounts.id,
+                name_vi="Tài khoản mẫu",
+                name_en="Demo account",
+                description_vi="Sản phẩm mẫu, quản trị viên có thể sửa hoặc thay thế.",
+                description_en="Demo product. Replace it before opening the shop.",
+                price=50_000,
+                allow_quantity=True,
+            )
         )
         await session.commit()
 
@@ -275,9 +252,7 @@ async def main() -> None:
     engine, session_factory = create_database(settings.database_url)
     await initialize_database(engine, session_factory, settings.seed_demo_data)
     await ensure_sumistore_product(session_factory, settings)
-    await ensure_router_token_product(session_factory, settings)
     supplier_client = create_sumistore_client(settings)
-    router_token_client = create_router_token_client(settings)
     await sync_sumistore_products(session_factory, supplier_client)
 
     cipher = SecretCipher(settings.inventory_encryption_key.get_secret_value())
@@ -319,9 +294,7 @@ async def main() -> None:
     dispatcher = Dispatcher(storage=storage)
     dispatcher.update.outer_middleware(DatabaseSessionMiddleware(session_factory))
     dispatcher.include_router(create_admin_router(settings, cipher))
-    dispatcher.include_router(
-        create_router(settings, cipher, supplier_client, router_token_client)
-    )
+    dispatcher.include_router(create_router(settings, cipher, supplier_client))
 
     api = create_api(
         settings,
@@ -330,7 +303,6 @@ async def main() -> None:
         cipher,
         supplier_client,
         deposit_notification_bot,
-        router_token_client,
     )
     server = uvicorn.Server(
         uvicorn.Config(
@@ -352,19 +324,6 @@ async def main() -> None:
         if supplier_client is not None
         else None
     )
-    router_token_task = (
-        asyncio.create_task(
-            router_token_worker(
-                session_factory,
-                router_token_client,
-                cipher,
-                bot,
-                settings,
-            )
-        )
-        if router_token_client is not None
-        else None
-    )
     try:
         await bot.delete_webhook(drop_pending_updates=False)
         await dispatcher.start_polling(bot)
@@ -373,17 +332,11 @@ async def main() -> None:
             supplier_task.cancel()
             with contextlib.suppress(asyncio.CancelledError):
                 await supplier_task
-        if router_token_task is not None:
-            router_token_task.cancel()
-            with contextlib.suppress(asyncio.CancelledError):
-                await router_token_task
         server.should_exit = True
         await api_task
         await storage.close()
         if deposit_notification_bot is not None:
             await deposit_notification_bot.session.close()
-        if router_token_client is not None:
-            await router_token_client.close()
         await bot.session.close()
         await engine.dispose()
 

@@ -40,26 +40,10 @@ class Settings(BaseSettings):
     sumistore_timeout_seconds: float = 15
     sumistore_sync_seconds: int = 60
 
-    router_tokens_enabled: bool = False
-    router_base_url: str = ""
-    router_public_api_url: str = ""
-    router_hmac_secret: SecretStr = SecretStr("")
-    router_timeout_seconds: float = 15
-    router_min_purchase: int = 10_000
-    router_tokens_per_vnd: int = 1_000
-    router_capacity_tokens: int = 0
-    router_capacity_reserve_tokens: int = 10_000_000
-    router_capacity_sync_seconds: int = 60
-    router_allowed_models_text: str = Field(
-        default="gpt-*,*/gpt-*",
-        validation_alias="ROUTER_ALLOWED_MODELS",
-    )
-
     inventory_encryption_key: SecretStr
     web_host: str = "0.0.0.0"
     web_port: int = 8080
     public_base_url: str = ""
-    token_usage_public_url: str = ""
     dashboard_enabled: bool = False
     dashboard_username: str = "admin"
     dashboard_password_hash: SecretStr = SecretStr("")
@@ -104,19 +88,6 @@ class Settings(BaseSettings):
             raise ValueError("Sumistore is enabled but API ID is missing")
         if self.sumistore_markup < 0 or self.sumistore_fallback_price <= 0:
             raise ValueError("Sumistore price configuration is invalid")
-        if self.router_tokens_enabled:
-            if not self.router_base_url.startswith("https://"):
-                raise ValueError("9Router internal URL must use HTTPS")
-            if not self.router_public_api_url.startswith("https://"):
-                raise ValueError("9Router public API URL must use HTTPS")
-            if not self.router_hmac_secret.get_secret_value():
-                raise ValueError("9Router HMAC secret is missing")
-            if self.router_min_purchase < 10_000 or self.router_tokens_per_vnd <= 0:
-                raise ValueError("9Router token rate configuration is invalid")
-            if self.router_capacity_tokens < 0 or self.router_capacity_reserve_tokens < 0:
-                raise ValueError("9Router capacity configuration is invalid")
-            if self.router_capacity_sync_seconds < 15:
-                raise ValueError("9Router capacity sync interval must be at least 15 seconds")
         return self
 
     @property
@@ -132,25 +103,6 @@ class Settings(BaseSettings):
         ]
         values = configured or [self.sumistore_product_id]
         return tuple(dict.fromkeys(values))
-
-    @property
-    def router_allowed_models(self) -> tuple[str, ...]:
-        return tuple(
-            dict.fromkeys(
-                item.strip()
-                for item in self.router_allowed_models_text.split(",")
-                if item.strip()
-            )
-        )
-
-    @property
-    def token_usage_url(self) -> str:
-        configured = self.token_usage_public_url.rstrip("/")
-        if configured:
-            return configured
-        public_base_url = self.public_base_url.rstrip("/")
-        return f"{public_base_url}/token-usage" if public_base_url else ""
-
 
 @lru_cache
 def get_settings() -> Settings:

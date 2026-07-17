@@ -1,6 +1,4 @@
 import asyncio
-from datetime import UTC, datetime
-
 from cryptography.fernet import Fernet
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
@@ -13,8 +11,6 @@ from app.models import (
     InventoryItem,
     Order,
     Product,
-    RouterCapacityState,
-    RouterTokenPurchase,
     User,
 )
 from app.services import (
@@ -344,148 +340,6 @@ def test_direct_purchase_payment_delivers_without_using_wallet() -> None:
             assert user is not None and user.balance == 10_000
             assert all(item.status == "sold" for item in stock_items)
             assert order_count == 2
-        await engine.dispose()
-
-    asyncio.run(scenario())
-
-
-def test_router_token_qr_payment_moves_outbox_once() -> None:
-    async def scenario() -> None:
-        engine, sessions = await make_database()
-        async with sessions() as session:
-            category = Category(name_vi="LLM", name_en="LLM")
-            session.add(category)
-            await session.flush()
-            product = Product(
-                category_id=category.id,
-                name_vi="GPT Token 9Router",
-                name_en="GPT Tokens via 9Router",
-                price=10_000,
-                product_type="token",
-                fulfillment_source="9router",
-            )
-            user = User(telegram_id=789012, full_name="Token Buyer", balance=0)
-            session.add_all([product, user])
-            await session.flush()
-            deposit = Deposit(
-                user_id=user.telegram_id,
-                code="NAP789012ABCD",
-                requested_amount=25_000,
-                payment_kind="router_token_purchase",
-                product_id=product.id,
-            )
-            session.add(deposit)
-            await session.flush()
-            purchase = RouterTokenPurchase(
-                shop_order_id="RT-TEST-QR",
-                user_id=user.telegram_id,
-                product_id=product.id,
-                deposit_id=deposit.id,
-                source="qr",
-                face_amount=25_000,
-                paid_amount=25_000,
-                token_quota=25_000_000,
-                status="awaiting_payment",
-            )
-            session.add(purchase)
-            await session.commit()
-
-        payload = {
-            "id": 55555,
-            "transferType": "in",
-            "transferAmount": 25_000,
-            "content": "NAP789012ABCD",
-        }
-        result = await process_sepay_payment(sessions, payload)
-        duplicate = await process_sepay_payment(sessions, payload)
-        assert result.status == "router_token_pending"
-        assert result.router_purchase_id == purchase.id
-        assert duplicate.status == "duplicate"
-
-        async with sessions() as session:
-            stored_user = await session.get(User, user.telegram_id)
-            stored_purchase = await session.get(RouterTokenPurchase, purchase.id)
-            order_count = await session.scalar(select(func.count(Order.id)))
-            assert stored_user is not None and stored_user.balance == 0
-            assert stored_purchase is not None and stored_purchase.status == "pending"
-            assert order_count == 0
-        await engine.dispose()
-
-    asyncio.run(scenario())
-
-
-def test_router_token_qr_payment_falls_back_when_capacity_is_low() -> None:
-    async def scenario() -> None:
-        engine, sessions = await make_database()
-        async with sessions() as session:
-            category = Category(name_vi="LLM", name_en="LLM")
-            session.add(category)
-            await session.flush()
-            product = Product(
-                category_id=category.id,
-                name_vi="GPT Token 9Router",
-                name_en="GPT Tokens via 9Router",
-                price=10_000,
-                product_type="token",
-                fulfillment_source="9router",
-            )
-            user = User(telegram_id=789013, full_name="Capacity Buyer", balance=0)
-            session.add_all([product, user])
-            await session.flush()
-            deposit = Deposit(
-                user_id=user.telegram_id,
-                code="NAP789013LOW",
-                requested_amount=25_000,
-                payment_kind="router_token_purchase",
-                product_id=product.id,
-            )
-            session.add(deposit)
-            await session.flush()
-            purchase = RouterTokenPurchase(
-                shop_order_id="RT-TEST-CAPACITY",
-                user_id=user.telegram_id,
-                product_id=product.id,
-                deposit_id=deposit.id,
-                source="qr",
-                face_amount=25_000,
-                paid_amount=25_000,
-                token_quota=25_000_000,
-                status="awaiting_payment",
-            )
-            session.add_all(
-                [
-                    purchase,
-                    RouterCapacityState(
-                        id=1,
-                        total_capacity_tokens=30_000_000,
-                        available_tokens=30_000_000,
-                        status="healthy",
-                        checked_at=datetime.now(UTC),
-                    ),
-                ]
-            )
-            await session.commit()
-
-        result = await process_sepay_payment(
-            sessions,
-            {
-                "id": 55556,
-                "transferType": "in",
-                "transferAmount": 25_000,
-                "content": "NAP789013LOW",
-            },
-            router_capacity_tokens=30_000_000,
-            router_capacity_reserve_tokens=10_000_000,
-            router_capacity_sync_seconds=60,
-        )
-        assert result.status == "credited"
-
-        async with sessions() as session:
-            stored_user = await session.get(User, user.telegram_id)
-            stored_purchase = await session.get(RouterTokenPurchase, purchase.id)
-            assert stored_user is not None and stored_user.balance == 25_000
-            assert stored_purchase is not None and stored_purchase.status == "payment_fallback"
-            assert "capacity" in (stored_purchase.last_error or "").lower()
         await engine.dispose()
 
     asyncio.run(scenario())

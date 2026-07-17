@@ -13,7 +13,6 @@ from app.delivery import (
     delivery_file,
     delivery_keyboard,
     delivery_text,
-    router_token_delivery_text,
 )
 from app.keyboards import (
     back_menu,
@@ -27,8 +26,6 @@ from app.keyboards import (
     products_menu,
     purchase_payment_options,
     quantity_menu,
-    router_token_delivery_keyboard,
-    router_token_payment_options,
 )
 from app.models import Product, User
 from app.services import (
@@ -42,18 +39,6 @@ from app.services import (
     purchase_product,
     recent_orders,
     user_activity_stats,
-)
-from app.router_tokens import (
-    RouterTokenClient,
-    RouterTokenError,
-    claim_router_capacity,
-    create_qr_router_purchase,
-    create_wallet_router_purchase,
-    fulfill_router_token_purchase,
-    notify_router_token_purchase,
-    router_amount_pricing,
-    router_purchase_for_order,
-    token_quota_for_amount,
 )
 from app.states import DepositStates, PurchaseStates
 from app.suppliers import SumistoreClient
@@ -105,7 +90,6 @@ def create_router(
     settings: Settings,
     cipher: SecretCipher,
     supplier_client: SumistoreClient | None = None,
-    router_token_client: RouterTokenClient | None = None,
 ) -> Router:
     router = Router(name="customer")
 
@@ -332,329 +316,22 @@ def create_router(
         )
         name = product.name_en if user.language == "en" else product.name_vi
         description = product.description_en if user.language == "en" else product.description_vi
-        if product.fulfillment_source == "9router":
-            quota_at_minimum = (
-                f"{settings.router_min_purchase * settings.router_tokens_per_vnd:,}"
-            ).replace(",", ".")
-            text = (
-                f"🤖 <b>{escape(name)}</b>\n\n"
-                f"📝 {escape(description or '—')}\n\n"
-                f"💵 {'Rate' if user.language == 'en' else 'Tỷ lệ'}: "
-                f"<b>{format_vnd(settings.router_min_purchase)} = "
-                f"{quota_at_minimum} token</b>\n"
-                f"🔻 {'Minimum' if user.language == 'en' else 'Tối thiểu'}: "
-                f"<b>{format_vnd(settings.router_min_purchase)}</b>"
-            )
-        else:
-            labels = (
-                ("Price", "In stock", "Description")
-                if user.language == "en"
-                else ("Giá", "Còn hàng", "Thông tin")
-            )
-            text = (
-                f"📦 <b>{escape(name)}</b>\n\n"
-                f"📝 {labels[2]}: {escape(description or '—')}\n\n"
-                f"💵 {labels[0]}: <b>{format_vnd(product.price)}</b>\n"
-                f"📊 {labels[1]}: <b>{stock}</b>"
-            )
+        labels = (
+            ("Price", "In stock", "Description")
+            if user.language == "en"
+            else ("Giá", "Còn hàng", "Thông tin")
+        )
+        text = (
+            f"📦 <b>{escape(name)}</b>\n\n"
+            f"📝 {labels[2]}: {escape(description or '—')}\n\n"
+            f"💵 {labels[0]}: <b>{format_vnd(product.price)}</b>\n"
+            f"📊 {labels[1]}: <b>{stock}</b>"
+        )
         if callback.message:
             await callback.message.edit_text(
                 text,
                 reply_markup=product_detail(product, user.language, stock),
             )
-        await callback.answer()
-
-    async def complete_router_token_wallet_purchase(
-        target: Message,
-        user: User,
-        product_id: int,
-        face_amount: int,
-        session_factory: async_sessionmaker[AsyncSession],
-        coupon_id: int | None = None,
-    ) -> None:
-        if router_token_client is None:
-            await target.answer("Dịch vụ GPT token đang tạm bảo trì.")
-            return
-        result = await create_wallet_router_purchase(
-            session_factory,
-            settings,
-            user.telegram_id,
-            product_id,
-            face_amount,
-            coupon_id=coupon_id,
-        )
-        if not result.ok:
-            labels = {
-                "not_found": "Sản phẩm không tồn tại.",
-                "blocked": "Tài khoản đang bị khóa. Liên hệ hỗ trợ.",
-                "invalid_amount": (
-                    f"Số tiền tối thiểu là {format_vnd(settings.router_min_purchase)}."
-                ),
-                "invalid_coupon": "Mã giảm giá không còn hiệu lực.",
-                "capacity": (
-                    "Nguồn GPT token đang chạm ngưỡng dự phòng. "
-                    "Hệ thống đã tạm dừng bán gói mới."
-                ),
-            }
-            if result.message == "insufficient":
-                quota = f"{result.token_quota:,}".replace(",", ".")
-                coupon_line = (
-                    f"• Mã giảm giá: <b>{escape(result.coupon_code)}</b> "
-                    f"(-{format_vnd(result.discount_amount)})\n"
-                    if result.coupon_code
-                    else ""
-                )
-                text = (
-                    "💳 <b>Số dư chưa đủ</b>\n\n"
-                    f"• Gói token: <b>{quota} token</b>\n"
-                    f"{coupon_line}"
-                    f"• Cần thanh toán: <b>{format_vnd(result.paid_amount)}</b>\n"
-                    f"• Số dư hiện có: <b>{format_vnd(user.balance)}</b>\n\n"
-                    "Bạn có thể thanh toán QR trực tiếp hoặc nạp thêm số dư."
-                    if user.language == "vi"
-                    else "💳 <b>Insufficient balance</b>\n\n"
-                    f"• Token package: <b>{quota} tokens</b>\n"
-                    f"• Amount due: <b>{format_vnd(result.paid_amount)}</b>\n"
-                    f"• Current balance: <b>{format_vnd(user.balance)}</b>\n\n"
-                    "Pay directly by QR or add funds to your wallet."
-                )
-                await target.answer(
-                    text,
-                    reply_markup=router_token_payment_options(
-                        product_id,
-                        face_amount,
-                        user.language,
-                        coupon_id,
-                    ),
-                )
-                return
-            await target.answer(labels.get(result.message, "Không thể tạo đơn GPT token."))
-            return
-
-        fulfillment = await fulfill_router_token_purchase(
-            session_factory,
-            router_token_client,
-            cipher,
-            result.purchase_id or 0,
-        )
-        notified = False
-        if fulfillment.ok:
-            notified = await notify_router_token_purchase(
-                session_factory,
-                target.bot,
-                cipher,
-                router_token_client.public_api_url,
-                result.purchase_id or 0,
-                router_token_client.usage_page_url,
-            )
-        if not notified:
-            await target.answer(
-                "⏳ Đơn đã được ghi nhận. Hệ thống đang cấp key và sẽ tự gửi ngay khi hoàn tất."
-                if user.language == "vi"
-                else "⏳ Your order is recorded. The key will be delivered automatically."
-            )
-
-    @router.callback_query(F.data.startswith("tokenamount:"))
-    async def request_router_token_amount(
-        callback: CallbackQuery,
-        session: AsyncSession,
-        state: FSMContext,
-    ) -> None:
-        user = await get_or_create_user(callback, session)
-        product_id = int(callback.data.split(":", 1)[1])
-        product = await session.get(Product, product_id)
-        if (
-            router_token_client is None
-            or product is None
-            or not product.active
-            or product.fulfillment_source != "9router"
-        ):
-            await callback.answer("Dịch vụ đang tạm bảo trì.", show_alert=True)
-            return
-        await state.set_state(PurchaseStates.waiting_for_token_amount)
-        await state.update_data(product_id=product_id, token_coupon_id=None)
-        quota_per_thousand = f"{settings.router_tokens_per_vnd * 1_000:,}".replace(",", ".")
-        prompt = (
-            "💳 <b>Nhập số tiền muốn mua token</b>\n\n"
-            f"Tối thiểu {format_vnd(settings.router_min_purchase)}. "
-            f"Mỗi 1.000đ nhận {quota_per_thousand} token."
-            if user.language == "vi"
-            else "💳 <b>Enter the token purchase amount</b>\n\n"
-            f"Minimum {format_vnd(settings.router_min_purchase)}. "
-            f"Every 1,000 VND grants {quota_per_thousand} tokens."
-        )
-        if callback.message:
-            await callback.message.edit_text(prompt, reply_markup=back_menu(user.language))
-        await callback.answer()
-
-    @router.callback_query(F.data.startswith("tokencoupon:"))
-    async def request_router_token_coupon(
-        callback: CallbackQuery,
-        session: AsyncSession,
-        state: FSMContext,
-    ) -> None:
-        user = await get_or_create_user(callback, session)
-        product_id = int(callback.data.split(":", 1)[1])
-        product = await session.get(Product, product_id)
-        if product is None or product.fulfillment_source != "9router":
-            await callback.answer("Sản phẩm không tồn tại.", show_alert=True)
-            return
-        await state.set_state(PurchaseStates.waiting_for_token_coupon)
-        await state.update_data(product_id=product_id)
-        if callback.message:
-            await callback.message.edit_text(
-                "🏷 <b>Nhập mã giảm giá cho gói GPT token</b>"
-                if user.language == "vi"
-                else "🏷 <b>Enter a discount code for GPT tokens</b>",
-                reply_markup=back_menu(user.language),
-            )
-        await callback.answer()
-
-    @router.message(PurchaseStates.waiting_for_token_coupon)
-    async def receive_router_token_coupon(
-        message: Message,
-        session: AsyncSession,
-        state: FSMContext,
-    ) -> None:
-        user = await get_or_create_user(message, session)
-        data = await state.get_data()
-        product = await session.get(Product, int(data.get("product_id", 0)))
-        if product is None or product.fulfillment_source != "9router":
-            await state.clear()
-            await message.answer("Sản phẩm không tồn tại.")
-            return
-        pricing = await router_amount_pricing(
-            session,
-            product,
-            settings.router_min_purchase,
-            coupon_code=message.text or "",
-        )
-        if pricing is None or pricing.coupon is None:
-            await message.answer(
-                "Mã giảm giá không hợp lệ, đã hết hạn hoặc hết lượt sử dụng."
-                if user.language == "vi"
-                else "This discount code is invalid, expired, or fully used."
-            )
-            return
-        await state.set_state(PurchaseStates.waiting_for_token_amount)
-        await state.update_data(product_id=product.id, token_coupon_id=pricing.coupon.id)
-        await message.answer(
-            f"✅ Đã áp dụng mã <b>{escape(pricing.coupon.code)}</b>.\n"
-            f"Bây giờ nhập số tiền muốn mua, tối thiểu {format_vnd(settings.router_min_purchase)}."
-            if user.language == "vi"
-            else f"✅ Code <b>{escape(pricing.coupon.code)}</b> applied.\n"
-            f"Now enter an amount from {format_vnd(settings.router_min_purchase)}."
-        )
-
-    @router.message(PurchaseStates.waiting_for_token_amount)
-    async def receive_router_token_amount(
-        message: Message,
-        session: AsyncSession,
-        session_factory: async_sessionmaker[AsyncSession],
-        state: FSMContext,
-    ) -> None:
-        user = await get_or_create_user(message, session)
-        data = await state.get_data()
-        amount = parse_vnd(message.text or "")
-        if amount is None or amount < settings.router_min_purchase or amount > 1_000_000_000:
-            await message.answer(
-                f"Số tiền không hợp lệ. Nhập từ {format_vnd(settings.router_min_purchase)}."
-                if user.language == "vi"
-                else f"Invalid amount. Enter at least {format_vnd(settings.router_min_purchase)}."
-            )
-            return
-        product_id = int(data.get("product_id", 0))
-        coupon_id = data.get("token_coupon_id")
-        await state.clear()
-        await complete_router_token_wallet_purchase(
-            message,
-            user,
-            product_id,
-            amount,
-            session_factory,
-            int(coupon_id) if coupon_id is not None else None,
-        )
-
-    @router.callback_query(F.data.startswith("tokenqr:"))
-    async def create_router_token_qr(
-        callback: CallbackQuery,
-        session: AsyncSession,
-    ) -> None:
-        user = await get_or_create_user(callback, session)
-        if not settings.sepay_enabled or router_token_client is None:
-            await callback.answer("Thanh toán QR đang tạm bảo trì.", show_alert=True)
-            return
-        parts = callback.data.split(":")
-        product_id = int(parts[1])
-        face_amount = int(parts[2])
-        coupon_id = int(parts[3]) if len(parts) > 3 else None
-        product = await session.get(Product, product_id)
-        if product is None or not product.active or product.fulfillment_source != "9router":
-            await callback.answer("Sản phẩm không tồn tại.", show_alert=True)
-            return
-        quota = token_quota_for_amount(face_amount, settings)
-        if not await claim_router_capacity(
-            session,
-            requested_tokens=quota,
-            total_capacity_tokens=settings.router_capacity_tokens,
-            reserve_tokens=settings.router_capacity_reserve_tokens,
-            sync_seconds=settings.router_capacity_sync_seconds,
-            claim=False,
-        ):
-            await callback.answer(
-                "Nguồn GPT token đang chạm ngưỡng dự phòng, tạm thời chưa thể tạo QR.",
-                show_alert=True,
-            )
-            return
-        created = await create_qr_router_purchase(
-            session,
-            settings,
-            user,
-            product,
-            face_amount,
-            coupon_id=coupon_id,
-        )
-        if created is None:
-            await callback.answer("Không thể tạo đơn hoặc mã giảm giá đã hết hiệu lực.", show_alert=True)
-            return
-        deposit, purchase = created
-        qr_url = build_sepay_qr_url(
-            settings.bank_code,
-            settings.bank_account,
-            deposit.requested_amount,
-            deposit.code,
-        )
-        quota = f"{purchase.token_quota:,}".replace(",", ".")
-        text = (
-            "🧾 <b>Thanh toán GPT token</b>\n\n"
-            f"• Gói nhận được: <b>{quota} token</b>\n"
-            f"• Số tiền: <b>{format_vnd(deposit.requested_amount)}</b>\n"
-            f"• Ngân hàng: <b>{escape(settings.bank_code)}</b>\n"
-            f"• Số tài khoản: <code>{escape(settings.bank_account)}</code>\n"
-            f"• Nội dung bắt buộc: <code>{deposit.code}</code>\n\n"
-            "Giữ nguyên số tiền và nội dung. Key sẽ được cấp tự động sau khi thanh toán."
-            if user.language == "vi"
-            else "🧾 <b>GPT token payment</b>\n\n"
-            f"• Package: <b>{quota} tokens</b>\n"
-            f"• Amount: <b>{format_vnd(deposit.requested_amount)}</b>\n"
-            f"• Bank: <b>{escape(settings.bank_code)}</b>\n"
-            f"• Account: <code>{escape(settings.bank_account)}</code>\n"
-            f"• Required content: <code>{deposit.code}</code>\n\n"
-            "Keep the exact amount and content. Your key is delivered automatically."
-        )
-        if callback.message:
-            try:
-                await callback.message.answer_photo(
-                    qr_url,
-                    caption=text,
-                    reply_markup=back_menu(user.language),
-                )
-            except TelegramBadRequest:
-                await callback.message.answer(
-                    f'{text}\n\n<a href="{qr_url}">Mở mã QR / Open QR</a>',
-                    reply_markup=back_menu(user.language),
-                    disable_web_page_preview=True,
-                )
         await callback.answer()
 
     async def complete_product_purchase(
@@ -1357,41 +1034,6 @@ def create_router(
         order_ids, shop_order_code, product_name, secrets, total_amount = bundle_values(
             orders, user
         )
-        router_purchase = await router_purchase_for_order(
-            session,
-            user.telegram_id,
-            order_id,
-        )
-        if router_purchase is not None and router_purchase.encrypted_key:
-            api_key = cipher.decrypt(router_purchase.encrypted_key)
-            if callback.message:
-                await callback.message.edit_text(
-                    router_token_delivery_text(
-                        shop_order_code=shop_order_code,
-                        product_name=product_name,
-                        api_url=(
-                            router_token_client.public_api_url
-                            if router_token_client is not None
-                            else settings.router_public_api_url
-                        ),
-                        api_key=api_key,
-                        token_quota=router_purchase.token_quota,
-                        paid_amount=router_purchase.paid_amount,
-                        language=user.language,
-                    ),
-                    reply_markup=router_token_delivery_keyboard(
-                        order_id=order_id,
-                        api_key=api_key,
-                        language=user.language,
-                        usage_url=(
-                            router_token_client.usage_page_url
-                            if router_token_client is not None
-                            else settings.token_usage_url
-                        ),
-                    ),
-                )
-            await callback.answer()
-            return
         if callback.message:
             await callback.message.edit_text(
                 delivery_text(
@@ -1405,57 +1047,6 @@ def create_router(
                     primary_order_id=min(order_ids),
                     secrets=secrets,
                     language=user.language,
-                ),
-            )
-        await callback.answer()
-
-    @router.callback_query(F.data.startswith("routerstatus:"))
-    async def show_router_token_status(
-        callback: CallbackQuery,
-        session: AsyncSession,
-    ) -> None:
-        user = await get_or_create_user(callback, session)
-        order_id = int(callback.data.split(":", 1)[1])
-        purchase = await router_purchase_for_order(session, user.telegram_id, order_id)
-        if purchase is None or not purchase.encrypted_key:
-            await callback.answer("Không tìm thấy key GPT token.", show_alert=True)
-            return
-        if router_token_client is None:
-            await callback.answer("Không thể kiểm tra quota lúc này.", show_alert=True)
-            return
-        try:
-            status = await router_token_client.status(purchase.shop_order_id)
-        except RouterTokenError:
-            await callback.answer("9Router đang bận, vui lòng thử lại sau.", show_alert=True)
-            return
-        api_key = cipher.decrypt(purchase.encrypted_key)
-        quota = f"{status.token_quota:,}".replace(",", ".")
-        used = f"{status.tokens_used:,}".replace(",", ".")
-        remaining = f"{status.remaining_tokens:,}".replace(",", ".")
-        state_label = (
-            "Đang hoạt động" if status.is_active else "Đã ngắt"
-        ) if user.language == "vi" else ("Active" if status.is_active else "Stopped")
-        text = (
-            "📊 <b>Quota GPT token</b>\n\n"
-            f"• Tổng: <b>{quota}</b> token\n"
-            f"• Đã dùng: <b>{used}</b> token\n"
-            f"• Còn lại: <b>{remaining}</b> token\n"
-            f"• Trạng thái: <b>{state_label}</b>"
-            if user.language == "vi"
-            else "📊 <b>GPT token quota</b>\n\n"
-            f"• Total: <b>{quota}</b> tokens\n"
-            f"• Used: <b>{used}</b> tokens\n"
-            f"• Remaining: <b>{remaining}</b> tokens\n"
-            f"• Status: <b>{state_label}</b>"
-        )
-        if callback.message:
-            await callback.message.edit_text(
-                text,
-                reply_markup=router_token_delivery_keyboard(
-                    order_id=order_id,
-                    api_key=api_key,
-                    language=user.language,
-                    usage_url=router_token_client.usage_page_url,
                 ),
             )
         await callback.answer()

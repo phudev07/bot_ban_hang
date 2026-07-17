@@ -14,10 +14,8 @@ from app.dashboard import create_dashboard_router
 from app.deposit_notifications import send_deposit_notification
 from app.delivery import delivery_keyboard, delivery_text
 from app.keyboards import main_menu
-from app.router_tokens import RouterTokenClient
 from app.services import process_sepay_payment
 from app.suppliers import SumistoreClient
-from app.token_usage import create_token_usage_router
 from app.utils import SecretCipher, format_vnd, verify_sepay_hmac
 
 
@@ -44,10 +42,8 @@ def create_api(
     cipher: SecretCipher,
     supplier_client: SumistoreClient | None = None,
     deposit_notification_bot: Bot | None = None,
-    router_token_client: RouterTokenClient | None = None,
 ) -> FastAPI:
     app = FastAPI(title="Telegram SePay Shop", docs_url=None, redoc_url=None)
-    app.include_router(create_token_usage_router(router_token_client))
     if settings.dashboard_enabled:
         app.add_middleware(
             SessionMiddleware,
@@ -120,9 +116,6 @@ def create_api(
             settings.payment_prefix,
             cipher,
             supplier_client,
-            settings.router_capacity_tokens,
-            settings.router_capacity_reserve_tokens,
-            settings.router_capacity_sync_seconds,
         )
         logger.info("SePay webhook processed: status=%s", result.status)
         if result.status == "deposit_not_found":
@@ -143,7 +136,6 @@ def create_api(
                 "credited",
                 "direct_purchase_completed",
                 "direct_purchase_fallback",
-                "router_token_pending",
             }
         ):
             await send_deposit_notification(
@@ -196,24 +188,6 @@ def create_api(
             except Exception:
                 logger.exception(
                     "Could not deliver direct purchase to user %s",
-                    result.user_id,
-                )
-
-        if result.status == "router_token_pending" and result.user_id is not None:
-            try:
-                text = (
-                    "✅ <b>Đã nhận thanh toán GPT token</b>\n\n"
-                    f"Số tiền: <b>{format_vnd(result.amount)}</b>\n"
-                    "Hệ thống đang cấp key. Key sẽ được gửi tự động trong ít phút."
-                    if result.language == "vi"
-                    else "✅ <b>GPT token payment received</b>\n\n"
-                    f"Amount: <b>{format_vnd(result.amount)}</b>\n"
-                    "Your key is being provisioned and will be delivered automatically."
-                )
-                await bot.send_message(result.user_id, text, reply_markup=main_menu(result.language))
-            except Exception:
-                logger.exception(
-                    "Could not notify user %s about pending 9Router key",
                     result.user_id,
                 )
 

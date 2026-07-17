@@ -15,10 +15,8 @@ from app.models import (
     Order,
     PaymentTransaction,
     Product,
-    RouterTokenPurchase,
     User,
 )
-from app.router_tokens import claim_router_capacity, router_coupon_is_usable
 from app.suppliers import (
     SumistoreClient,
     SupplierError,
@@ -58,8 +56,6 @@ async def available_stock(
             await refresh_external_product(session, product, supplier_client)
             await session.commit()
         return max(0, product.external_stock)
-    if product.fulfillment_source == "9router":
-        return 1_000_000
     return int(
         await session.scalar(
             select(func.count(InventoryItem.id)).where(
@@ -440,7 +436,6 @@ class PaymentResult:
     deposit_code: str | None = None
     username: str | None = None
     paid_at: datetime | None = None
-    router_purchase_id: int | None = None
 
 
 async def process_sepay_payment(
@@ -449,9 +444,6 @@ async def process_sepay_payment(
     payment_prefix: str = "NAP",
     cipher: SecretCipher | None = None,
     supplier_client: SumistoreClient | None = None,
-    router_capacity_tokens: int = 0,
-    router_capacity_reserve_tokens: int = 0,
-    router_capacity_sync_seconds: int = 60,
 ) -> PaymentResult:
     transfer_type = str(payload.get("transferType") or payload.get("transfer_type") or "").lower()
     if transfer_type and transfer_type not in {"in", "credit", "incoming"}:
@@ -498,80 +490,6 @@ async def process_sepay_payment(
             )
             if user is None:
                 return PaymentResult("user_not_found")
-
-            if deposit.payment_kind == "router_token_purchase":
-                router_purchase = await session.scalar(
-                    select(RouterTokenPurchase)
-                    .where(RouterTokenPurchase.deposit_id == deposit.id)
-                    .with_for_update()
-                )
-                router_coupon = None
-                if router_purchase is not None and router_purchase.discount_code_id is not None:
-                    router_coupon = await session.scalar(
-                        select(DiscountCode)
-                        .where(DiscountCode.id == router_purchase.discount_code_id)
-                        .with_for_update()
-                    )
-                router_payment_ready = (
-                    router_purchase is not None
-                    and router_purchase.status == "awaiting_payment"
-                    and deposit.status == "pending"
-                    and amount == deposit.requested_amount
-                    and not user.is_blocked
-                    and (
-                        router_purchase.discount_code_id is None
-                        or router_coupon_is_usable(router_coupon)
-                    )
-                )
-                router_capacity_ready = True
-                if router_payment_ready:
-                    router_capacity_ready = await claim_router_capacity(
-                        session,
-                        requested_tokens=router_purchase.token_quota,
-                        total_capacity_tokens=router_capacity_tokens,
-                        reserve_tokens=router_capacity_reserve_tokens,
-                        sync_seconds=router_capacity_sync_seconds,
-                        claim=True,
-                    )
-                    router_payment_ready = router_capacity_ready
-                if router_payment_ready:
-                    now = datetime.now(UTC)
-                    router_purchase.status = "pending"
-                    router_purchase.next_retry_at = now
-                    if router_coupon is not None:
-                        router_coupon.used_count += 1
-                    deposit.status = "paid"
-                    deposit.paid_amount = (deposit.paid_amount or 0) + amount
-                    deposit.paid_at = now
-                    session.add(
-                        PaymentTransaction(
-                            deposit_id=deposit.id,
-                            user_id=user.telegram_id,
-                            provider_tx_id=provider_tx_id,
-                            amount=amount,
-                        )
-                    )
-                    product = await session.get(Product, router_purchase.product_id)
-                    await session.flush()
-                    return PaymentResult(
-                        "router_token_pending",
-                        user.telegram_id,
-                        amount,
-                        product_name_vi=product.name_vi if product else "GPT Token 9Router",
-                        product_name_en=product.name_en if product else "GPT Tokens via 9Router",
-                        language=user.language,
-                        deposit_code=deposit.code,
-                        username=user.username,
-                        paid_at=now,
-                        router_purchase_id=router_purchase.id,
-                    )
-                if router_purchase is not None and router_purchase.status == "awaiting_payment":
-                    router_purchase.status = "payment_fallback"
-                    router_purchase.last_error = (
-                        "Token capacity is below the configured reserve"
-                        if not router_capacity_ready
-                        else "Payment amount, coupon, or account state mismatch"
-                    )
 
             direct_purchase_ready = (
                 deposit.payment_kind == "direct_purchase"
@@ -779,13 +697,30 @@ async def order_bundle(session: AsyncSession, user_id: int, order_id: int) -> li
 
 async def active_categories(session: AsyncSession) -> list[Category]:
     result = await session.scalars(
-        select(Category).where(Category.active.is_(True)).order_by(Category.position, Category.id)
+        select(Category)
+        .where(
+            Category.active.is_(True),
+            Category.products.any(
+                Product.active.is_(True)
+                & Product.fulfillment_source.in_(("local", "sumistore"))
+                & (Product.product_type == "account")
+            ),
+        )
+        .order_by(Category.position, Category.id)
     )
     return list(result)
 
 
 async def active_products(session: AsyncSession, category_id: int | None = None) -> list[Product]:
-    statement = select(Product).where(Product.active.is_(True)).order_by(Product.id)
+    statement = (
+        select(Product)
+        .where(
+            Product.active.is_(True),
+            Product.fulfillment_source.in_(("local", "sumistore")),
+            Product.product_type == "account",
+        )
+        .order_by(Product.id)
+    )
     if category_id is not None:
         statement = statement.where(Product.category_id == category_id)
     result = await session.scalars(statement)
