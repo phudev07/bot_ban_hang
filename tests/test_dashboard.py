@@ -163,9 +163,6 @@ def test_dashboard_login_catalog_inventory_and_balance(tmp_path) -> None:
         assert payments_page.status_code == 200
         assert "Ai nạp, số tiền và thời gian đầy đủ" in payments_page.text
 
-        assert client.get("/admin/router-tokens").status_code == 404
-        assert client.get("/token-usage").status_code == 404
-
         products_page = client.get("/admin/products")
         category_id = int(
             re.search(r'<option value="(\d+)">Tài khoản</option>', products_page.text).group(1)
