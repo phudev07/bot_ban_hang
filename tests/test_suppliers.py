@@ -39,9 +39,11 @@ def test_sumistore_snapshot_uses_balance_limited_stock() -> None:
             transport=httpx.MockTransport(handler),
         )
         snapshot = await client.fetch_snapshot("SP-GEF55PBV")
+        balance = await client.fetch_balance()
         assert snapshot.unit_price == 15_000
         assert snapshot.source_stock == 100
         assert snapshot.effective_stock == 2
+        assert balance == 30_000
 
     asyncio.run(scenario())
 

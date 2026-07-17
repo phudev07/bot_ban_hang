@@ -21,9 +21,12 @@ from app.models import (
     Order,
     PaymentTransaction,
     Product,
+    SupplierBalanceState,
+    SupplierBalanceTransaction,
     User,
 )
-from app.suppliers import SumistoreClient
+from app.supplier_audit import PROVIDER, reconcile_supplier_balance
+from app.suppliers import SumistoreClient, SupplierError
 from app.utils import SecretCipher, format_vnd, parse_vnd
 from app.dashboard_security import new_csrf_token, verify_dashboard_password
 
@@ -1788,6 +1791,104 @@ def create_dashboard_router(
                 },
             ),
         )
+
+    @router.get("/admin/supplier-audit", response_class=HTMLResponse)
+    async def supplier_audit_page(request: Request, kind: str = "all") -> Response:
+        if not is_admin(request):
+            return redirect_to_login()
+        selected_kind = kind if kind in {"all", "suspicious", "purchase", "credit"} else "all"
+        async with session_factory() as session:
+            state = await session.get(SupplierBalanceState, PROVIDER)
+            statement = (
+                select(SupplierBalanceTransaction)
+                .where(SupplierBalanceTransaction.provider == PROVIDER)
+                .order_by(SupplierBalanceTransaction.id.desc())
+                .limit(300)
+            )
+            if selected_kind != "all":
+                statement = statement.where(SupplierBalanceTransaction.kind == selected_kind)
+            transactions = list(await session.scalars(statement))
+            suspicious_count, suspicious_sum = (
+                await session.execute(
+                    select(
+                        func.count(SupplierBalanceTransaction.id),
+                        func.coalesce(func.sum(SupplierBalanceTransaction.amount), 0),
+                    ).where(
+                        SupplierBalanceTransaction.provider == PROVIDER,
+                        SupplierBalanceTransaction.kind == "suspicious",
+                    )
+                )
+            ).one()
+            purchase_count, purchase_sum = (
+                await session.execute(
+                    select(
+                        func.count(SupplierBalanceTransaction.id),
+                        func.coalesce(func.sum(SupplierBalanceTransaction.amount), 0),
+                    ).where(
+                        SupplierBalanceTransaction.provider == PROVIDER,
+                        SupplierBalanceTransaction.kind == "purchase",
+                    )
+                )
+            ).one()
+            credit_sum = int(
+                await session.scalar(
+                    select(func.coalesce(func.sum(SupplierBalanceTransaction.amount), 0)).where(
+                        SupplierBalanceTransaction.provider == PROVIDER,
+                        SupplierBalanceTransaction.kind == "credit",
+                    )
+                )
+                or 0
+            )
+        return templates.TemplateResponse(
+            request,
+            "supplier_audit.html",
+            page_context(
+                request,
+                "Giao dịch đáng ngờ",
+                "supplier-audit",
+                transactions=transactions,
+                selected_kind=selected_kind,
+                supplier_connected=supplier_client is not None,
+                stats={
+                    "current_balance": state.last_balance if state else None,
+                    "last_checked": state.checked_at if state else None,
+                    "suspicious_count": int(suspicious_count),
+                    "suspicious_total": abs(int(suspicious_sum)),
+                    "purchase_count": int(purchase_count),
+                    "purchase_total": abs(int(purchase_sum)),
+                    "credit_total": credit_sum,
+                },
+            ),
+        )
+
+    @router.post("/admin/supplier-audit/reconcile")
+    async def reconcile_supplier_audit(
+        request: Request,
+        csrf: str = Form(...),
+    ) -> RedirectResponse:
+        if not is_admin(request):
+            return redirect_to_login()
+        if not valid_csrf(request, csrf):
+            return RedirectResponse("/admin/supplier-audit", status_code=303)
+        if supplier_client is None:
+            flash(request, "Sumi chưa được kết nối nên không thể đối soát.", "error")
+            return RedirectResponse("/admin/supplier-audit", status_code=303)
+        try:
+            result = await reconcile_supplier_balance(session_factory, supplier_client)
+        except SupplierError:
+            flash(request, "Không lấy được số dư Sumi. Hãy thử lại sau.", "error")
+        else:
+            if result.initialized:
+                flash(request, "Đã lưu số dư Sumi làm mốc đối soát ban đầu.")
+            elif result.suspicious_amount < 0:
+                flash(
+                    request,
+                    f"Phát hiện giao dịch đáng ngờ -{format_vnd(abs(result.suspicious_amount))}.",
+                    "error",
+                )
+            else:
+                flash(request, "Đối soát hoàn tất, không có khoản giảm bất thường.")
+        return RedirectResponse("/admin/supplier-audit", status_code=303)
 
     @router.get("/admin/system", response_class=HTMLResponse)
     async def system_page(request: Request) -> Response:

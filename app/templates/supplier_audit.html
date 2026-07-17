@@ -1,0 +1,88 @@
+{% extends "base.html" %}
+{% block content %}
+<section class="page-intro audit-intro">
+  <div>
+    <span>SUMI BALANCE WATCH</span>
+    <h2>Phát hiện tiền bị trừ ngoài đơn của shop.</h2>
+    <p>Mỗi đơn mua qua API được ghi chi phí thực tế. Phần số dư giảm vượt quá tổng chi phí đó sẽ tự động được đánh dấu đáng ngờ.</p>
+  </div>
+  <form method="post" action="/admin/supplier-audit/reconcile">
+    <input type="hidden" name="csrf" value="{{ csrf_token }}">
+    <button class="button secondary" type="submit" {{ 'disabled' if not supplier_connected else '' }}>Đối soát ngay</button>
+  </form>
+</section>
+
+<section class="metric-grid audit-metrics">
+  <article class="metric">
+    <span>Số dư Sumi hiện tại</span>
+    <strong>{{ stats.current_balance|vnd if stats.current_balance != None else 'Chưa có mốc' }}</strong>
+    <small>Kiểm tra cuối: {{ stats.last_checked|localtime }}</small>
+  </article>
+  <article class="metric danger-metric">
+    <span>Tổng tiền đáng ngờ</span>
+    <strong>-{{ stats.suspicious_total|vnd }}</strong>
+    <small>{{ stats.suspicious_count }} lần giảm không khớp</small>
+  </article>
+  <article class="metric">
+    <span>Chi phí mua hợp lệ</span>
+    <strong>-{{ stats.purchase_total|vnd }}</strong>
+    <small>{{ stats.purchase_count }} giao dịch mua từ shop</small>
+  </article>
+  <article class="metric">
+    <span>Tiền tăng ngoài shop</span>
+    <strong>+{{ stats.credit_total|vnd }}</strong>
+    <small>Nạp thêm hoặc điều chỉnh số dư Sumi</small>
+  </article>
+</section>
+
+<section class="panel filter-panel">
+  <div class="audit-filters">
+    <div>
+      <span>Hiển thị</span>
+      <strong>Lịch sử đối soát số dư</strong>
+    </div>
+    <nav aria-label="Lọc giao dịch Sumi">
+      <a class="{{ 'active' if selected_kind == 'all' else '' }}" href="/admin/supplier-audit">Tất cả</a>
+      <a class="{{ 'active' if selected_kind == 'suspicious' else '' }}" href="/admin/supplier-audit?kind=suspicious">Đáng ngờ</a>
+      <a class="{{ 'active' if selected_kind == 'purchase' else '' }}" href="/admin/supplier-audit?kind=purchase">Mua hợp lệ</a>
+      <a class="{{ 'active' if selected_kind == 'credit' else '' }}" href="/admin/supplier-audit?kind=credit">Tiền tăng</a>
+    </nav>
+  </div>
+</section>
+
+<section class="panel">
+  <div class="panel-head">
+    <div><span>BALANCE LEDGER</span><h2>Biến động gần nhất</h2></div>
+    <small>Thời gian hiển thị theo múi giờ Việt Nam</small>
+  </div>
+  <div class="table-wrap">
+    <table class="audit-table">
+      <thead><tr><th>Phân loại</th><th>Số tiền</th><th>Số dư</th><th>Đơn liên quan</th><th>Thời gian</th><th>Chi tiết</th></tr></thead>
+      <tbody>
+      {% for item in transactions %}
+        <tr class="{{ 'audit-row-suspicious' if item.kind == 'suspicious' else '' }}">
+          <td>
+            {% if item.kind == 'suspicious' %}<span class="status off">Đáng ngờ</span>
+            {% elif item.kind == 'purchase' %}<span class="status on">Mua hợp lệ</span>
+            {% else %}<span class="status wait">Tiền tăng</span>{% endif %}
+            <small>Log #{{ item.id }}</small>
+          </td>
+          <td><strong class="{{ 'amount-negative' if item.amount < 0 else 'amount-positive' }}">{{ item.amount|vnd }}</strong></td>
+          <td>
+            {% if item.balance_before != None %}<strong>{{ item.balance_before|vnd }} → {{ item.balance_after|vnd }}</strong>{% else %}<span>—</span>{% endif %}
+          </td>
+          <td>
+            {% if item.shop_order_code %}<a class="text-link" href="/admin/orders?q={{ item.shop_order_code }}">Shop {{ item.shop_order_code }}</a>{% else %}<span>—</span>{% endif %}
+            <small>API {{ item.supplier_order_code or '—' }}{% if item.quantity %} · {{ item.quantity }} tài khoản{% endif %}</small>
+          </td>
+          <td><strong>{{ item.created_at|localtime }}</strong>{% if item.period_started_at %}<small>Từ {{ item.period_started_at|localtime }}</small>{% endif %}</td>
+          <td><small class="audit-note">{{ item.note }}</small></td>
+        </tr>
+      {% else %}
+        <tr><td colspan="6" class="empty">Chưa có biến động nào trong bộ lọc này.</td></tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</section>
+{% endblock %}

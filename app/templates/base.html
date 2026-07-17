@@ -7,7 +7,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=Fraunces:opsz,wght@9..144,600;9..144,700&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="/admin-assets/admin.css?v=4">
+  <link rel="stylesheet" href="/admin-assets/admin.css?v=5">
 </head>
 <body>
   <div class="shell">
@@ -30,6 +30,7 @@
         <a class="{{ 'active' if section == 'broadcasts' else '' }}" href="/admin/broadcasts"><span>◒</span>Thông báo</a>
         <a class="{{ 'active' if section == 'payments' else '' }}" href="/admin/payments"><span>↗</span>Dòng tiền</a>
         <a class="{{ 'active' if section == 'system' else '' }}" href="/admin/system"><span>⚙</span>Hệ thống</a>
+        <a class="{{ 'active' if section == 'supplier-audit' else '' }}" href="/admin/supplier-audit"><span>!</span>Giao dịch đáng ngờ</a>
       </nav>
       <form class="logout" method="post" action="/admin/logout">
         <input type="hidden" name="csrf" value="{{ csrf_token }}">

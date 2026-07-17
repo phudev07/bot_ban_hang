@@ -16,13 +16,14 @@ from app.config import get_settings
 from app.database import Base, DatabaseSessionMiddleware, create_database
 from app.handlers import create_router
 from app.models import Category, Product
+from app.supplier_audit import reconcile_supplier_balance
 from app.suppliers import (
     SumistoreClient,
     create_sumistore_client,
     ensure_sumistore_product,
     sync_sumistore_products,
 )
-from app.utils import SecretCipher
+from app.utils import SecretCipher, format_vnd
 
 
 async def initialize_database(engine, session_factory, seed_demo_data: bool) -> None:
@@ -239,6 +240,36 @@ async def supplier_sync_worker(
         await asyncio.sleep(max(15, interval_seconds))
 
 
+async def supplier_audit_worker(
+    session_factory,
+    client: SumistoreClient,
+    bot: Bot,
+    admin_ids: tuple[int, ...],
+    interval_seconds: int,
+) -> None:
+    while True:
+        try:
+            result = await reconcile_supplier_balance(session_factory, client)
+            if result.suspicious_amount < 0:
+                message = (
+                    "🚨 <b>Phát hiện giao dịch Sumi đáng ngờ</b>\n"
+                    f"Số tiền không khớp: <b>-{format_vnd(abs(result.suspicious_amount))}</b>\n"
+                    f"Số dư hiện tại: <b>{format_vnd(result.current_balance)}</b>\n\n"
+                    "Mở Admin → Giao dịch đáng ngờ để xem kỳ đối soát."
+                )
+                for admin_id in admin_ids:
+                    try:
+                        await bot.send_message(admin_id, message)
+                    except Exception:
+                        logging.getLogger(__name__).exception(
+                            "Could not notify admin %s about supplier balance anomaly",
+                            admin_id,
+                        )
+        except Exception:
+            logging.getLogger(__name__).exception("Could not reconcile supplier balance")
+        await asyncio.sleep(max(10, interval_seconds))
+
+
 async def main() -> None:
     settings = get_settings()
     logging.basicConfig(
@@ -254,6 +285,11 @@ async def main() -> None:
     await ensure_sumistore_product(session_factory, settings)
     supplier_client = create_sumistore_client(settings)
     await sync_sumistore_products(session_factory, supplier_client)
+    if supplier_client is not None:
+        try:
+            await reconcile_supplier_balance(session_factory, supplier_client)
+        except Exception:
+            logging.getLogger(__name__).exception("Could not initialize supplier balance audit")
 
     cipher = SecretCipher(settings.inventory_encryption_key.get_secret_value())
     bot = Bot(
@@ -324,6 +360,19 @@ async def main() -> None:
         if supplier_client is not None
         else None
     )
+    supplier_audit_task = (
+        asyncio.create_task(
+            supplier_audit_worker(
+                session_factory,
+                supplier_client,
+                bot,
+                settings.admin_ids,
+                settings.sumistore_audit_seconds,
+            )
+        )
+        if supplier_client is not None
+        else None
+    )
     try:
         await bot.delete_webhook(drop_pending_updates=False)
         await dispatcher.start_polling(bot)
@@ -332,6 +381,10 @@ async def main() -> None:
             supplier_task.cancel()
             with contextlib.suppress(asyncio.CancelledError):
                 await supplier_task
+        if supplier_audit_task is not None:
+            supplier_audit_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await supplier_audit_task
         server.should_exit = True
         await api_task
         await storage.close()

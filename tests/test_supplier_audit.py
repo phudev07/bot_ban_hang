@@ -1,0 +1,185 @@
+import asyncio
+
+from cryptography.fernet import Fernet
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+
+from app.database import Base
+from app.models import (
+    Category,
+    Deposit,
+    Product,
+    SupplierBalanceTransaction,
+    User,
+)
+from app.services import process_sepay_payment, purchase_product
+from app.supplier_audit import reconcile_supplier_balance
+from app.suppliers import SupplierPurchase, SupplierSnapshot
+from app.utils import SecretCipher
+
+
+class ConcurrentSupplier:
+    def __init__(self, balance: int = 100_000) -> None:
+        self.balance = balance
+        self.balance_lock = asyncio.Lock()
+        self.buy_count = 0
+        self.in_flight = 0
+        self.max_in_flight = 0
+
+    async def fetch_balance(self) -> int:
+        return self.balance
+
+    async def fetch_snapshot(self, product_id: str) -> SupplierSnapshot:
+        return SupplierSnapshot(
+            product_id=product_id,
+            name="Concurrent test product",
+            description="",
+            unit_price=15_000,
+            source_stock=100,
+            owner_balance=self.balance,
+        )
+
+    async def buy(self, product_id: str, quantity: int) -> SupplierPurchase:
+        self.in_flight += 1
+        self.max_in_flight = max(self.max_in_flight, self.in_flight)
+        try:
+            await asyncio.sleep(0.02)
+            cost = 15_000 * quantity
+            assert self.balance >= cost
+            self.balance -= cost
+            self.buy_count += 1
+            return SupplierPurchase(
+                order_code=f"API-CONCURRENT-{self.buy_count}",
+                unit_price=15_000,
+                accounts=tuple(
+                    f"account-{self.buy_count}-{index}|password"
+                    for index in range(1, quantity + 1)
+                ),
+            )
+        finally:
+            self.in_flight -= 1
+
+
+async def make_database():
+    engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+    async with engine.begin() as connection:
+        await connection.run_sync(Base.metadata.create_all)
+    return engine, async_sessionmaker(engine, expire_on_commit=False)
+
+
+def test_unmatched_supplier_balance_drop_is_recorded_once() -> None:
+    async def scenario() -> None:
+        engine, sessions = await make_database()
+        supplier = ConcurrentSupplier(balance=100_000)
+
+        baseline = await reconcile_supplier_balance(sessions, supplier)  # type: ignore[arg-type]
+        assert baseline.initialized is True
+
+        supplier.balance = 87_000
+        detected = await reconcile_supplier_balance(sessions, supplier)  # type: ignore[arg-type]
+        repeated = await reconcile_supplier_balance(sessions, supplier)  # type: ignore[arg-type]
+
+        assert detected.suspicious_amount == -13_000
+        assert detected.observed_delta == -13_000
+        assert repeated.suspicious_amount == 0
+        async with sessions() as session:
+            transactions = list(
+                await session.scalars(
+                    select(SupplierBalanceTransaction).order_by(
+                        SupplierBalanceTransaction.id
+                    )
+                )
+            )
+            assert len(transactions) == 1
+            assert transactions[0].kind == "suspicious"
+            assert transactions[0].amount == -13_000
+            assert transactions[0].balance_before == 100_000
+            assert transactions[0].balance_after == 87_000
+        await engine.dispose()
+
+    asyncio.run(scenario())
+
+
+def test_simultaneous_wallet_and_qr_purchases_do_not_create_false_alerts() -> None:
+    async def scenario() -> None:
+        engine, sessions = await make_database()
+        supplier = ConcurrentSupplier(balance=100_000)
+        cipher = SecretCipher(Fernet.generate_key().decode())
+        async with sessions() as session:
+            category = Category(name_vi="Tài khoản", name_en="Accounts")
+            session.add(category)
+            await session.flush()
+            product = Product(
+                category_id=category.id,
+                name_vi="Tài khoản API",
+                name_en="API account",
+                price=20_000,
+                allow_quantity=True,
+                fulfillment_source="sumistore",
+                supplier_product_id="SP-CONCURRENT",
+                supplier_markup=5_000,
+            )
+            wallet_user = User(telegram_id=10001, full_name="Wallet buyer", balance=20_000)
+            qr_user = User(telegram_id=10002, full_name="QR buyer", balance=0)
+            session.add_all([product, wallet_user, qr_user])
+            await session.flush()
+            session.add(
+                Deposit(
+                    user_id=qr_user.telegram_id,
+                    code="NAP10002ABCD",
+                    requested_amount=20_000,
+                    payment_kind="direct_purchase",
+                    product_id=product.id,
+                )
+            )
+            await session.commit()
+
+        await reconcile_supplier_balance(sessions, supplier)  # type: ignore[arg-type]
+        wallet_result, qr_result = await asyncio.gather(
+            purchase_product(
+                sessions,
+                wallet_user.telegram_id,
+                product.id,
+                cipher,
+                supplier_client=supplier,  # type: ignore[arg-type]
+            ),
+            process_sepay_payment(
+                sessions,
+                {
+                    "id": 90001,
+                    "transferType": "in",
+                    "transferAmount": 20_000,
+                    "content": "NAP10002ABCD",
+                },
+                cipher=cipher,
+                supplier_client=supplier,  # type: ignore[arg-type]
+            ),
+        )
+
+        assert wallet_result.ok is True
+        assert qr_result.status == "direct_purchase_completed"
+        assert supplier.buy_count == 2
+        assert supplier.max_in_flight == 1
+        assert supplier.balance == 70_000
+
+        reconciled = await reconcile_supplier_balance(sessions, supplier)  # type: ignore[arg-type]
+        assert reconciled.expected_purchase_debit == 30_000
+        assert reconciled.observed_delta == -30_000
+        assert reconciled.suspicious_amount == 0
+        async with sessions() as session:
+            transactions = list(
+                await session.scalars(
+                    select(SupplierBalanceTransaction).order_by(
+                        SupplierBalanceTransaction.id
+                    )
+                )
+            )
+            assert [transaction.kind for transaction in transactions] == [
+                "purchase",
+                "purchase",
+            ]
+            assert sum(transaction.amount for transaction in transactions) == -30_000
+            assert len({transaction.shop_order_code for transaction in transactions}) == 2
+        await engine.dispose()
+
+    asyncio.run(scenario())

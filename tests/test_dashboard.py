@@ -163,6 +163,11 @@ def test_dashboard_login_catalog_inventory_and_balance(tmp_path) -> None:
         assert payments_page.status_code == 200
         assert "Ai nạp, số tiền và thời gian đầy đủ" in payments_page.text
 
+        supplier_audit_page = client.get("/admin/supplier-audit")
+        assert supplier_audit_page.status_code == 200
+        assert "Giao dịch đáng ngờ" in supplier_audit_page.text
+        assert 'action="/admin/supplier-audit/reconcile"' in supplier_audit_page.text
+
         products_page = client.get("/admin/products")
         category_id = int(
             re.search(r'<option value="(\d+)">Tài khoản</option>', products_page.text).group(1)

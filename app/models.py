@@ -174,6 +174,37 @@ class BalanceAdjustment(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
 
+class SupplierBalanceState(Base):
+    __tablename__ = "supplier_balance_states"
+
+    provider: Mapped[str] = mapped_column(String(32), primary_key=True)
+    last_balance: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    last_purchase_id: Mapped[int] = mapped_column(BigInteger, default=0)
+    checked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
+class SupplierBalanceTransaction(Base):
+    __tablename__ = "supplier_balance_transactions"
+
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    provider: Mapped[str] = mapped_column(String(32), default="sumistore", index=True)
+    kind: Mapped[str] = mapped_column(String(24), index=True)
+    amount: Mapped[int] = mapped_column(BigInteger)
+    balance_before: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    balance_after: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    supplier_order_code: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
+    shop_order_code: Mapped[str | None] = mapped_column(String(32), nullable=True, index=True)
+    product_id: Mapped[int | None] = mapped_column(
+        ForeignKey("products.id", ondelete="SET NULL"), nullable=True, index=True
+    )
+    quantity: Mapped[int] = mapped_column(default=0)
+    note: Mapped[str] = mapped_column(String(500), default="")
+    period_started_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
 class BroadcastLog(Base):
     __tablename__ = "broadcast_logs"
 

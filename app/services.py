@@ -17,10 +17,12 @@ from app.models import (
     Product,
     User,
 )
+from app.supplier_audit import record_supplier_purchase
 from app.suppliers import (
     SumistoreClient,
     SupplierError,
     refresh_external_product,
+    supplier_balance_guard,
 )
 from app.utils import SecretCipher, find_deposit_code
 
@@ -223,6 +225,50 @@ async def purchase_product(
     coupon_code: str | None = None,
     coupon_id: int | None = None,
 ) -> PurchaseResult:
+    uses_supplier = False
+    if supplier_client is not None:
+        async with session_factory() as session:
+            uses_supplier = (
+                await session.scalar(
+                    select(Product.fulfillment_source).where(Product.id == product_id)
+                )
+                == "sumistore"
+            )
+    if uses_supplier and supplier_client is not None:
+        async with supplier_balance_guard(supplier_client):
+            return await _purchase_product(
+                session_factory,
+                telegram_id,
+                product_id,
+                cipher,
+                quantity,
+                supplier_client,
+                coupon_code=coupon_code,
+                coupon_id=coupon_id,
+            )
+    return await _purchase_product(
+        session_factory,
+        telegram_id,
+        product_id,
+        cipher,
+        quantity,
+        supplier_client,
+        coupon_code=coupon_code,
+        coupon_id=coupon_id,
+    )
+
+
+async def _purchase_product(
+    session_factory: async_sessionmaker[AsyncSession],
+    telegram_id: int,
+    product_id: int,
+    cipher: SecretCipher,
+    quantity: int,
+    supplier_client: SumistoreClient | None,
+    *,
+    coupon_code: str | None,
+    coupon_id: int | None,
+) -> PurchaseResult:
     async with session_factory() as session:
         async with session.begin():
             user = await session.scalar(
@@ -320,6 +366,14 @@ async def purchase_product(
                     session.add(order)
                     orders.append(order)
                     secret_values.append(secret_value)
+                record_supplier_purchase(
+                    session,
+                    amount=cost_unit_price * quantity,
+                    supplier_order_code=supplier_purchase.order_code or None,
+                    shop_order_code=batch_code,
+                    product_id=product.id,
+                    quantity=quantity,
+                )
                 if pricing.coupon is not None:
                     pricing.coupon.used_count += 1
                 user.balance -= total_amount
@@ -444,6 +498,47 @@ async def process_sepay_payment(
     payment_prefix: str = "NAP",
     cipher: SecretCipher | None = None,
     supplier_client: SumistoreClient | None = None,
+) -> PaymentResult:
+    if supplier_client is not None:
+        payment_text = " ".join(
+            str(payload.get(key) or "") for key in ("code", "content", "description")
+        )
+        deposit_code = find_deposit_code(payment_text, payment_prefix)
+        if deposit_code is not None:
+            async with session_factory() as session:
+                supplier_direct_payment = await session.scalar(
+                    select(Product.id)
+                    .join(Deposit, Deposit.product_id == Product.id)
+                    .where(
+                        Deposit.code == deposit_code,
+                        Deposit.payment_kind == "direct_purchase",
+                        Product.fulfillment_source == "sumistore",
+                    )
+                )
+            if supplier_direct_payment is not None:
+                async with supplier_balance_guard(supplier_client):
+                    return await _process_sepay_payment(
+                        session_factory,
+                        payload,
+                        payment_prefix,
+                        cipher,
+                        supplier_client,
+                    )
+    return await _process_sepay_payment(
+        session_factory,
+        payload,
+        payment_prefix,
+        cipher,
+        supplier_client,
+    )
+
+
+async def _process_sepay_payment(
+    session_factory: async_sessionmaker[AsyncSession],
+    payload: dict[str, object],
+    payment_prefix: str,
+    cipher: SecretCipher | None,
+    supplier_client: SumistoreClient | None,
 ) -> PaymentResult:
     transfer_type = str(payload.get("transferType") or payload.get("transfer_type") or "").lower()
     if transfer_type and transfer_type not in {"in", "credit", "incoming"}:
@@ -590,6 +685,15 @@ async def process_sepay_payment(
                         )
                         session.add(order)
                         orders.append(order)
+                    if product.fulfillment_source == "sumistore":
+                        record_supplier_purchase(
+                            session,
+                            amount=supplier_unit_cost * deposit.quantity,
+                            supplier_order_code=supplier_order_code,
+                            shop_order_code=batch_code,
+                            product_id=product.id,
+                            quantity=deposit.quantity,
+                        )
                     if deposit.discount_code_id is not None:
                         coupon = await session.scalar(
                             select(DiscountCode)

@@ -331,3 +331,29 @@ tbody tr:hover { background: rgba(217,244,124,.09); }
   .order-hero { padding: 20px; }
   .order-hero h2 { font-size: 32px; }
 }
+
+/* Supplier balance audit */
+.audit-intro { background: radial-gradient(circle at 88% 18%, rgba(239,111,50,.28), transparent 30%), linear-gradient(120deg, #17231f, #3b2923); }
+.audit-intro form { flex: 0 0 auto; }
+.danger-metric { color: white; border-color: #9e3028; background: linear-gradient(145deg, #b84132, #84271f); }
+.danger-metric span, .danger-metric small { color: rgba(255,255,255,.76); }
+.danger-metric strong { color: white; }
+.audit-filters { padding: 15px 18px; display: flex; align-items: center; justify-content: space-between; gap: 18px; }
+.audit-filters > div span, .audit-filters > div strong { display: block; }
+.audit-filters > div span { margin-bottom: 3px; color: var(--muted); font-size: 10px; letter-spacing: .08em; text-transform: uppercase; }
+.audit-filters nav { display: flex; flex-wrap: wrap; gap: 6px; }
+.audit-filters a { padding: 8px 11px; border-radius: 999px; color: var(--muted); background: #ece8dd; font-size: 11px; font-weight: 700; }
+.audit-filters a.active { color: white; background: var(--ink); }
+.audit-table { min-width: 980px !important; }
+.audit-row-suspicious { background: #fff2ef; }
+.audit-row-suspicious:hover { background: #fde5df; }
+.amount-negative { color: var(--red); font-variant-numeric: tabular-nums; }
+.amount-positive { color: var(--green); font-variant-numeric: tabular-nums; }
+.audit-note { max-width: 330px; line-height: 1.5; }
+
+@media (max-width: 780px) {
+  .audit-intro form, .audit-intro .button { width: 100%; }
+  .audit-filters { align-items: stretch; flex-direction: column; }
+  .audit-filters nav { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .audit-filters a { text-align: center; }
+}

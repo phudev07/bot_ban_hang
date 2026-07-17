@@ -5,6 +5,8 @@ import json
 import logging
 import secrets
 import time
+from contextlib import asynccontextmanager
+from collections.abc import AsyncIterator
 from dataclasses import dataclass
 from datetime import UTC, datetime
 
@@ -92,6 +94,7 @@ class SumistoreClient:
         self.api_id = api_id
         self.timeout_seconds = timeout_seconds
         self.transport = transport
+        self.balance_lock = asyncio.Lock()
 
     def _headers(self) -> dict[str, str]:
         return {"X-Tele-API-ID": self.api_id}
@@ -156,6 +159,16 @@ class SumistoreClient:
             owner_balance=owner_balance,
         )
 
+    async def fetch_balance(self) -> int:
+        payload = await self._get("tele-balance")
+        owner = payload.get("owner")
+        if not isinstance(owner, dict):
+            owner = payload
+        try:
+            return int(owner.get("balance") or 0)
+        except (TypeError, ValueError) as exc:
+            raise SupplierError("SUPPLIER_INVALID_RESPONSE") from exc
+
     async def buy(self, product_id: str, quantity: int) -> SupplierPurchase:
         body = json.dumps(
             {"id": product_id, "quantity": quantity},
@@ -206,6 +219,16 @@ class SumistoreClient:
             unit_price=unit_price,
             accounts=tuple(accounts),
         )
+
+
+@asynccontextmanager
+async def supplier_balance_guard(client: SumistoreClient) -> AsyncIterator[None]:
+    lock = getattr(client, "balance_lock", None)
+    if lock is None:
+        yield
+        return
+    async with lock:
+        yield
 
 
 def _extract_accounts(payload: dict[str, object]) -> list[str]:

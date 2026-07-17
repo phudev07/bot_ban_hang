@@ -39,6 +39,7 @@ class Settings(BaseSettings):
     sumistore_fallback_price: int = 15_000
     sumistore_timeout_seconds: float = 15
     sumistore_sync_seconds: int = 60
+    sumistore_audit_seconds: int = 30
 
     inventory_encryption_key: SecretStr
     web_host: str = "0.0.0.0"
@@ -88,6 +89,8 @@ class Settings(BaseSettings):
             raise ValueError("Sumistore is enabled but API ID is missing")
         if self.sumistore_markup < 0 or self.sumistore_fallback_price <= 0:
             raise ValueError("Sumistore price configuration is invalid")
+        if self.sumistore_audit_seconds < 10:
+            raise ValueError("Sumistore audit interval must be at least 10 seconds")
         return self
 
     @property
