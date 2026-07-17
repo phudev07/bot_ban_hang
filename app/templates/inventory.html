@@ -1,0 +1,52 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="split-layout inventory-layout">
+  <section class="panel form-panel">
+    <div class="panel-head"><div><span>ENCRYPTED STOCK</span><h2>Nhập tài khoản / key</h2></div></div>
+    <form method="post" action="/admin/inventory" class="form-grid">
+      <input type="hidden" name="csrf" value="{{ csrf_token }}">
+      <label>Sản phẩm
+        <select name="product_id" required>
+          {% for row in import_products %}<option value="{{ row.product.id }}">#{{ row.product.id }} · {{ row.product.name_vi }}</option>{% endfor %}
+        </select>
+      </label>
+      <label>Dữ liệu kho
+        <textarea name="items" rows="14" placeholder="user1:password1&#10;user2:password2&#10;&#10;Hoặc ngăn dữ liệu nhiều dòng bằng dòng ---" required></textarea>
+      </label>
+      <p class="hint">Mỗi dòng là một món. Nếu một món có nhiều dòng, ngăn các món bằng dòng <code>---</code>. Dữ liệu được mã hóa trước khi lưu.</p>
+      <button class="button primary" type="submit" {{ 'disabled' if not import_products else '' }}>Mã hóa và nhập kho</button>
+    </form>
+  </section>
+  <section class="panel">
+    <div class="panel-head"><div><span>STOCK LEVELS</span><h2>Tồn kho hiện tại</h2></div></div>
+    <div class="stack-list">
+      {% for row in products %}<article><div><strong>{{ row.product.name_vi }}</strong><small>#{{ row.product.id }} · {{ row.product.product_type }} · {{ 'Sumistore' if row.product.fulfillment_source == 'sumistore' else 'Kho bot' }}</small></div><span class="big-number">{{ row.stock }}</span></article>{% else %}<p class="empty">Hãy tạo sản phẩm trước khi nhập kho.</p>{% endfor %}
+    </div>
+  </section>
+</div>
+<section class="panel">
+  <div class="panel-head"><div><span>INVENTORY LOG</span><h2>100 mục kho gần nhất</h2></div></div>
+  <div class="table-wrap"><table>
+    <thead><tr><th>ID kho</th><th>Sản phẩm</th><th>Trạng thái</th><th>Ngày nhập</th><th>Ngày bán</th><th></th></tr></thead>
+    <tbody>
+      {% for row in recent_items %}
+      <tr>
+        <td><code>#{{ row.item.id }}</code></td>
+        <td>{{ row.product.name_vi }}<small>#{{ row.product.id }}</small></td>
+        <td><span class="status {{ 'on' if row.item.status == 'available' else 'off' }}">{{ 'Còn kho' if row.item.status == 'available' else 'Đã bán' }}</span></td>
+        <td>{{ row.item.created_at|localtime }}</td>
+        <td>{{ row.item.sold_at|localtime }}</td>
+        <td>
+          {% if row.item.status == 'available' %}
+          <form method="post" action="/admin/inventory/{{ row.item.id }}/delete" onsubmit="return confirm('Xóa mục kho chưa bán này?')">
+            <input type="hidden" name="csrf" value="{{ csrf_token }}">
+            <button class="button danger compact" type="submit">Xóa</button>
+          </form>
+          {% else %}—{% endif %}
+        </td>
+      </tr>
+      {% else %}<tr><td colspan="6" class="empty">Chưa có dữ liệu kho.</td></tr>{% endfor %}
+    </tbody>
+  </table></div>
+</section>
+{% endblock %}

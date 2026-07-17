@@ -1,0 +1,25 @@
+<!doctype html>
+<html lang="vi">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Đăng nhập · PHP Tool Shop</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=Fraunces:opsz,wght@9..144,600;9..144,700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/admin-assets/admin.css?v=4">
+</head>
+<body class="login-page">
+  <section class="login-card">
+    <div class="login-art"><span>PHP TOOL</span><h1>Quản lý cửa hàng,<br>không quản lý sự hỗn loạn.</h1><p>Kho, đơn, ví và webhook trong một bảng điều khiển.</p></div>
+    <form class="login-form" method="post" action="/admin/login">
+      <div class="brand"><span class="brand-mark">P</span><span><strong>Commerce desk</strong><small>secure access</small></span></div>
+      <h2>Đăng nhập quản trị</h2>
+      {% if error %}<div class="flash error">{{ error }}</div>{% endif %}
+      <label>Tên đăng nhập<input name="username" autocomplete="username" required autofocus></label>
+      <label>Mật khẩu<input type="password" name="password" autocomplete="current-password" required></label>
+      <button class="button primary full" type="submit">Vào dashboard</button>
+    </form>
+  </section>
+</body>
+</html>

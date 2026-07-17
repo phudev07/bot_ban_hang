@@ -1,0 +1,1 @@
+"""Telegram SePay shop package."""

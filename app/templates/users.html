@@ -1,0 +1,28 @@
+{% extends "base.html" %}
+{% block content %}
+<section class="panel filter-panel">
+  <form class="filter-grid customer-filter" method="get">
+    <label class="wide">Tìm khách hàng<input name="q" value="{{ query }}" placeholder="Telegram ID, tên hoặc username"></label>
+    <label>Nhóm khách<select name="status"><option value="all">Tất cả</option><option value="started" {{ 'selected' if status == 'started' else '' }}>Đang nhận bot</option><option value="inactive" {{ 'selected' if status == 'inactive' else '' }}>Không còn nhận bot</option><option value="blocked" {{ 'selected' if status == 'blocked' else '' }}>Bị khóa mua hàng</option></select></label>
+    <button class="button primary">Tìm khách</button>
+    <a class="button quiet" href="/admin/users">Đặt lại</a>
+  </form>
+</section>
+
+<section class="panel">
+  <div class="panel-head"><div><span>CUSTOMER SUPPORT</span><h2>Khách hàng, ví và lịch sử</h2></div><small>Tối đa 200 khách mới nhất</small></div>
+  <div class="table-wrap"><table><thead><tr><th>Khách hàng</th><th>Tham gia / Hoạt động</th><th>Số dư</th><th>Đã nạp</th><th>Đơn / Đã chi</th><th>Trạng thái</th><th>Điều chỉnh số dư</th></tr></thead><tbody>
+  {% for row in users %}{% set user = row.user %}
+  <tr>
+    <td><strong>{{ user.full_name }}</strong><small>@{{ user.username or '—' }}</small><code>{{ user.telegram_id }}</code></td>
+    <td>{{ user.created_at|localtime }}<small>Đơn cuối: {{ row.last_order_at|localtime }}<br>Nạp cuối: {{ row.last_deposit_at|localtime }}</small></td>
+    <td><strong>{{ user.balance|vnd }}</strong></td>
+    <td>{{ row.deposited|vnd }}</td>
+    <td><a class="text-link" href="/admin/orders?q={{ user.telegram_id }}">{{ row.order_count }} đơn hàng</a><small>{{ row.spent|vnd }}</small></td>
+    <td><form method="post" action="/admin/users/{{ user.telegram_id }}/toggle-block"><input type="hidden" name="csrf" value="{{ csrf_token }}"><button class="status {{ 'off' if user.is_blocked else 'on' }}">{{ 'Đã khóa' if user.is_blocked else 'Hoạt động' }}</button><small>{{ 'Đã /start' if user.has_started else 'Không nhận bot' }}</small></form></td>
+    <td><form class="inline-form" method="post" action="/admin/users/{{ user.telegram_id }}/balance"><input type="hidden" name="csrf" value="{{ csrf_token }}"><input name="amount" placeholder="+50000 hoặc -10000" required><input name="reason" placeholder="Lý do hỗ trợ" required><button>Cập nhật</button></form></td>
+  </tr>
+  {% else %}<tr><td colspan="7" class="empty">Không tìm thấy khách hàng.</td></tr>{% endfor %}
+  </tbody></table></div>
+</section>
+{% endblock %}

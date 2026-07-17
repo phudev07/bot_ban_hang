@@ -1,0 +1,42 @@
+{% extends "base.html" %}
+{% block content %}
+<section class="metric-grid">
+  <article class="metric accent"><span>Đang nhận tin</span><strong>{{ active_recipients }}</strong><small>Người đã dùng /start</small></article>
+  <article class="metric"><span>Lần phát</span><strong>{{ broadcast_count }}</strong><small>Thông báo đã xác nhận gửi</small></article>
+  <article class="metric"><span>Thành công</span><strong>{{ delivered_count }}</strong><small>Tổng lượt đã giao</small></article>
+  <article class="metric"><span>Thất bại</span><strong>{{ failed_count }}</strong><small>Bot bị chặn hoặc lỗi gửi</small></article>
+</section>
+
+<div class="split-layout">
+  <section class="panel">
+    <div class="panel-head"><div><span>BROADCAST HISTORY</span><h2>100 lần gửi gần nhất</h2></div></div>
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>Lần gửi</th><th>Quản trị</th><th>Đối tượng</th><th>Đã giao</th><th>Lỗi</th><th>Thời gian</th></tr></thead>
+        <tbody>
+          {% for item in broadcasts %}
+          <tr>
+            <td><code>#{{ item.id }}</code><small>Message {{ item.source_message_id }}</small></td>
+            <td><code>{{ item.admin_id }}</code></td>
+            <td>{{ item.total_recipients }}</td>
+            <td><span class="status on">{{ item.delivered_count }}</span></td>
+            <td><span class="status {{ 'off' if item.failed_count else 'on' }}">{{ item.failed_count }}</span></td>
+            <td>{{ item.created_at|localtime }}</td>
+          </tr>
+          {% else %}
+          <tr><td colspan="6" class="empty">Chưa có thông báo nào được gửi.</td></tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <aside class="panel note-panel">
+    <span>TELEGRAM ADMIN</span>
+    <h2>Soạn ở nơi quen thuộc.</h2>
+    <p>Trong chat với bot, dùng <code>/thongbao</code> rồi gửi nội dung, ảnh, video hoặc file. Bot luôn hiển thị số người nhận, yêu cầu xác nhận và tự gắn nút <strong>🛒 Mua ngay</strong> cho người nhận.</p>
+    <p>Bạn cũng có thể trả lời một tin nhắn bằng <code>/thongbao</code> để giữ nguyên định dạng và media của tin đó.</p>
+    <a class="button secondary" href="https://t.me/phptool_bot" target="_blank" rel="noreferrer">Mở bot Telegram</a>
+  </aside>
+</div>
+{% endblock %}

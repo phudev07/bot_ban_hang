@@ -1,0 +1,43 @@
+{% extends "base.html" %}
+{% block content %}
+<section class="mini-metrics">
+  <article><span>Kết quả lọc</span><strong>{{ summary.orders }}</strong><small>đơn hàng</small></article>
+  <article><span>Doanh thu</span><strong>{{ summary.revenue|vnd }}</strong><small>trong kết quả hiện tại</small></article>
+  <article><span>Giá vốn API</span><strong>{{ summary.cost|vnd }}</strong><small>chi phí nguồn đã chốt</small></article>
+  <article><span>Lợi nhuận</span><strong class="profit-text">{{ summary.profit|vnd }}</strong><small>doanh thu trừ giá vốn</small></article>
+  <article><span>Đã giảm giá</span><strong>{{ summary.discount|vnd }}</strong><small>qua mã giảm giá</small></article>
+  <article><span>Khách hàng</span><strong>{{ summary.customers }}</strong><small>khách duy nhất</small></article>
+</section>
+
+<section class="panel filter-panel">
+  <form class="filter-grid" method="get">
+    <label class="wide">Tìm nhanh<input name="q" value="{{ query }}" placeholder="Mã đơn shop, mã API, ID, username, sản phẩm"></label>
+    <label>Trạng thái<select name="status"><option value="all">Tất cả</option><option value="completed" {{ 'selected' if status == 'completed' else '' }}>Hoàn thành</option><option value="pending" {{ 'selected' if status == 'pending' else '' }}>Đang xử lý</option><option value="failed" {{ 'selected' if status == 'failed' else '' }}>Thất bại</option></select></label>
+    <label>Nguồn hàng<select name="source"><option value="all">Tất cả</option><option value="local" {{ 'selected' if source == 'local' else '' }}>Kho local</option><option value="sumistore" {{ 'selected' if source == 'sumistore' else '' }}>Sumistore</option></select></label>
+    <label>Thời gian<select name="period"><option value="all">Toàn bộ</option><option value="today" {{ 'selected' if period == 'today' else '' }}>Hôm nay</option><option value="month" {{ 'selected' if period == 'month' else '' }}>Tháng này</option><option value="year" {{ 'selected' if period == 'year' else '' }}>Năm nay</option></select></label>
+    <button class="button primary">Lọc đơn hàng</button>
+    <a class="button quiet" href="/admin/orders">Đặt lại</a>
+  </form>
+</section>
+
+<section class="panel">
+  <div class="panel-head"><div><span>FULFILLMENT DESK</span><h2>Đơn hàng và hỗ trợ</h2></div><small>Tối đa 300 kết quả mới nhất</small></div>
+  <div class="table-wrap"><table><thead><tr><th>Mã đơn</th><th>Khách hàng</th><th>Sản phẩm</th><th>Nguồn</th><th>Doanh thu</th><th>Giá vốn</th><th>Lợi nhuận</th><th>Giảm giá</th><th>Trạng thái</th><th>Thời gian tạo</th><th></th></tr></thead><tbody>
+  {% for row in orders %}
+  <tr>
+    <td><strong>Mã shop <code>{{ row.shop_order_code }}</code></strong><small>Mã API <code>{{ row.supplier_order_code or '—' }}</code><br>ID #{{ row.primary_order_id }} · {{ row.quantity }} tài khoản</small></td>
+    <td><strong>{{ row.user.full_name }}</strong><small>@{{ row.user.username or '—' }} · {{ row.user.telegram_id }}</small></td>
+    <td>{{ row.product.name_vi }}</td>
+    <td><span class="status {{ 'wait' if row.product.fulfillment_source == 'sumistore' else 'on' }}">{{ row.product.fulfillment_source }}</span></td>
+    <td><strong>{{ row.amount|vnd }}</strong></td>
+    <td>{{ row.cost_amount|vnd }}</td>
+    <td><strong class="profit-text {{ 'loss' if row.amount < row.cost_amount else '' }}">{{ (row.amount - row.cost_amount)|vnd }}</strong></td>
+    <td>{{ row.discount_amount|vnd }}<small>{{ row.discount_code or '—' }}</small></td>
+    <td><span class="status {{ 'on' if row.status == 'completed' else 'wait' }}">{{ row.status }}</span></td>
+    <td>{{ row.created_at|localtime }}<small>Giao: {{ row.delivered_at|localtime }}</small></td>
+    <td><a class="button compact primary" href="/admin/orders/{{ row.primary_order_id }}">Mở đơn</a></td>
+  </tr>
+  {% else %}<tr><td colspan="11" class="empty">Không tìm thấy đơn hàng phù hợp.</td></tr>{% endfor %}
+  </tbody></table></div>
+</section>
+{% endblock %}

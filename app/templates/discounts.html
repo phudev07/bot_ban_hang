@@ -1,0 +1,39 @@
+{% extends "base.html" %}
+{% block content %}
+<section class="page-intro">
+  <div><span>ƯU ĐÃI THEO SẢN PHẨM</span><h2>Tạo mã đúng mặt hàng, kiểm soát đúng ngân sách.</h2><p>Mỗi mã chỉ áp dụng cho một sản phẩm. Lượt dùng chỉ tăng khi đơn được giao thành công.</p></div>
+  <div class="intro-badges"><b>{{ stats.active }} mã đang bật</b><b>{{ stats.uses }} lượt đã dùng</b><b>{{ stats.discount|vnd }} đã giảm</b></div>
+</section>
+
+<section class="panel form-panel">
+  <div class="panel-head"><div><span>CREATE DISCOUNT</span><h2>Tạo mã giảm giá mới</h2></div><small>Phần trăm từ 1–99%; số tiền cố định được trừ trên mỗi sản phẩm.</small></div>
+  <form method="post" action="/admin/discounts" class="form-grid cols-3">
+    <input type="hidden" name="csrf" value="{{ csrf_token }}">
+    <label>Sản phẩm<select name="product_id" required>{% for product in products %}<option value="{{ product.id }}" {{ 'selected' if product.id == selected_product_id else '' }}>#{{ product.id }} · {{ product.name_vi }}</option>{% endfor %}</select></label>
+    <label>Mã giảm giá<input name="code" placeholder="GPTNEW2K" maxlength="32" required><small>Chữ, số, dấu gạch ngang hoặc gạch dưới.</small></label>
+    <label>Kiểu giảm<select name="discount_type"><option value="fixed">Số tiền cố định</option><option value="percent">Phần trăm</option></select></label>
+    <label>Giá trị<input name="discount_value" inputmode="numeric" placeholder="2000 hoặc 10" required></label>
+    <label>Giới hạn lượt dùng<input type="number" name="max_uses" value="0" min="0"><small>Để 0 nếu không giới hạn.</small></label>
+    <label>Bắt đầu lúc<input type="datetime-local" name="starts_at"><small>Để trống để dùng ngay.</small></label>
+    <label>Hết hạn lúc<input type="datetime-local" name="expires_at"><small>Để trống nếu không hết hạn.</small></label>
+    <button class="button primary" type="submit">Tạo mã giảm giá</button>
+  </form>
+</section>
+
+<section class="panel">
+  <div class="panel-head"><div><span>DISCOUNT LIBRARY</span><h2>Danh sách mã giảm giá</h2></div><a href="/admin/discounts">Hiện tất cả →</a></div>
+  <div class="table-wrap"><table><thead><tr><th>Mã</th><th>Sản phẩm áp dụng</th><th>Mức giảm</th><th>Lượt dùng</th><th>Thời hạn</th><th>Trạng thái</th><th>Thao tác</th></tr></thead><tbody>
+    {% for row in codes %}{% set item = row.code %}
+    <tr>
+      <td><strong class="coupon-code">{{ item.code }}</strong><small>#{{ item.id }} · tạo {{ item.created_at|localtime }}</small></td>
+      <td><a class="text-link" href="/admin/products/{{ row.product.id }}">#{{ row.product.id }} · {{ row.product.name_vi }}</a><small>Giá hiện tại {{ row.product.price|vnd }}</small></td>
+      <td><strong>{% if item.discount_type == 'percent' %}{{ item.discount_value }}%{% else %}{{ item.discount_value|vnd }}{% endif %}</strong><small>{{ 'Theo phần trăm' if item.discount_type == 'percent' else 'Trên mỗi sản phẩm' }}</small></td>
+      <td><strong>{{ item.used_count }}</strong><small>/ {{ item.max_uses if item.max_uses else 'không giới hạn' }}</small></td>
+      <td><span>{{ item.starts_at|localtime }}</span><small>đến {{ item.expires_at|localtime }}</small></td>
+      <td><span class="status {{ 'on' if item.active else 'off' }}">{{ 'Đang bật' if item.active else 'Đã tắt' }}</span></td>
+      <td><div class="row-actions"><form method="post" action="/admin/discounts/{{ item.id }}/toggle"><input type="hidden" name="csrf" value="{{ csrf_token }}"><button class="button compact quiet">{{ 'Tắt' if item.active else 'Bật' }}</button></form><form method="post" action="/admin/discounts/{{ item.id }}/delete" onsubmit="return confirm('Xóa mã giảm giá này?')"><input type="hidden" name="csrf" value="{{ csrf_token }}"><button class="button compact danger">Xóa</button></form></div></td>
+    </tr>
+    {% else %}<tr><td colspan="7" class="empty">Chưa có mã giảm giá nào.</td></tr>{% endfor %}
+  </tbody></table></div>
+</section>
+{% endblock %}

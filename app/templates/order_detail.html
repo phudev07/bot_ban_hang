@@ -1,0 +1,69 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="detail-actions">
+  <a class="button quiet" href="/admin/orders">← Quay lại danh sách</a>
+  {% if user.username %}<a class="button secondary" href="https://t.me/{{ user.username }}" target="_blank" rel="noreferrer">Nhắn @{{ user.username }}</a>{% endif %}
+  <a class="button primary" href="/admin/orders?q={{ user.telegram_id }}">Tất cả đơn của khách</a>
+</div>
+
+<section class="order-hero">
+  <div><span>SUPPORT CASE</span><h2>Đơn {{ order.shop_order_code }}</h2><p>{{ product.name_vi }} · {{ order.quantity }} tài khoản · doanh thu {{ order.amount|vnd }} · lợi nhuận {{ (order.amount - order.cost_amount)|vnd }}</p></div>
+  <div class="order-state"><span class="status on">{{ order.status }}</span><small>Tạo {{ order.created_at|localtime }}</small><small>Giao {{ order.delivered_at|localtime }}</small></div>
+</section>
+
+<div class="dashboard-grid detail-grid">
+  <section class="panel">
+    <div class="panel-head"><div><span>DELIVERED ITEMS</span><h2>{{ order.quantity }} tài khoản đã giao</h2></div></div>
+    <div class="secret-box">
+      <textarea id="delivered-secret" readonly rows="6">{{ secret }}</textarea>
+      <button class="button primary" type="button" onclick="navigator.clipboard.writeText(document.getElementById('delivered-secret').value)">Sao chép tất cả</button>
+      <p>Đây là dữ liệu thực tế khách đã nhận. Chỉ dùng khi xác minh và hỗ trợ đơn.</p>
+    </div>
+    <dl class="info-list">
+      <div><dt>Mã đơn shop</dt><dd><code>{{ order.shop_order_code }}</code></dd></div>
+      <div><dt>Mã đơn API</dt><dd><code>{{ order.supplier_order_code or '—' }}</code></dd></div>
+      <div><dt>Số lượng</dt><dd>{{ order.quantity }} tài khoản</dd></div>
+      <div><dt>Nguồn hàng</dt><dd>{{ product.fulfillment_source }}</dd></div>
+      <div><dt>Doanh thu</dt><dd>{{ order.amount|vnd }}</dd></div>
+      <div><dt>Giá vốn thực tế</dt><dd>{{ order.cost_amount|vnd }}</dd></div>
+      <div><dt>Lợi nhuận gộp</dt><dd class="profit-text {{ 'loss' if order.amount < order.cost_amount else '' }}">{{ (order.amount - order.cost_amount)|vnd }}</dd></div>
+      <div><dt>Mã giảm giá</dt><dd>{{ order.discount_code or '—' }}{% if order.discount_amount %} · -{{ order.discount_amount|vnd }}{% endif %}</dd></div>
+      <div><dt>Sản phẩm</dt><dd>#{{ product.id }} · {{ product.name_vi }}</dd></div>
+      <div><dt>Thời gian tạo</dt><dd>{{ order.created_at|localtime }}</dd></div>
+      <div><dt>Thời gian giao</dt><dd>{{ order.delivered_at|localtime }}</dd></div>
+    </dl>
+  </section>
+
+  <aside class="panel customer-card">
+    <div class="panel-head"><div><span>CUSTOMER</span><h2>{{ user.full_name }}</h2></div></div>
+    <div class="customer-profile">
+      <span class="avatar">{{ user.full_name[:1]|upper }}</span>
+      <div><strong>@{{ user.username or '—' }}</strong><code>{{ user.telegram_id }}</code></div>
+    </div>
+    <dl class="info-list">
+      <div><dt>Số dư hiện tại</dt><dd>{{ user.balance|vnd }}</dd></div>
+      <div><dt>Tổng sản phẩm</dt><dd>{{ user_order_count }}</dd></div>
+      <div><dt>Tổng đã chi</dt><dd>{{ user_spent|vnd }}</dd></div>
+      <div><dt>Trạng thái</dt><dd>{{ 'Đã khóa' if user.is_blocked else 'Hoạt động' }}</dd></div>
+      <div><dt>Đã /start</dt><dd>{{ 'Có' if user.has_started else 'Không' }}</dd></div>
+      <div><dt>Tham gia</dt><dd>{{ user.created_at|localtime }}</dd></div>
+    </dl>
+  </aside>
+</div>
+
+<section class="panel">
+  <div class="panel-head"><div><span>ORDER ITEMS</span><h2>Các tài khoản thuộc đơn {{ order.shop_order_code }}</h2></div></div>
+  <div class="table-wrap"><table><thead><tr><th>Mục giao</th><th>Giá bán</th><th>Giá vốn</th><th>Lợi nhuận</th><th>Giảm giá</th><th>Trạng thái</th><th>Giao lúc</th></tr></thead><tbody>
+    {% for item in related_orders %}<tr><td><code>Mục #{{ loop.index }}</code><small>ID nội bộ {{ item.id }}</small></td><td>{{ item.amount|vnd }}</td><td>{{ item.cost_amount|vnd }}</td><td class="profit-text">{{ (item.amount - item.cost_amount)|vnd }}</td><td>{{ item.discount_amount|vnd }}</td><td><span class="status on">{{ item.status }}</span></td><td>{{ item.delivered_at|localtime }}</td></tr>{% endfor %}
+  </tbody></table></div>
+</section>
+
+<div class="dashboard-grid lower-grid">
+  <section class="panel"><div class="panel-head"><div><span>PAYMENT REQUESTS</span><h2>Nạp tiền gần đây</h2></div><a href="/admin/payments?q={{ user.telegram_id }}">Xem dòng tiền →</a></div><div class="stack-list compact">
+    {% for item in deposits %}<article><div><strong>{{ item.requested_amount|vnd }} · {{ item.status }}</strong><small>{{ item.code }} · tạo {{ item.created_at|localtime }} · trả {{ item.paid_at|localtime }}</small></div><span>{{ (item.paid_amount or 0)|vnd }}</span></article>{% else %}<p class="empty">Khách chưa có yêu cầu nạp.</p>{% endfor %}
+  </div></section>
+  <section class="panel"><div class="panel-head"><div><span>BALANCE AUDIT</span><h2>Điều chỉnh số dư</h2></div></div><div class="stack-list compact">
+    {% for item in adjustments %}<article><div><strong>{{ item.amount|vnd }}</strong><small>{{ item.reason }} · {{ item.admin_username }} · {{ item.created_at|localtime }}</small></div></article>{% else %}<p class="empty">Chưa có điều chỉnh thủ công.</p>{% endfor %}
+  </div></section>
+</div>
+{% endblock %}

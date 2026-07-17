@@ -1,0 +1,79 @@
+from app.keyboards import (
+    order_history_menu,
+    product_detail,
+    quantity_menu,
+    router_token_delivery_keyboard,
+)
+from app.models import Order, Product
+
+
+def make_product() -> Product:
+    return Product(
+        id=10,
+        category_id=2,
+        name_vi="Tài khoản",
+        name_en="Account",
+        price=20_000,
+        allow_quantity=True,
+        max_quantity=10,
+    )
+
+
+def test_out_of_stock_product_has_no_buy_button() -> None:
+    keyboard = product_detail(make_product(), "vi", stock=0)
+    callbacks = [button.callback_data for row in keyboard.inline_keyboard for button in row]
+
+    assert callbacks == ["cat:2"]
+
+
+def test_quantity_buttons_do_not_exceed_available_stock() -> None:
+    keyboard = quantity_menu(make_product(), "vi", stock=3)
+    callbacks = [button.callback_data for row in keyboard.inline_keyboard for button in row]
+
+    assert "buy:10:1" in callbacks
+    assert "buy:10:2" in callbacks
+    assert "buy:10:5" not in callbacks
+    assert "buy:10:10" not in callbacks
+    assert "customqty:10" in callbacks
+
+
+def test_product_detail_offers_product_specific_discount_code() -> None:
+    keyboard = product_detail(make_product(), "vi", stock=3)
+    callbacks = [button.callback_data for row in keyboard.inline_keyboard for button in row]
+
+    assert "coupon:10" in callbacks
+
+
+def test_order_history_groups_items_under_one_shop_order_code() -> None:
+    product = make_product()
+    orders = [
+        Order(
+            id=order_id,
+            user_id=123,
+            product_id=product.id,
+            inventory_item_id=order_id,
+            amount=20_000,
+            batch_code="BORDER123",
+            product=product,
+        )
+        for order_id in (11, 12)
+    ]
+
+    keyboard = order_history_menu(orders, "vi")
+    first_button = keyboard.inline_keyboard[0][0]
+
+    assert first_button.callback_data == "orderdetail:11"
+    assert first_button.text == "BORDER123 · Tài khoản · 2 tài khoản"
+
+
+def test_router_token_keyboard_links_to_usage_dashboard() -> None:
+    keyboard = router_token_delivery_keyboard(
+        order_id=12,
+        api_key="sk-test-token",
+        language="vi",
+        usage_url="https://shop.example.com/token-usage",
+    )
+
+    usage_button = keyboard.inline_keyboard[1][0]
+    assert usage_button.text == "🧬 Xem log & thống kê"
+    assert usage_button.url == "https://shop.example.com/token-usage"

@@ -1,0 +1,250 @@
+from datetime import datetime
+
+from sqlalchemy import BigInteger, Boolean, DateTime, ForeignKey, String, Text, func
+from sqlalchemy.orm import Mapped, mapped_column, relationship
+
+from app.database import Base
+
+
+class User(Base):
+    __tablename__ = "users"
+
+    telegram_id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    full_name: Mapped[str] = mapped_column(String(255))
+    username: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    language: Mapped[str] = mapped_column(String(2), default="vi")
+    balance: Mapped[int] = mapped_column(BigInteger, default=0)
+    is_blocked: Mapped[bool] = mapped_column(Boolean, default=False)
+    has_started: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
+
+
+class Category(Base):
+    __tablename__ = "categories"
+
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    name_vi: Mapped[str] = mapped_column(String(255))
+    name_en: Mapped[str] = mapped_column(String(255))
+    position: Mapped[int] = mapped_column(default=0)
+    active: Mapped[bool] = mapped_column(Boolean, default=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+    products: Mapped[list["Product"]] = relationship(back_populates="category")
+
+
+class Product(Base):
+    __tablename__ = "products"
+
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    category_id: Mapped[int] = mapped_column(ForeignKey("categories.id", ondelete="CASCADE"))
+    name_vi: Mapped[str] = mapped_column(String(255))
+    name_en: Mapped[str] = mapped_column(String(255))
+    description_vi: Mapped[str] = mapped_column(Text, default="")
+    description_en: Mapped[str] = mapped_column(Text, default="")
+    price: Mapped[int] = mapped_column(BigInteger)
+    product_type: Mapped[str] = mapped_column(String(20), default="account", index=True)
+    allow_quantity: Mapped[bool] = mapped_column(Boolean, default=False)
+    max_quantity: Mapped[int] = mapped_column(default=10)
+    fulfillment_source: Mapped[str] = mapped_column(String(20), default="local", index=True)
+    supplier_product_id: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
+    supplier_markup: Mapped[int] = mapped_column(BigInteger, default=0)
+    supplier_price: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    external_stock: Mapped[int] = mapped_column(default=0)
+    supplier_synced_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    active: Mapped[bool] = mapped_column(Boolean, default=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+    category: Mapped[Category] = relationship(back_populates="products")
+    inventory: Mapped[list["InventoryItem"]] = relationship(back_populates="product")
+    discount_codes: Mapped[list["DiscountCode"]] = relationship(
+        back_populates="product",
+        cascade="all, delete-orphan",
+        passive_deletes=True,
+    )
+
+
+class DiscountCode(Base):
+    __tablename__ = "discount_codes"
+
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    product_id: Mapped[int] = mapped_column(
+        ForeignKey("products.id", ondelete="CASCADE"), index=True
+    )
+    code: Mapped[str] = mapped_column(String(64), unique=True, index=True)
+    discount_type: Mapped[str] = mapped_column(String(20), default="fixed")
+    discount_value: Mapped[int] = mapped_column(BigInteger)
+    max_uses: Mapped[int] = mapped_column(default=0)
+    used_count: Mapped[int] = mapped_column(default=0)
+    active: Mapped[bool] = mapped_column(Boolean, default=True)
+    starts_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+    product: Mapped[Product] = relationship(back_populates="discount_codes")
+
+
+class InventoryItem(Base):
+    __tablename__ = "inventory_items"
+
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    product_id: Mapped[int] = mapped_column(ForeignKey("products.id", ondelete="CASCADE"))
+    encrypted_secret: Mapped[str] = mapped_column(Text)
+    status: Mapped[str] = mapped_column(String(20), default="available", index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    sold_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+    product: Mapped[Product] = relationship(back_populates="inventory")
+
+
+class Order(Base):
+    __tablename__ = "orders"
+
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.telegram_id"), index=True)
+    product_id: Mapped[int] = mapped_column(ForeignKey("products.id"))
+    inventory_item_id: Mapped[int] = mapped_column(ForeignKey("inventory_items.id"), unique=True)
+    amount: Mapped[int] = mapped_column(BigInteger)
+    cost_amount: Mapped[int] = mapped_column(BigInteger, default=0)
+    discount_amount: Mapped[int] = mapped_column(BigInteger, default=0)
+    discount_code_id: Mapped[int | None] = mapped_column(
+        ForeignKey("discount_codes.id", ondelete="SET NULL"), nullable=True, index=True
+    )
+    discount_code: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    batch_code: Mapped[str | None] = mapped_column(String(32), nullable=True, index=True)
+    supplier_order_code: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
+    status: Mapped[str] = mapped_column(String(20), default="completed")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    delivered_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+    product: Mapped[Product] = relationship()
+    inventory_item: Mapped[InventoryItem] = relationship()
+
+    @property
+    def shop_order_code(self) -> str:
+        return self.batch_code or f"O{self.id}"
+
+
+class RouterTokenPurchase(Base):
+    __tablename__ = "router_token_purchases"
+
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    shop_order_id: Mapped[str] = mapped_column(String(128), unique=True, index=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.telegram_id"), index=True)
+    product_id: Mapped[int] = mapped_column(ForeignKey("products.id"), index=True)
+    deposit_id: Mapped[int | None] = mapped_column(
+        ForeignKey("deposits.id"), nullable=True, unique=True, index=True
+    )
+    order_id: Mapped[int | None] = mapped_column(
+        ForeignKey("orders.id"), nullable=True, unique=True, index=True
+    )
+    source: Mapped[str] = mapped_column(String(20), default="wallet")
+    face_amount: Mapped[int] = mapped_column(BigInteger)
+    paid_amount: Mapped[int] = mapped_column(BigInteger)
+    cost_amount: Mapped[int] = mapped_column(BigInteger, default=0)
+    token_quota: Mapped[int] = mapped_column(BigInteger)
+    discount_amount: Mapped[int] = mapped_column(BigInteger, default=0)
+    discount_code_id: Mapped[int | None] = mapped_column(
+        ForeignKey("discount_codes.id", ondelete="SET NULL"), nullable=True, index=True
+    )
+    discount_code: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    encrypted_key: Mapped[str | None] = mapped_column(Text, nullable=True)
+    router_key_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    status: Mapped[str] = mapped_column(String(24), default="pending", index=True)
+    attempt_count: Mapped[int] = mapped_column(default=0)
+    next_retry_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True, index=True
+    )
+    last_error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    notification_claimed_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    notified_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
+
+    product: Mapped[Product] = relationship()
+    order: Mapped[Order | None] = relationship()
+
+
+class RouterCapacityState(Base):
+    __tablename__ = "router_capacity_state"
+
+    id: Mapped[int] = mapped_column(primary_key=True, default=1)
+    total_capacity_tokens: Mapped[int] = mapped_column(BigInteger, default=0)
+    issued_quota_tokens: Mapped[int] = mapped_column(BigInteger, default=0)
+    used_tokens: Mapped[int] = mapped_column(BigInteger, default=0)
+    outstanding_tokens: Mapped[int] = mapped_column(BigInteger, default=0)
+    available_tokens: Mapped[int] = mapped_column(BigInteger, default=0)
+    active_keys: Mapped[int] = mapped_column(default=0)
+    failed_keys: Mapped[int] = mapped_column(default=0)
+    status: Mapped[str] = mapped_column(String(24), default="unknown")
+    last_error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    checked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    low_notified_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+
+
+class Deposit(Base):
+    __tablename__ = "deposits"
+
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.telegram_id"), index=True)
+    code: Mapped[str] = mapped_column(String(64), unique=True, index=True)
+    requested_amount: Mapped[int] = mapped_column(BigInteger)
+    paid_amount: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    payment_kind: Mapped[str] = mapped_column(String(20), default="wallet", index=True)
+    product_id: Mapped[int | None] = mapped_column(
+        ForeignKey("products.id"), nullable=True, index=True
+    )
+    quantity: Mapped[int] = mapped_column(default=1)
+    discount_amount: Mapped[int] = mapped_column(BigInteger, default=0)
+    discount_code_id: Mapped[int | None] = mapped_column(
+        ForeignKey("discount_codes.id", ondelete="SET NULL"), nullable=True, index=True
+    )
+    discount_code: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    status: Mapped[str] = mapped_column(String(20), default="pending", index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    paid_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
+class PaymentTransaction(Base):
+    __tablename__ = "payment_transactions"
+
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    deposit_id: Mapped[int] = mapped_column(ForeignKey("deposits.id"), index=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.telegram_id"), index=True)
+    provider_tx_id: Mapped[str] = mapped_column(String(255), unique=True, index=True)
+    amount: Mapped[int] = mapped_column(BigInteger)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class BalanceAdjustment(Base):
+    __tablename__ = "balance_adjustments"
+
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.telegram_id"), index=True)
+    admin_username: Mapped[str] = mapped_column(String(255))
+    amount: Mapped[int] = mapped_column(BigInteger)
+    reason: Mapped[str] = mapped_column(String(500))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class BroadcastLog(Base):
+    __tablename__ = "broadcast_logs"
+
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    admin_id: Mapped[int] = mapped_column(BigInteger, index=True)
+    source_chat_id: Mapped[int] = mapped_column(BigInteger)
+    source_message_id: Mapped[int]
+    total_recipients: Mapped[int] = mapped_column(default=0)
+    delivered_count: Mapped[int] = mapped_column(default=0)
+    failed_count: Mapped[int] = mapped_column(default=0)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())

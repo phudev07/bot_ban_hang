@@ -1,0 +1,91 @@
+{% extends "base.html" %}
+{% block content %}
+<section class="page-intro dashboard-intro">
+  <div><span>TOÀN CẢNH KINH DOANH</span><h2>Doanh thu nhìn cùng giá vốn mới ra đúng lợi nhuận.</h2><p>Giá vốn API được đồng bộ động; mỗi đơn lưu lại đúng chi phí nguồn tại thời điểm giao hàng.</p></div>
+  <div class="quick-actions">
+    <a href="/admin/orders">Tra đơn hàng</a>
+    <a href="/admin/products">Kiểm tra giá vốn</a>
+    <a href="/admin/discounts">Tạo mã giảm giá</a>
+    <a href="/admin/payments">Đối soát tiền</a>
+  </div>
+</section>
+
+<section class="finance-periods">
+  {% for key, label in [('today', 'Hôm nay'), ('month', 'Tháng này'), ('year', 'Năm nay'), ('all', 'Toàn thời gian')] %}{% set item = financials[key] %}
+  <article class="finance-card {{ 'featured' if key == 'month' else '' }}">
+    <div class="finance-card-head"><span>{{ label }}</span><b>{{ item.orders }} đơn hàng</b></div>
+    <strong>{{ item.profit|vnd }}</strong><small>Lợi nhuận gộp · biên {{ item.margin }}%</small>
+    <dl><div><dt>Doanh thu</dt><dd>{{ item.revenue|vnd }}</dd></div><div><dt>Giá vốn API</dt><dd>{{ item.cost|vnd }}</dd></div><div><dt>Đã giảm giá</dt><dd>{{ item.discount|vnd }}</dd></div></dl>
+  </article>
+  {% endfor %}
+</section>
+
+<section class="operations-grid">
+  <article><span>Thành viên mới hôm nay</span><strong>+{{ stats.users_today }}</strong><small>{{ stats.users }} thành viên tất cả</small></article>
+  <article><span>Đơn hôm nay</span><strong>{{ stats.orders_today }}</strong><small>{{ stats.orders_month }} đơn trong tháng</small></article>
+  <article><span>Tồn kho khả dụng</span><strong>{{ stats.stock }}</strong><small>Kho bot và tồn API hiện tại</small></article>
+  <article><span>Thanh toán đang chờ</span><strong>{{ stats.pending }}</strong><small>{{ stats.pending_amount|vnd }} chưa khớp</small></article>
+  <article><span>Tiền nhận hôm nay</span><strong>{{ stats.received_today|vnd }}</strong><small>Webhook ngân hàng đã ghi nhận</small></article>
+  <article><span>Số dư ví khách</span><strong>{{ stats.wallet_total|vnd }}</strong><small>Khoản bot đang giữ hộ khách</small></article>
+</section>
+
+<div class="dashboard-grid chart-layout">
+  <section class="panel trend-panel">
+    <div class="panel-head"><div><span>14-DAY PERFORMANCE</span><h2>Doanh thu và lợi nhuận 14 ngày</h2></div><div class="chart-legend"><i class="revenue-dot"></i>Doanh thu<i class="profit-dot"></i>Lợi nhuận</div></div>
+    <div class="trend-chart detailed">
+      {% for point in sales_trend %}
+      <div class="trend-column" title="{{ point.label }} · Doanh thu {{ point.amount|vnd }} · Lợi nhuận {{ point.profit|vnd }}">
+        <div class="trend-value">{{ point.amount|vnd }}</div>
+        <div class="trend-track"><i class="revenue-bar" style="height: {{ point.height }}%"></i><i class="profit-bar" style="height: {{ point.profit_height }}%"></i></div>
+        <small>{{ point.label }}</small>
+      </div>
+      {% endfor %}
+    </div>
+  </section>
+
+  <section class="panel health-panel">
+    <div class="panel-head"><div><span>VẬN HÀNH</span><h2>Sức khỏe cửa hàng</h2></div></div>
+    <div class="health-list">
+      <div><span>Giá trị sản phẩm trung bình</span><strong>{{ stats.average_order|vnd }}</strong></div>
+      <div><span>Tỷ lệ khách đã mua</span><strong>{{ stats.buyer_rate }}%</strong></div>
+      <div><span>Đang nhận thông báo</span><strong>{{ stats.active_recipients }}</strong></div>
+      <div><span>Tài khoản bị khóa</span><strong>{{ stats.blocked_users }}</strong></div>
+      <div><span>Thành viên mới tháng</span><strong>+{{ stats.users_month }}</strong></div>
+      <div><span>Thành viên mới năm</span><strong>+{{ stats.users_year }}</strong></div>
+    </div>
+  </section>
+</div>
+
+<section class="panel">
+  <div class="panel-head"><div><span>MONTHLY P&L</span><h2>Kết quả từng tháng trong năm</h2></div><small>Tháng gần nhất hiển thị trước</small></div>
+  <div class="table-wrap"><table class="financial-table"><thead><tr><th>Tháng</th><th>Đơn hàng</th><th>Doanh thu</th><th>Giá vốn API</th><th>Giảm giá</th><th>Lợi nhuận</th><th>Biên lãi</th></tr></thead><tbody>
+    {% for row in monthly_performance %}<tr><td><strong>{{ row.label }}</strong></td><td>{{ row.orders }}</td><td>{{ row.revenue|vnd }}</td><td>{{ row.cost|vnd }}</td><td>{{ row.discount|vnd }}</td><td><strong class="profit-text {{ 'loss' if row.profit < 0 else '' }}">{{ row.profit|vnd }}</strong></td><td>{{ ((row.profit / row.revenue * 100)|round(1)) if row.revenue else 0 }}%</td></tr>{% endfor %}
+  </tbody></table></div>
+</section>
+
+<div class="dashboard-grid lower-grid">
+  <section class="panel">
+    <div class="panel-head"><div><span>PRODUCT PROFITABILITY</span><h2>Sản phẩm tạo doanh thu</h2></div><a href="/admin/products">Quản lý sản phẩm →</a></div>
+    <div class="table-wrap"><table><thead><tr><th>Sản phẩm</th><th>Đơn hàng</th><th>Doanh thu</th><th>Giá vốn</th><th>Lợi nhuận</th></tr></thead><tbody>
+      {% for row in top_products %}<tr><td><strong>{{ row.product.name_vi }}</strong><small>{{ 'API động' if row.product.fulfillment_source == 'sumistore' else 'Kho bot' }} · giảm {{ row.discount|vnd }}</small></td><td>{{ row.orders }}</td><td>{{ row.revenue|vnd }}</td><td>{{ row.cost|vnd }}</td><td><strong class="profit-text {{ 'loss' if row.profit < 0 else '' }}">{{ row.profit|vnd }}</strong></td></tr>
+      {% else %}<tr><td colspan="5" class="empty">Chưa có dữ liệu bán hàng.</td></tr>{% endfor %}
+    </tbody></table></div>
+  </section>
+
+  <section class="panel">
+    <div class="panel-head"><div><span>LIVE ORDERS</span><h2>Đơn mới nhất</h2></div><a href="/admin/orders">Xem tất cả →</a></div>
+    <div class="stack-list order-feed">
+      {% for row in recent_orders %}<article><div><strong>{{ row.shop_order_code }} · {{ row.product.name_vi }}</strong><small>{{ row.user.full_name }} · {{ row.quantity }} tài khoản · {{ row.created_at|localtime }}</small></div><span><b>{{ row.amount|vnd }}</b><small>Lãi {{ (row.amount - row.cost_amount)|vnd }}</small></span></article>
+      {% else %}<p class="empty">Chưa có đơn hàng.</p>{% endfor %}
+    </div>
+  </section>
+</div>
+
+<section class="panel">
+  <div class="panel-head"><div><span>NEW MEMBERS</span><h2>Thành viên mới nhất</h2></div><a href="/admin/users">Xem khách hàng →</a></div>
+  <div class="member-cards">
+    {% for user in recent_users %}<article><span>{{ user.full_name[:1]|upper }}</span><div><strong>{{ user.full_name }}</strong><small>@{{ user.username or '—' }}</small><code>{{ user.telegram_id }}</code></div><time>{{ user.created_at|localtime }}</time></article>
+    {% else %}<p class="empty">Chưa có thành viên.</p>{% endfor %}
+  </div>
+</section>
+{% endblock %}

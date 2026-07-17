@@ -1,0 +1,66 @@
+<!doctype html>
+<html lang="vi">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{{ title }} · PHP Tool Shop</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=Fraunces:opsz,wght@9..144,600;9..144,700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/admin-assets/admin.css?v=4">
+</head>
+<body>
+  <div class="shell">
+    <aside class="sidebar">
+      <a class="brand" href="/admin">
+        <span class="brand-mark">P</span>
+        <span><strong>PHP Tool</strong><small>trung tâm bán hàng</small></span>
+      </a>
+      <button class="mobile-menu-toggle" type="button" aria-expanded="false" aria-controls="admin-nav">
+        <span class="menu-icon">☰</span><span>Danh mục</span>
+      </button>
+      <nav id="admin-nav" class="nav" aria-label="Điều hướng quản trị">
+        <a class="{{ 'active' if section == 'dashboard' else '' }}" href="/admin"><span>⌁</span>Tổng quan</a>
+        <a class="{{ 'active' if section == 'categories' else '' }}" href="/admin/categories"><span>▦</span>Gian hàng</a>
+        <a class="{{ 'active' if section == 'products' else '' }}" href="/admin/products"><span>◇</span>Sản phẩm</a>
+        <a class="{{ 'active' if section == 'discounts' else '' }}" href="/admin/discounts"><span>％</span>Mã giảm giá</a>
+        <a class="{{ 'active' if section == 'inventory' else '' }}" href="/admin/inventory"><span>▤</span>Nhập kho</a>
+        <a class="{{ 'active' if section == 'orders' else '' }}" href="/admin/orders"><span>◎</span>Đơn hàng</a>
+        <a class="{{ 'active' if section == 'router_tokens' else '' }}" href="/admin/router-tokens"><span>◫</span>GPT token</a>
+        <a class="{{ 'active' if section == 'users' else '' }}" href="/admin/users"><span>◉</span>Khách hàng</a>
+        <a class="{{ 'active' if section == 'broadcasts' else '' }}" href="/admin/broadcasts"><span>◒</span>Thông báo</a>
+        <a class="{{ 'active' if section == 'payments' else '' }}" href="/admin/payments"><span>↗</span>Dòng tiền</a>
+        <a class="{{ 'active' if section == 'system' else '' }}" href="/admin/system"><span>⚙</span>Hệ thống</a>
+      </nav>
+      <form class="logout" method="post" action="/admin/logout">
+        <input type="hidden" name="csrf" value="{{ csrf_token }}">
+        <button type="submit">Đăng xuất · {{ admin_username }}</button>
+      </form>
+    </aside>
+    <main class="main">
+      <header class="topbar">
+        <div><p>BẢNG ĐIỀU KHIỂN</p><h1>{{ title }}</h1></div>
+        <a class="bot-link" href="https://t.me/phptool_bot" target="_blank" rel="noreferrer">Mở bot ↗</a>
+      </header>
+      {% if flash %}<div class="flash {{ flash.level }}">{{ flash.message }}</div>{% endif %}
+      {% block content %}{% endblock %}
+    </main>
+  </div>
+  <script>
+    (() => {
+      const sidebar = document.querySelector('.sidebar');
+      const toggle = document.querySelector('.mobile-menu-toggle');
+      if (!sidebar || !toggle) return;
+      const closeMenu = () => {
+        sidebar.classList.remove('menu-open');
+        toggle.setAttribute('aria-expanded', 'false');
+      };
+      toggle.addEventListener('click', () => {
+        const open = sidebar.classList.toggle('menu-open');
+        toggle.setAttribute('aria-expanded', String(open));
+      });
+      sidebar.querySelectorAll('.nav a').forEach((link) => link.addEventListener('click', closeMenu));
+    })();
+  </script>
+</body>
+</html>

@@ -1,0 +1,402 @@
+<!doctype html>
+<html lang="vi">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+  <meta name="color-scheme" content="dark">
+  <meta name="theme-color" content="#05090d">
+  <meta name="robots" content="noindex,nofollow,noarchive">
+  <title>Nexus Token Monitor · PHP Tool Shop</title>
+  <style>
+    :root {
+      --bg: #05090d;
+      --panel: rgba(10, 19, 25, .88);
+      --panel-strong: #0b151c;
+      --line: rgba(105, 243, 211, .17);
+      --line-hot: rgba(105, 243, 211, .48);
+      --text: #e8fff9;
+      --muted: #7f9c98;
+      --cyan: #69f3d3;
+      --lime: #c9ff5d;
+      --amber: #ffbe55;
+      --red: #ff6174;
+      --quota-angle: 0deg;
+      --shadow: 0 24px 80px rgba(0, 0, 0, .48);
+    }
+    * { box-sizing: border-box; }
+    html { min-height: 100%; background: var(--bg); }
+    body {
+      min-height: 100vh;
+      margin: 0;
+      color: var(--text);
+      background:
+        radial-gradient(circle at 16% 4%, rgba(43, 177, 157, .16), transparent 30rem),
+        radial-gradient(circle at 86% 82%, rgba(201, 255, 93, .08), transparent 32rem),
+        linear-gradient(rgba(105, 243, 211, .035) 1px, transparent 1px),
+        linear-gradient(90deg, rgba(105, 243, 211, .035) 1px, transparent 1px),
+        var(--bg);
+      background-size: auto, auto, 38px 38px, 38px 38px, auto;
+      font-family: "Cascadia Code", "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+      line-height: 1.5;
+      overflow-x: hidden;
+    }
+    body::before {
+      content: "";
+      position: fixed;
+      inset: 0;
+      pointer-events: none;
+      z-index: 10;
+      opacity: .14;
+      background: repeating-linear-gradient(0deg, transparent 0 3px, rgba(255,255,255,.025) 4px);
+    }
+    button, input { font: inherit; }
+    button { color: inherit; }
+    .shell { width: min(1240px, calc(100% - 32px)); margin: 0 auto; padding: 20px 0 40px; }
+    .topbar { display: flex; align-items: center; justify-content: space-between; gap: 16px; }
+    .brand { display: flex; align-items: center; gap: 12px; letter-spacing: .04em; }
+    .brand-mark {
+      width: 38px; height: 38px; display: grid; place-items: center;
+      border: 1px solid var(--line-hot); color: var(--cyan); font-size: 20px;
+      background: rgba(105, 243, 211, .07); box-shadow: inset 0 0 18px rgba(105,243,211,.08);
+      clip-path: polygon(12% 0, 100% 0, 100% 72%, 72% 100%, 0 100%, 0 12%);
+    }
+    .brand strong { display: block; font-size: 13px; color: var(--cyan); }
+    .brand small { display: block; color: var(--muted); font-size: 10px; letter-spacing: .16em; }
+    .system-state { display: flex; align-items: center; gap: 8px; color: var(--muted); font-size: 11px; }
+    .pulse { width: 8px; height: 8px; border-radius: 50%; background: var(--lime); box-shadow: 0 0 0 5px rgba(201,255,93,.08), 0 0 16px var(--lime); }
+    .pulse.offline { background: var(--red); box-shadow: 0 0 14px var(--red); }
+    .hero { padding: 38px 0 20px; max-width: 850px; }
+    .eyebrow { margin: 0 0 8px; color: var(--cyan); font-size: 10px; letter-spacing: .19em; text-transform: uppercase; }
+    h1 { margin: 0; max-width: 800px; font-size: clamp(30px, 5vw, 52px); line-height: 1; letter-spacing: -.06em; font-weight: 650; }
+    h1 span { color: transparent; -webkit-text-stroke: 1px var(--cyan); text-shadow: 0 0 30px rgba(105,243,211,.13); }
+    .lead { max-width: 760px; margin: 12px 0 0; color: #9eb8b4; font-family: ui-sans-serif, system-ui, sans-serif; font-size: 14px; }
+    .terminal {
+      position: relative; padding: 1px; overflow: hidden;
+      background: linear-gradient(120deg, var(--line-hot), rgba(201,255,93,.08) 45%, var(--line));
+      box-shadow: var(--shadow);
+      clip-path: polygon(0 0, calc(100% - 22px) 0, 100% 22px, 100% 100%, 22px 100%, 0 calc(100% - 22px));
+    }
+    .terminal-inner { padding: 14px; background: rgba(6, 12, 16, .97); }
+    .terminal-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 9px; color: var(--muted); font-size: 9px; letter-spacing: .14em; text-transform: uppercase; }
+    .terminal-head span:first-child::before { content: ">_"; margin-right: 8px; color: var(--lime); }
+    .key-form { display: grid; grid-template-columns: 1fr auto; gap: 10px; }
+    .key-wrap { position: relative; }
+    .key-wrap::before { content: "KEY"; position: absolute; left: 15px; top: 50%; transform: translateY(-50%); color: var(--cyan); font-size: 10px; letter-spacing: .14em; }
+    .key-input {
+      width: 100%; min-height: 46px; padding: 0 48px 0 62px; color: var(--text); outline: 0;
+      border: 1px solid var(--line); border-radius: 0; background: rgba(105,243,211,.035);
+      transition: border-color .2s, box-shadow .2s;
+    }
+    .key-input:focus { border-color: var(--cyan); box-shadow: inset 0 0 24px rgba(105,243,211,.05), 0 0 0 3px rgba(105,243,211,.06); }
+    .key-input::placeholder { color: #405a57; }
+    .toggle-key { position: absolute; right: 5px; top: 4px; width: 38px; height: 38px; border: 0; background: transparent; color: var(--muted); cursor: pointer; }
+    .connect-btn, .mini-btn {
+      border: 1px solid rgba(201,255,93,.56); background: var(--lime); color: #101a0b;
+      cursor: pointer; font-weight: 800; letter-spacing: .08em; text-transform: uppercase;
+      transition: transform .18s, box-shadow .18s, filter .18s;
+    }
+    .connect-btn { min-height: 46px; padding: 0 25px; }
+    .connect-btn:hover, .mini-btn:hover { transform: translateY(-1px); box-shadow: 0 8px 28px rgba(201,255,93,.15); filter: brightness(1.05); }
+    .connect-btn:disabled, .mini-btn:disabled { cursor: wait; opacity: .58; transform: none; }
+    .privacy-note { margin: 8px 0 0; color: var(--muted); font-size: 9px; }
+    .privacy-note b { color: var(--cyan); font-weight: 500; }
+    .notice { display: none; margin-top: 14px; padding: 12px 14px; border-left: 2px solid var(--red); background: rgba(255,97,116,.07); color: #ff9baa; font-size: 12px; }
+    .notice.show { display: block; }
+    .dashboard { display: none; margin-top: 22px; animation: reveal .4s cubic-bezier(.2,.8,.2,1) both; }
+    .dashboard.show { display: block; }
+    body.connected .hero, body.connected .terminal { display: none; }
+    body.connected .dashboard { margin-top: 18px; }
+    @keyframes reveal { from { opacity: 0; transform: translateY(14px); } to { opacity: 1; transform: none; } }
+    .dash-head { display: flex; align-items: flex-end; justify-content: space-between; gap: 18px; margin-bottom: 14px; }
+    .dash-head h2 { margin: 0; font-size: clamp(18px, 3vw, 24px); letter-spacing: -.035em; }
+    .dash-head p { margin: 5px 0 0; color: var(--muted); font-size: 11px; }
+    .dash-actions { display: flex; gap: 8px; }
+    .mini-btn { min-height: 38px; padding: 0 13px; font-size: 10px; }
+    .mini-btn.ghost { border-color: var(--line); color: var(--muted); background: transparent; }
+    .grid { display: grid; grid-template-columns: repeat(12, minmax(0, 1fr)); gap: 12px; }
+    .panel { border: 1px solid var(--line); background: var(--panel); box-shadow: inset 0 1px rgba(255,255,255,.02); }
+    .quota-panel { grid-column: span 4; min-height: 178px; padding: 16px; display: grid; grid-template-columns: 112px 1fr; gap: 16px; align-items: center; }
+    .quota-ring { width: 108px; aspect-ratio: 1; position: relative; display: grid; place-items: center; border-radius: 50%; background: conic-gradient(var(--lime) var(--quota-angle), rgba(201,255,93,.08) 0); box-shadow: 0 0 32px rgba(201,255,93,.07); }
+    .quota-ring::before { content: ""; position: absolute; inset: 7px; border: 1px solid var(--line); border-radius: inherit; background: var(--panel-strong); }
+    .quota-center { position: relative; z-index: 1; text-align: center; }
+    .quota-center strong { display: block; color: var(--lime); font-size: 21px; letter-spacing: -.05em; }
+    .quota-center span { color: var(--muted); font-size: 9px; letter-spacing: .13em; text-transform: uppercase; }
+    .quota-copy small, .stat small, .section-title small { display: block; color: var(--muted); font-size: 9px; letter-spacing: .13em; text-transform: uppercase; }
+    .quota-copy h3 { margin: 7px 0 4px; font-size: clamp(17px, 2.4vw, 24px); letter-spacing: -.05em; }
+    .quota-copy p { margin: 0; color: var(--muted); font-size: 11px; }
+    .status-pill { display: inline-flex; align-items: center; gap: 7px; margin-top: 10px; padding: 5px 8px; border: 1px solid rgba(201,255,93,.28); color: var(--lime); background: rgba(201,255,93,.05); font-size: 8px; letter-spacing: .08em; text-transform: uppercase; }
+    .status-pill.off { border-color: rgba(255,97,116,.35); color: var(--red); background: rgba(255,97,116,.06); }
+    .stats { grid-column: span 8; display: grid; grid-template-columns: repeat(4, minmax(0,1fr)); gap: 12px; }
+    .stat { min-height: 178px; padding: 16px; position: relative; overflow: hidden; }
+    .stat::after { content: attr(data-index); position: absolute; right: 9px; top: 3px; color: rgba(105,243,211,.08); font-size: 34px; }
+    .stat strong { display: block; margin-top: 31px; font-size: clamp(19px, 2.4vw, 28px); letter-spacing: -.06em; }
+    .stat em { color: var(--muted); font-size: 10px; font-style: normal; }
+    .stat.input strong { color: var(--cyan); }
+    .stat.output strong { color: var(--amber); }
+    .chart-panel { grid-column: span 7; min-height: 220px; padding: 18px; }
+    .models-panel { grid-column: span 5; min-height: 220px; padding: 18px; }
+    .section-title { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 19px; }
+    .section-title strong { font-size: 13px; }
+    .activity-bars { height: 125px; display: flex; align-items: flex-end; gap: 5px; padding-top: 12px; border-bottom: 1px solid var(--line); background: repeating-linear-gradient(to top, transparent 0 30px, rgba(105,243,211,.055) 31px); }
+    .bar { flex: 1; min-width: 3px; height: max(3px, var(--bar)); position: relative; background: linear-gradient(to top, rgba(105,243,211,.2), var(--cyan)); box-shadow: 0 0 10px rgba(105,243,211,.12); animation: grow .6s ease both; transform-origin: bottom; }
+    .bar.output { background: linear-gradient(to top, rgba(255,190,85,.18), var(--amber)); }
+    @keyframes grow { from { transform: scaleY(0); } }
+    .chart-legend { display: flex; gap: 18px; margin-top: 13px; color: var(--muted); font-size: 9px; }
+    .chart-legend i { display: inline-block; width: 7px; height: 7px; margin-right: 6px; background: var(--cyan); }
+    .chart-legend i.amber { background: var(--amber); }
+    .model-list { display: grid; gap: 10px; }
+    .model-row { display: grid; grid-template-columns: minmax(0,1fr) auto; gap: 12px; align-items: center; }
+    .model-row strong { display: block; overflow: hidden; color: #cde5e1; font-size: 10px; text-overflow: ellipsis; white-space: nowrap; }
+    .model-row small { color: var(--muted); font-size: 9px; }
+    .model-row > span { color: var(--cyan); font-size: 10px; }
+    .model-track { grid-column: 1 / -1; height: 3px; background: rgba(105,243,211,.07); }
+    .model-track i { display: block; height: 100%; width: var(--width); background: linear-gradient(90deg, var(--cyan), var(--lime)); }
+    .logs-panel { grid-column: 1 / -1; overflow: hidden; min-height: 440px; }
+    .logs-head { padding: 16px 18px 0; margin-bottom: 10px; }
+    .table-scroll { max-height: 560px; overflow: auto; scrollbar-color: var(--line-hot) transparent; }
+    table { width: 100%; border-collapse: collapse; font-size: 10px; }
+    th { position: sticky; top: 0; z-index: 2; padding: 10px 14px; color: var(--muted); background: #0a141a; font-weight: 500; letter-spacing: .1em; text-align: left; text-transform: uppercase; }
+    td { padding: 11px 14px; border-top: 1px solid rgba(105,243,211,.08); color: #b9d2ce; }
+    td.model { max-width: 260px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    td.num { color: var(--cyan); font-variant-numeric: tabular-nums; }
+    td.out { color: var(--amber); }
+    .request-state { display: inline-flex; align-items: center; gap: 5px; color: var(--lime); text-transform: uppercase; }
+    .request-state::before { content: ""; width: 5px; height: 5px; border-radius: 50%; background: currentColor; }
+    .request-state.error { color: var(--red); }
+    .empty { padding: 44px 20px; color: var(--muted); text-align: center; }
+    .loading { display: none; position: fixed; inset: 0; z-index: 20; place-items: center; background: rgba(4,8,11,.72); backdrop-filter: blur(4px); }
+    .loading.show { display: grid; }
+    .loader { width: 48px; height: 48px; border: 1px solid var(--line); border-top-color: var(--lime); border-radius: 50%; animation: spin .75s linear infinite; box-shadow: 0 0 24px rgba(201,255,93,.1); }
+    @keyframes spin { to { transform: rotate(360deg); } }
+    footer { padding-top: 16px; color: #4f6865; font-size: 9px; letter-spacing: .08em; text-align: center; }
+    @media (max-width: 850px) {
+      .hero { padding-top: 32px; }
+      .quota-panel, .stats, .chart-panel, .models-panel { grid-column: 1 / -1; }
+      .quota-panel { grid-template-columns: 110px 1fr; }
+      .stats { grid-template-columns: repeat(4, minmax(0,1fr)); }
+    }
+    @media (max-width: 590px) {
+      .shell { width: min(100% - 22px, 1180px); padding-top: 18px; }
+      .system-state span:last-child { display: none; }
+      .hero { padding: 28px 0 18px; }
+      h1 { font-size: 34px; }
+      .lead { font-size: 13px; }
+      .terminal-inner { padding: 12px; }
+      .key-form { grid-template-columns: 1fr; }
+      .connect-btn { width: 100%; }
+      .dash-head { align-items: flex-start; flex-direction: column; }
+      .dash-actions { width: 100%; }
+      .dash-actions .mini-btn { flex: 1; }
+      .quota-panel { min-height: 140px; grid-template-columns: 96px 1fr; text-align: left; }
+      .quota-ring { width: 92px; }
+      .stats { grid-template-columns: repeat(2, minmax(0,1fr)); }
+      .stat { min-height: 104px; padding: 13px; }
+      .stat strong { margin-top: 15px; font-size: 21px; }
+      .chart-panel, .models-panel { display: none; }
+      .logs-panel { min-height: 520px; }
+      .table-scroll { max-height: 620px; }
+      .activity-bars { gap: 3px; }
+      table, tbody, tr, td { display: block; width: 100%; }
+      thead { display: none; }
+      tr { padding: 12px 14px; border-top: 1px solid var(--line); }
+      td { display: flex; justify-content: space-between; gap: 14px; padding: 5px 0; border: 0; text-align: right; }
+      td::before { content: attr(data-label); color: var(--muted); text-align: left; text-transform: uppercase; }
+      td.model { max-width: none; white-space: normal; }
+    }
+    @media (prefers-reduced-motion: reduce) { *, *::before, *::after { scroll-behavior: auto !important; animation: none !important; transition: none !important; } }
+  </style>
+</head>
+<body data-service="{{ 'online' if service_available else 'offline' }}">
+  <div class="loading" id="loading" aria-hidden="true"><div class="loader"></div></div>
+  <main class="shell">
+    <header class="topbar">
+      <div class="brand"><div class="brand-mark">N</div><div><strong>PHP TOOL SHOP</strong><small>NEXUS MONITOR</small></div></div>
+      <div class="system-state"><i class="pulse {{ '' if service_available else 'offline' }}"></i><span>{{ '9ROUTER LINK ONLINE' if service_available else 'SERVICE OFFLINE' }}</span></div>
+    </header>
+
+    <section class="hero">
+      <p class="eyebrow">// Real-time quota intelligence</p>
+      <h1>Kiểm soát từng <span>token.</span></h1>
+      <p class="lead">Nhập API key đã mua tại shop để xem quota còn lại, tổng request, input/output token và nhật ký sử dụng gần nhất.</p>
+    </section>
+
+    <section class="terminal" aria-labelledby="access-title">
+      <div class="terminal-inner">
+        <div class="terminal-head"><span id="access-title">Secure key access</span><span>NO LOG · NO STORAGE</span></div>
+        <form class="key-form" id="keyForm">
+          <div class="key-wrap">
+            <input class="key-input" id="apiKey" name="api_key" type="password" placeholder="sk-••••••••••••••••" autocomplete="off" autocapitalize="none" spellcheck="false" required aria-label="API key">
+            <button class="toggle-key" id="toggleKey" type="button" aria-label="Hiện hoặc ẩn API key">◉</button>
+          </div>
+          <button class="connect-btn" id="connectBtn" type="submit">Kết nối</button>
+        </form>
+        <p class="privacy-note"><b>SECURE MODE:</b> Key chỉ được gửi qua HTTPS để xác thực và không được lưu trong trình duyệt.</p>
+        <div class="notice {{ 'show' if not service_available else '' }}" id="notice" role="alert">{{ 'Dịch vụ thống kê đang tạm bảo trì.' if not service_available else '' }}</div>
+      </div>
+    </section>
+
+    <section class="dashboard" id="dashboard" aria-live="polite">
+      <div class="dash-head">
+        <div><h2>Token telemetry</h2><p><span id="orderCode">—</span> · cập nhật <span id="updatedAt">—</span></p></div>
+        <div class="dash-actions"><button class="mini-btn ghost" id="disconnectBtn" type="button">Ngắt kết nối</button><button class="mini-btn" id="refreshBtn" type="button">Làm mới</button></div>
+      </div>
+
+      <div class="grid">
+        <article class="panel quota-panel">
+          <div class="quota-ring" id="quotaRing"><div class="quota-center"><strong id="quotaPercent">0%</strong><span>còn khả dụng</span></div></div>
+          <div class="quota-copy"><small>Remaining / Total</small><h3><span id="remainingTokens">0</span> / <span id="quotaTokens">0</span></h3><p>Đã tiêu thụ <span id="usedTokens">0</span> token trong tổng quota.</p><div class="status-pill" id="keyStatus">● Đang hoạt động</div></div>
+        </article>
+
+        <div class="stats">
+          <article class="panel stat" data-index="01"><small>Total requests</small><strong id="totalRequests">0</strong><em>lượt gọi API</em></article>
+          <article class="panel stat" data-index="02"><small>Tokens processed</small><strong id="processedTokens">0</strong><em>input + output theo log</em></article>
+          <article class="panel stat input" data-index="03"><small>Input tokens</small><strong id="inputTokens">0</strong><em id="inputRatio">0% tổng log</em></article>
+          <article class="panel stat output" data-index="04"><small>Output tokens</small><strong id="outputTokens">0</strong><em id="outputRatio">0% tổng log</em></article>
+        </div>
+
+        <article class="panel logs-panel">
+          <div class="logs-head section-title"><div><small>Request stream</small><strong>Nhật ký request gần nhất</strong></div><small>Tối đa 50 lượt</small></div>
+          <div class="table-scroll"><table><thead><tr><th>Thời gian</th><th>Model</th><th>Input</th><th>Output</th><th>Tổng</th><th>Trạng thái</th></tr></thead><tbody id="logRows"></tbody></table><div class="empty" id="emptyLogs">Key này chưa phát sinh request.</div></div>
+        </article>
+
+        <article class="panel chart-panel">
+          <div class="section-title"><div><small>Last activity</small><strong>Input / output theo request</strong></div><small id="lastRequest">Chưa có dữ liệu</small></div>
+          <div class="activity-bars" id="activityBars"></div>
+          <div class="chart-legend"><span><i></i>Input</span><span><i class="amber"></i>Output</span></div>
+        </article>
+
+        <article class="panel models-panel">
+          <div class="section-title"><div><small>Model distribution</small><strong>Model được sử dụng</strong></div><small id="modelCount">0 model</small></div>
+          <div class="model-list" id="modelList"><div class="empty">Chưa có request.</div></div>
+        </article>
+
+      </div>
+    </section>
+    <footer>PHP TOOL SHOP // QUOTA DATA SYNCHRONIZED FROM 9ROUTER</footer>
+  </main>
+
+  <script>
+    (() => {
+      "use strict";
+      const $ = (id) => document.getElementById(id);
+      const form = $("keyForm"), input = $("apiKey"), notice = $("notice");
+      const dashboard = $("dashboard"), loading = $("loading"), connectBtn = $("connectBtn");
+      const refreshBtn = $("refreshBtn"), disconnectBtn = $("disconnectBtn");
+      let activeKey = "", refreshTimer = null;
+
+      const format = (value) => new Intl.NumberFormat("vi-VN").format(Number(value || 0));
+      const formatDate = (value) => {
+        if (!value) return "—";
+        const date = new Date(value);
+        return Number.isNaN(date.getTime()) ? "—" : date.toLocaleString("vi-VN", { hour12: false });
+      };
+      const setText = (id, value) => { $(id).textContent = value; };
+      const setBusy = (busy, quiet) => {
+        connectBtn.disabled = busy;
+        refreshBtn.disabled = busy;
+        if (!quiet) loading.classList.toggle("show", busy);
+      };
+      const showError = (message) => { notice.textContent = message; notice.classList.add("show"); };
+      const clearError = () => { notice.textContent = ""; notice.classList.remove("show"); };
+
+      function renderBars(logs) {
+        const root = $("activityBars"); root.replaceChildren();
+        const points = logs.slice(0, 18).reverse();
+        const max = Math.max(1, ...points.flatMap((item) => [item.input_tokens, item.output_tokens]));
+        if (!points.length) {
+          const empty = document.createElement("div"); empty.className = "empty";
+          empty.textContent = "Chưa có hoạt động"; root.appendChild(empty); return;
+        }
+        points.forEach((item) => {
+          ["input_tokens", "output_tokens"].forEach((field, index) => {
+            const bar = document.createElement("i"); bar.className = `bar${index ? " output" : ""}`;
+            bar.style.setProperty("--bar", `${Math.max(2, Math.round(item[field] / max * 100))}%`);
+            bar.title = `${item.model}: ${format(item[field])} ${index ? "output" : "input"}`;
+            root.appendChild(bar);
+          });
+        });
+      }
+
+      function renderModels(models) {
+        const root = $("modelList"); root.replaceChildren(); setText("modelCount", `${models.length} model`);
+        if (!models.length) {
+          const empty = document.createElement("div"); empty.className = "empty";
+          empty.textContent = "Chưa có request."; root.appendChild(empty); return;
+        }
+        const max = Math.max(1, ...models.map((item) => item.total_tokens));
+        models.slice(0, 7).forEach((item) => {
+          const row = document.createElement("div"); row.className = "model-row";
+          const info = document.createElement("div"), name = document.createElement("strong"), meta = document.createElement("small");
+          name.textContent = item.model; meta.textContent = `${format(item.requests)} request · ${format(item.total_tokens)} token`;
+          info.append(name, meta);
+          const value = document.createElement("span"); value.textContent = `${Math.round(item.total_tokens / max * 100)}%`;
+          const track = document.createElement("div"); track.className = "model-track";
+          const fill = document.createElement("i"); fill.style.setProperty("--width", `${Math.max(2, item.total_tokens / max * 100)}%`);
+          track.appendChild(fill); row.append(info, value, track); root.appendChild(row);
+        });
+      }
+
+      function renderLogs(logs) {
+        const root = $("logRows"); root.replaceChildren(); $("emptyLogs").style.display = logs.length ? "none" : "block";
+        logs.forEach((item) => {
+          const row = document.createElement("tr");
+          const values = [formatDate(item.timestamp), item.model, format(item.input_tokens), format(item.output_tokens), format(item.total_tokens), item.status];
+          const labels = ["Thời gian", "Model", "Input", "Output", "Tổng", "Trạng thái"];
+          values.forEach((value, index) => {
+            const cell = document.createElement("td"); cell.dataset.label = labels[index];
+            if (index === 1) cell.className = "model";
+            if (index === 2 || index === 4) cell.className = "num";
+            if (index === 3) cell.className = "num out";
+            if (index === 5) {
+              const state = document.createElement("span");
+              const ok = ["ok", "success", "completed", "200"].includes(String(value).toLowerCase());
+              state.className = `request-state${ok ? "" : " error"}`; state.textContent = value; cell.appendChild(state);
+            } else cell.textContent = value;
+            row.appendChild(cell);
+          });
+          root.appendChild(row);
+        });
+      }
+
+      function render(data) {
+        const quota = Number(data.token_quota || 0), remaining = Number(data.remaining_tokens || 0);
+        const percent = quota ? Math.max(0, Math.min(100, remaining / quota * 100)) : 0;
+        $("quotaRing").style.setProperty("--quota-angle", `${percent * 3.6}deg`);
+        setText("quotaPercent", `${percent.toFixed(percent < 10 ? 1 : 0)}%`);
+        setText("remainingTokens", format(remaining)); setText("quotaTokens", format(quota)); setText("usedTokens", format(data.tokens_used));
+        setText("totalRequests", format(data.total_requests)); setText("processedTokens", format(data.total_log_tokens));
+        setText("inputTokens", format(data.input_tokens)); setText("outputTokens", format(data.output_tokens));
+        const processed = Math.max(1, Number(data.total_log_tokens || 0));
+        setText("inputRatio", `${Math.round(Number(data.input_tokens || 0) / processed * 100)}% tổng log`);
+        setText("outputRatio", `${Math.round(Number(data.output_tokens || 0) / processed * 100)}% tổng log`);
+        setText("orderCode", data.shop_order_id || "—"); setText("updatedAt", formatDate(data.updated_at));
+        setText("lastRequest", data.last_request_at ? `Cuối: ${formatDate(data.last_request_at)}` : "Chưa có dữ liệu");
+        const status = $("keyStatus"); status.textContent = data.is_active ? "● Đang hoạt động" : `● Đã ngắt${data.disabled_reason ? ` · ${data.disabled_reason}` : ""}`;
+        status.classList.toggle("off", !data.is_active);
+        renderBars(data.logs || []); renderModels(data.models || []); renderLogs(data.logs || []);
+        dashboard.classList.add("show");
+        document.body.classList.add("connected");
+      }
+
+      async function lookup(key, quiet = false) {
+        setBusy(true, quiet); if (!quiet) clearError();
+        try {
+          const response = await fetch("/api/token-usage", { method: "POST", headers: { "Content-Type": "application/json" }, cache: "no-store", credentials: "omit", body: JSON.stringify({ api_key: key }) });
+          const payload = await response.json().catch(() => ({}));
+          if (!response.ok || !payload.ok) throw new Error(payload.error || "Không thể tải dữ liệu token.");
+          activeKey = key; input.value = ""; input.placeholder = "Đã kết nối an toàn · nhấn Ngắt kết nối để đổi key";
+          render(payload.usage); clearError();
+          clearInterval(refreshTimer); refreshTimer = setInterval(() => activeKey && lookup(activeKey, true), 30000);
+        } catch (error) { if (!quiet) showError(error.message || "Không thể tải dữ liệu token."); }
+        finally { setBusy(false, quiet); }
+      }
+
+      form.addEventListener("submit", (event) => { event.preventDefault(); const key = input.value.trim(); if (key) lookup(key); });
+      refreshBtn.addEventListener("click", () => activeKey && lookup(activeKey));
+      disconnectBtn.addEventListener("click", () => { activeKey = ""; clearInterval(refreshTimer); dashboard.classList.remove("show"); document.body.classList.remove("connected"); input.value = ""; input.placeholder = "sk-••••••••••••••••"; input.focus(); });
+      $("toggleKey").addEventListener("click", () => { input.type = input.type === "password" ? "text" : "password"; });
+      window.addEventListener("pagehide", () => { activeKey = ""; clearInterval(refreshTimer); });
+    })();
+  </script>
+</body>
+</html>

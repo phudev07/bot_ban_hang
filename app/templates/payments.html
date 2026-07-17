@@ -1,0 +1,53 @@
+{% extends "base.html" %}
+{% block content %}
+<section class="metric-grid payment-metrics">
+  <article class="metric accent"><span>Tiền nhận hôm nay</span><strong>{{ stats.received_today|vnd }}</strong><small>Giao dịch webhook thành công</small></article>
+  <article class="metric"><span>Tổng tiền đã nhận</span><strong>{{ stats.received_total|vnd }}</strong><small>Toàn bộ lịch sử ngân hàng</small></article>
+  <article class="metric"><span>Yêu cầu đang chờ</span><strong>{{ stats.pending_count }}</strong><small>{{ stats.pending_amount|vnd }} chưa khớp</small></article>
+  <article class="metric"><span>Dữ liệu hiển thị</span><strong>{{ deposits|length }}</strong><small>Yêu cầu theo bộ lọc</small></article>
+</section>
+
+<section class="panel filter-panel">
+  <form class="filter-grid payment-filter" method="get">
+    <label class="wide">Tìm dòng tiền<input name="q" value="{{ query }}" placeholder="Mã nạp, Telegram ID, tên hoặc username"></label>
+    <label>Trạng thái<select name="status"><option value="all">Tất cả</option><option value="pending" {{ 'selected' if status == 'pending' else '' }}>Đang chờ</option><option value="paid" {{ 'selected' if status == 'paid' else '' }}>Đã thanh toán</option></select></label>
+    <button class="button primary">Lọc dữ liệu</button>
+    <a class="button quiet" href="/admin/payments">Đặt lại</a>
+  </form>
+</section>
+
+<section class="panel">
+  <div class="panel-head"><div><span>PAYMENT REQUESTS</span><h2>Yêu cầu nạp tiền / mua QR</h2></div><small>Ai nạp, số tiền và thời gian đầy đủ</small></div>
+  <div class="table-wrap"><table><thead><tr><th>Yêu cầu</th><th>Khách hàng</th><th>Loại</th><th>Số tiền</th><th>Trạng thái</th><th>Tạo yêu cầu</th><th>Thanh toán</th></tr></thead><tbody>
+    {% for row in deposits %}{% set item = row.deposit %}{% set user = row.user %}
+    <tr>
+      <td><strong><code>{{ item.code }}</code></strong><small>#{{ item.id }} · Sản phẩm {{ item.product_id or '—' }} · SL {{ item.quantity }}</small></td>
+      <td><strong>{{ user.full_name }}</strong><small>@{{ user.username or '—' }}</small><code>{{ user.telegram_id }}</code></td>
+      <td><span class="status {{ 'wait' if item.payment_kind == 'direct_purchase' else 'on' }}">{{ item.payment_kind }}</span></td>
+      <td><strong>{{ item.requested_amount|vnd }}</strong><small>Đã nhận {{ (item.paid_amount or 0)|vnd }}{% if item.discount_code %}<br>Mã {{ item.discount_code }} · giảm {{ item.discount_amount|vnd }}{% endif %}</small></td>
+      <td><span class="status {{ 'on' if item.status == 'paid' else 'wait' }}">{{ item.status }}</span></td>
+      <td>{{ item.created_at|localtime }}</td>
+      <td>{{ item.paid_at|localtime }}</td>
+    </tr>
+    {% else %}<tr><td colspan="7" class="empty">Không có yêu cầu thanh toán phù hợp.</td></tr>{% endfor %}
+  </tbody></table></div>
+</section>
+
+<section class="panel">
+  <div class="panel-head"><div><span>BANK EVENTS</span><h2>Giao dịch ngân hàng đã ghi nhận</h2></div><small>Mỗi mã giao dịch chỉ được xử lý một lần</small></div>
+  <div class="table-wrap"><table><thead><tr><th>Giao dịch</th><th>Khách hàng</th><th>Yêu cầu nạp</th><th>Số tiền</th><th>Ghi nhận lúc</th></tr></thead><tbody>
+    {% for row in transactions %}{% set item = row.transaction %}
+    <tr><td><strong><code>{{ item.provider_tx_id }}</code></strong><small>Internal #{{ item.id }}</small></td><td><strong>{{ row.user.full_name }}</strong><small>@{{ row.user.username or '—' }} · {{ row.user.telegram_id }}</small></td><td><code>{{ row.deposit.code }}</code><small>#{{ row.deposit.id }}</small></td><td><strong>{{ item.amount|vnd }}</strong></td><td>{{ item.created_at|localtime }}</td></tr>
+    {% else %}<tr><td colspan="5" class="empty">Chưa có giao dịch ngân hàng.</td></tr>{% endfor %}
+  </tbody></table></div>
+</section>
+
+<section class="panel">
+  <div class="panel-head"><div><span>AUDIT TRAIL</span><h2>Điều chỉnh số dư thủ công</h2></div><small>Luôn lưu admin, khách, lý do và thời gian</small></div>
+  <div class="table-wrap"><table><thead><tr><th>Khách hàng</th><th>Số tiền</th><th>Admin thực hiện</th><th>Lý do</th><th>Thời gian</th></tr></thead><tbody>
+    {% for row in adjustments %}{% set item = row.adjustment %}
+    <tr><td><strong>{{ row.user.full_name }}</strong><small>@{{ row.user.username or '—' }}</small><code>{{ row.user.telegram_id }}</code></td><td><strong>{{ item.amount|vnd }}</strong></td><td>{{ item.admin_username }}</td><td>{{ item.reason }}</td><td>{{ item.created_at|localtime }}</td></tr>
+    {% else %}<tr><td colspan="5" class="empty">Chưa có điều chỉnh thủ công.</td></tr>{% endfor %}
+  </tbody></table></div>
+</section>
+{% endblock %}

@@ -1,0 +1,44 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="split-layout">
+  <section class="panel">
+    <div class="panel-head"><div><span>STOREFRONTS</span><h2>Danh sách gian hàng</h2></div></div>
+    <div class="category-list">
+      {% for category in categories %}
+      <article class="category-card">
+        <div class="category-meta"><strong>#{{ category.id }}</strong><small>Tạo {{ category.created_at|localtime }}</small></div>
+        <form method="post" action="/admin/categories/{{ category.id }}" class="category-form">
+          <input type="hidden" name="csrf" value="{{ csrf_token }}">
+          <label>Tên tiếng Việt<input name="name_vi" value="{{ category.name_vi }}" required></label>
+          <label>Tên tiếng Anh<input name="name_en" value="{{ category.name_en }}"></label>
+          <label>Vị trí<input type="number" name="position" value="{{ category.position }}"></label>
+          <button class="button quiet" type="submit">Lưu</button>
+        </form>
+        <form method="post" action="/admin/categories/{{ category.id }}/toggle">
+          <input type="hidden" name="csrf" value="{{ csrf_token }}">
+          <button class="status {{ 'on' if category.active else 'off' }}">
+            {{ 'Đang mở' if category.active else 'Đã ẩn' }}
+          </button>
+        </form>
+        <form method="post" action="/admin/categories/{{ category.id }}/delete" onsubmit="return confirm('Chỉ gian hàng trống mới có thể xóa. Tiếp tục?')">
+          <input type="hidden" name="csrf" value="{{ csrf_token }}">
+          <button class="button danger compact" type="submit">Xóa</button>
+        </form>
+      </article>
+      {% else %}
+      <p class="empty">Chưa có gian hàng.</p>
+      {% endfor %}
+    </div>
+  </section>
+  <section class="panel form-panel">
+    <div class="panel-head"><div><span>NEW SPACE</span><h2>Cộng gian hàng mới</h2></div></div>
+    <form method="post" action="/admin/categories" class="form-grid">
+      <input type="hidden" name="csrf" value="{{ csrf_token }}">
+      <label>Tên tiếng Việt<input name="name_vi" required></label>
+      <label>Tên tiếng Anh<input name="name_en"></label>
+      <label>Vị trí hiển thị<input type="number" name="position" value="0"></label>
+      <button class="button primary" type="submit">Tạo gian hàng</button>
+    </form>
+  </section>
+</div>
+{% endblock %}
