@@ -21,16 +21,15 @@ from app.config import Settings
 from app.models import (
     ApiClient,
     ApiOrderRequest,
-    Deposit,
     InventoryItem,
     Order,
     Product,
     User,
 )
 from app.partner_services import api_signature
-from app.services import active_products, available_stock, create_deposit, purchase_product
+from app.services import active_products, available_stock, purchase_product
 from app.suppliers import SumistoreClient
-from app.utils import SecretCipher, build_sepay_qr_url
+from app.utils import SecretCipher
 
 
 templates = Jinja2Templates(directory=Path(__file__).parent / "templates")
@@ -40,10 +39,6 @@ class ApiOrderBody(BaseModel):
     product_id: int
     quantity: int = Field(default=1, ge=1, le=100)
     coupon_code: str | None = Field(default=None, max_length=64)
-
-
-class ApiDepositBody(BaseModel):
-    amount: int
 
 
 @dataclass(frozen=True)
@@ -84,7 +79,6 @@ def create_public_api_docs_router(settings: Settings) -> APIRouter:
                 "base_url": settings.shop_api_base_url.rstrip("/"),
                 "default_rate_limit": settings.shop_api_rate_limit_per_minute,
                 "signature_tolerance_seconds": settings.shop_api_signature_tolerance_seconds,
-                "min_deposit": settings.min_deposit,
             },
         )
         response.headers["Cache-Control"] = "public, max-age=300"
@@ -254,8 +248,6 @@ def create_public_api_router(
                 "POST /v1/orders",
                 "GET /v1/orders",
                 "GET /v1/orders/{order_code}",
-                "POST /v1/deposits",
-                "GET /v1/deposits/{deposit_code}",
             ],
         }
 
@@ -499,56 +491,5 @@ def create_public_api_router(
             if not orders:
                 raise api_error(404, "ORDER_NOT_FOUND", "Order does not exist")
             return {"success": True, "order": order_payload(orders, cipher)}
-
-    @router.post("/deposits")
-    async def create_api_deposit(
-        body: ApiDepositBody,
-        principal: ApiPrincipal = Depends(authenticate),
-    ) -> dict[str, object]:
-        if not settings.sepay_enabled:
-            raise api_error(503, "DEPOSITS_DISABLED", "Deposits are disabled")
-        if body.amount < settings.min_deposit:
-            raise api_error(400, "AMOUNT_TOO_SMALL", "Deposit amount is below the minimum")
-        async with session_factory() as session:
-            deposit = await create_deposit(
-                session,
-                principal.user.telegram_id,
-                body.amount,
-                settings.payment_prefix,
-            )
-        return {
-            "code": deposit.code,
-            "amount": deposit.requested_amount,
-            "status": deposit.status,
-            "qr_url": build_sepay_qr_url(
-                settings.bank_code,
-                settings.bank_account,
-                deposit.requested_amount,
-                deposit.code,
-            ),
-        }
-
-    @router.get("/deposits/{deposit_code}")
-    async def get_api_deposit(
-        deposit_code: str,
-        principal: ApiPrincipal = Depends(authenticate),
-    ) -> dict[str, object]:
-        async with session_factory() as session:
-            deposit = await session.scalar(
-                select(Deposit).where(
-                    Deposit.code == deposit_code.upper(),
-                    Deposit.user_id == principal.user.telegram_id,
-                )
-            )
-            if deposit is None:
-                raise api_error(404, "DEPOSIT_NOT_FOUND", "Deposit does not exist")
-            return {
-                "code": deposit.code,
-                "requested_amount": deposit.requested_amount,
-                "paid_amount": deposit.paid_amount,
-                "status": deposit.status,
-                "created_at": deposit.created_at.isoformat(),
-                "paid_at": deposit.paid_at.isoformat() if deposit.paid_at else None,
-            }
 
     return router

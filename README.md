@@ -57,9 +57,10 @@ GET  /stock/{product_id}
 POST /orders
 GET  /orders
 GET  /orders/{order_code}
-POST /deposits
-GET  /deposits/{deposit_code}
 ```
+
+Nap tien duoc thuc hien truc tiep trong bot Telegram nhu nguoi dung binh thuong;
+API dau kho chi doc san pham, ton kho va dat don bang so du vi hien co.
 
 Moi request co xac thuc phai gui cac header:
 

@@ -150,6 +150,7 @@ def test_warehouse_api_purchases_from_shared_wallet_and_is_idempotent(tmp_path) 
         assert "POST /v1/orders" in docs.text
         assert "Idempotency-Key" in docs.text
         assert "https://token.vietshare.site/v1" in docs.text
+        assert "Tạo QR nạp ví" not in docs.text
 
         docs_redirect = client.get("/v1/docs", follow_redirects=False)
         assert docs_redirect.status_code == 307
@@ -158,6 +159,10 @@ def test_warehouse_api_purchases_from_shared_wallet_and_is_idempotent(tmp_path) 
         information = client.get("/v1")
         assert information.status_code == 200
         assert information.json()["documentation"] == "https://token.vietshare.site/docs"
+        assert all("deposits" not in endpoint for endpoint in information.json()["endpoints"])
+
+        removed_deposit_endpoint = client.post("/v1/deposits", json={"amount": 100_000})
+        assert removed_deposit_endpoint.status_code == 404
 
         products = client.get(
             "/v1/catalog",

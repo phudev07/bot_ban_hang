@@ -314,7 +314,6 @@
         <a href="#endpoint">Endpoint</a>
         <a href="#san-pham">Sản phẩm & tồn</a>
         <a href="#don-hang">Đặt đơn</a>
-        <a href="#nap-vi">Nạp ví</a>
         <a href="#code-mau">Code mẫu</a>
         <a href="#ma-loi">Mã lỗi</a>
         <a href="#bao-mat">Bảo mật</a>
@@ -326,7 +325,7 @@
           <div class="steps">
             <article class="step"><b>1</b><strong>Mở bot Telegram</strong><span>Vào @phptool_bot và bấm mục <em>API đấu kho</em>.</span></article>
             <article class="step"><b>2</b><strong>Lưu thông tin</strong><span>Bot tự tạo một API ID cố định và API Secret chỉ hiện một lần.</span></article>
-            <article class="step"><b>3</b><strong>Nạp số dư</strong><span>Nạp ví Telegram bằng QR. Đơn API dùng chung số dư ví này.</span></article>
+            <article class="step"><b>3</b><strong>Nạp số dư trong bot</strong><span>Dùng mục Nạp tiền của bot như người dùng bình thường. API không tạo giao dịch nạp.</span></article>
             <article class="step"><b>4</b><strong>Ký và gọi API</strong><span>Tạo timestamp, nonce mới, ký raw body rồi gọi endpoint cần dùng.</span></article>
           </div>
           <div class="note good-note" style="margin-top:14px"><strong>Mỗi nick Telegram chỉ có một API client.</strong> API ID không đổi. Khi đổi API Secret trong bot, secret cũ mất hiệu lực ngay.</div>
@@ -375,9 +374,8 @@ signature = hmac_sha256(API_SECRET, canonical)</pre>
             <div class="endpoint"><b class="method post">POST</b><code>/v1/orders</code><span>Đặt mua và nhận tài khoản. Bắt buộc Idempotency-Key.</span></div>
             <div class="endpoint"><b class="method get">GET</b><code>/v1/orders?limit=20</code><span>Lấy 1-100 đơn API hoàn thành gần nhất.</span></div>
             <div class="endpoint"><b class="method get">GET</b><code>/v1/orders/{order_code}</code><span>Lấy lại đầy đủ tài khoản của một đơn.</span></div>
-            <div class="endpoint"><b class="method post">POST</b><code>/v1/deposits</code><span>Tạo mã nạp và QR cho ví Telegram.</span></div>
-            <div class="endpoint"><b class="method get">GET</b><code>/v1/deposits/{deposit_code}</code><span>Kiểm tra trạng thái giao dịch nạp.</span></div>
           </div>
+          <div class="note good-note" style="margin-top:14px"><strong>Nạp tiền thực hiện trong bot Telegram.</strong> API đấu kho không có endpoint tạo QR hoặc kiểm tra nạp tiền; mọi đơn chỉ sử dụng số dư ví hiện có.</div>
         </section>
 
         <section class="section" id="san-pham">
@@ -451,26 +449,8 @@ Content-Type: application/json
           </div>
         </section>
 
-        <section class="section" id="nap-vi">
-          <div class="section-head"><div><span class="section-number">06</span><h2>Tạo QR nạp ví</h2></div></div>
-          <p><code>POST /v1/deposits</code> tạo nội dung chuyển khoản riêng cho chủ API client. Số tiền tối thiểu hiện tại là <strong>{{ "{:,.0f}".format(min_deposit).replace(',', '.') }}đ</strong>.</p>
-          <div class="grid-2">
-            <div class="code-wrap"><button class="copy" data-copy-target="deposit-request">Sao chép</button><pre id="deposit-request">POST /v1/deposits
-Content-Type: application/json
-
-{"amount":100000}</pre></div>
-            <div class="code-wrap"><button class="copy" data-copy-target="deposit-response">Sao chép</button><pre id="deposit-response">{
-  "code": "NAP6799701918A4F2",
-  "amount": 100000,
-  "status": "pending",
-  "qr_url": "https://img.vietqr.io/..."
-}</pre></div>
-          </div>
-          <p>Dùng <code>GET /v1/deposits/{deposit_code}</code> để kiểm tra <code>pending</code> hoặc <code>paid</code>. Webhook ngân hàng tự cộng số dư và chống ghi nhận trùng giao dịch.</p>
-        </section>
-
         <section class="section" id="code-mau">
-          <div class="section-head"><div><span class="section-number">07</span><h2>Code mẫu hoàn chỉnh</h2></div></div>
+          <div class="section-head"><div><span class="section-number">06</span><h2>Code mẫu hoàn chỉnh</h2></div></div>
           <h3>Python</h3>
           <div class="code-wrap"><button class="copy" data-copy-target="python-example">Sao chép</button><pre id="python-example">import hashlib
 import hmac
@@ -577,7 +557,7 @@ console.log(order);</pre></div>
         </section>
 
         <section class="section" id="ma-loi">
-          <div class="section-head"><div><span class="section-number">08</span><h2>Mã lỗi cần xử lý</h2></div></div>
+          <div class="section-head"><div><span class="section-number">07</span><h2>Mã lỗi cần xử lý</h2></div></div>
           <p class="muted">Lỗi nghiệp vụ có cấu trúc <code>{"detail":{"code":"...","message":"..."}}</code>.</p>
           <table class="error-table">
             <thead><tr><th>HTTP</th><th>Code phổ biến</th><th>Cách xử lý</th></tr></thead>
@@ -586,16 +566,16 @@ console.log(order);</pre></div>
               <tr><td>401</td><td><code>AUTH_REQUIRED</code><br><code>INVALID_API_ID</code><br><code>INVALID_SIGNATURE</code><br><code>EXPIRED_REQUEST</code></td><td>Kiểm tra credentials, đồng hồ máy chủ và canonical string.</td></tr>
               <tr><td>402</td><td><code>INSUFFICIENT</code></td><td>Nạp thêm số dư vào ví Telegram.</td></tr>
               <tr><td>403</td><td><code>API_CLIENT_BLOCKED</code><br><code>IP_NOT_ALLOWED</code><br><code>BLOCKED</code></td><td>Mở lại API trong bot hoặc liên hệ admin.</td></tr>
-              <tr><td>404</td><td><code>PRODUCT_NOT_FOUND</code><br><code>ORDER_NOT_FOUND</code><br><code>DEPOSIT_NOT_FOUND</code></td><td>Đồng bộ lại catalog hoặc kiểm tra mã thuộc đúng API client.</td></tr>
+              <tr><td>404</td><td><code>PRODUCT_NOT_FOUND</code><br><code>ORDER_NOT_FOUND</code></td><td>Đồng bộ lại catalog hoặc kiểm tra mã đơn thuộc đúng API client.</td></tr>
               <tr><td>409</td><td><code>OUT_OF_STOCK</code><br><code>REPLAYED_REQUEST</code><br><code>IDEMPOTENCY_MISMATCH</code><br><code>REQUEST_IN_PROGRESS</code></td><td>Đọc lại tồn; dùng nonce mới; giữ nguyên payload khi retry đơn.</td></tr>
               <tr><td>429</td><td><code>RATE_LIMITED</code></td><td>Giảm tần suất và retry có backoff.</td></tr>
-              <tr><td>503</td><td><code>SUPPLIER_UNAVAILABLE</code><br><code>AUTH_STORE_UNAVAILABLE</code><br><code>DEPOSITS_DISABLED</code></td><td>Retry sau; không tự coi đơn là thành công.</td></tr>
+              <tr><td>503</td><td><code>SUPPLIER_UNAVAILABLE</code><br><code>AUTH_STORE_UNAVAILABLE</code></td><td>Retry sau; không tự coi đơn là thành công.</td></tr>
             </tbody>
           </table>
         </section>
 
         <section class="section" id="bao-mat">
-          <div class="section-head"><div><span class="section-number">09</span><h2>Bảo mật và vận hành đúng</h2></div></div>
+          <div class="section-head"><div><span class="section-number">08</span><h2>Bảo mật và vận hành đúng</h2></div></div>
           <div class="rules">
             <article class="rule"><strong>Giữ Secret ở backend</strong><span>Không nhúng API Secret vào web frontend, app mobile, ảnh chụp hoặc repository công khai.</span></article>
             <article class="rule"><strong>Đồng bộ thời gian</strong><span>Bật NTP cho máy chủ tích hợp. Timestamp lệch quá {{ signature_tolerance_seconds }} giây sẽ bị từ chối.</span></article>
