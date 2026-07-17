@@ -1,5 +1,6 @@
 import hashlib
 import hmac
+import ipaddress
 import json
 import time
 from dataclasses import dataclass
@@ -35,6 +36,35 @@ from app.utils import SecretCipher
 templates = Jinja2Templates(directory=Path(__file__).parent / "templates")
 
 
+CLOUDFLARE_NETWORKS = tuple(
+    ipaddress.ip_network(value)
+    for value in (
+        "173.245.48.0/20",
+        "103.21.244.0/22",
+        "103.22.200.0/22",
+        "103.31.4.0/22",
+        "141.101.64.0/18",
+        "108.162.192.0/18",
+        "190.93.240.0/20",
+        "188.114.96.0/20",
+        "197.234.240.0/22",
+        "198.41.128.0/17",
+        "162.158.0.0/15",
+        "104.16.0.0/13",
+        "104.24.0.0/14",
+        "172.64.0.0/13",
+        "131.0.72.0/22",
+        "2400:cb00::/32",
+        "2606:4700::/32",
+        "2803:f800::/32",
+        "2405:b500::/32",
+        "2405:8100::/32",
+        "2a06:98c0::/29",
+        "2c0f:f248::/32",
+    )
+)
+
+
 class ApiOrderBody(BaseModel):
     product_id: int
     quantity: int = Field(default=1, ge=1, le=100)
@@ -57,6 +87,16 @@ def request_path(request: Request) -> str:
 
 def client_ip(request: Request) -> str:
     forwarded = request.headers.get("x-forwarded-for", "").split(",", 1)[0].strip()
+    cloudflare_ip = request.headers.get("cf-connecting-ip", "").strip()
+    if forwarded and cloudflare_ip:
+        try:
+            proxy_address = ipaddress.ip_address(forwarded)
+            client_address = ipaddress.ip_address(cloudflare_ip)
+        except ValueError:
+            pass
+        else:
+            if any(proxy_address in network for network in CLOUDFLARE_NETWORKS):
+                return str(client_address)
     return forwarded or (request.client.host if request.client else "")
 
 

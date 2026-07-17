@@ -7,12 +7,14 @@ from cryptography.fernet import Fernet
 from fastapi.testclient import TestClient
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+from starlette.requests import Request
 
 from app.api import create_api
 from app.config import Settings
 from app.database import Base
 from app.models import ApiOrderRequest, Category, InventoryItem, Order, Product, ReferralReward, User
 from app.partner_services import api_signature, ensure_api_client, rotate_api_secret
+from app.public_api import client_ip
 from app.utils import SecretCipher
 
 
@@ -41,6 +43,41 @@ class FakeRedis:
 
     async def aclose(self) -> None:
         return None
+
+
+def request_with_headers(headers: dict[str, str]) -> Request:
+    return Request(
+        {
+            "type": "http",
+            "method": "GET",
+            "scheme": "https",
+            "path": "/",
+            "raw_path": b"/",
+            "query_string": b"",
+            "headers": [
+                (key.lower().encode(), value.encode()) for key, value in headers.items()
+            ],
+            "client": ("127.0.0.1", 12345),
+            "server": ("testserver", 443),
+        }
+    )
+
+
+def test_client_ip_trusts_cloudflare_header_only_from_cloudflare() -> None:
+    proxied = request_with_headers(
+        {
+            "X-Forwarded-For": "162.158.114.65",
+            "CF-Connecting-IP": "183.81.74.217",
+        }
+    )
+    spoofed = request_with_headers(
+        {
+            "X-Forwarded-For": "203.0.113.10",
+            "CF-Connecting-IP": "198.51.100.20",
+        }
+    )
+    assert client_ip(proxied) == "183.81.74.217"
+    assert client_ip(spoofed) == "203.0.113.10"
 
 
 def signed_headers(
