@@ -1,0 +1,17 @@
+[Unit]
+Description=Encrypted backup for Telegram shop
+Requires=docker.service
+After=docker.service network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/telegram-shop-backup.sh
+Nice=10
+IOSchedulingClass=best-effort
+IOSchedulingPriority=7
+CPUQuota=50%
+MemoryMax=256M
+TimeoutStartSec=30min
+
+[Install]
+WantedBy=multi-user.target

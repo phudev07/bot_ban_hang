@@ -216,11 +216,11 @@ file `.env`, encryption key, token bot hoac master key cho nguoi khac.
 
 ## Sao luu
 
-```bash
-docker compose exec -T postgres pg_dump -U shop shop | gzip > shop-$(date +%F).sql.gz
-```
+Production dung backup tu dong hai lop: VPS tao archive ma hoa hang ngay, sau do
+may Windows tai va kiem tra SHA-256 de giu mot ban nam ngoai VPS. PostgreSQL,
+Redis, source, `.env` va cau hinh he thong can thiet deu duoc gom trong archive.
 
-Nen chay lenh sao luu bang cron moi ngay va luu them mot ban ngoai VPS.
+Huong dan cai dat, kiem tra va khoi phuc chi tiet: [`deploy/BACKUP_RECOVERY.md`](deploy/BACKUP_RECOVERY.md).
 
 ## Kiem thu local
 
