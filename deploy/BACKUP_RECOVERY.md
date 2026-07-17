@@ -1,8 +1,15 @@
 # Backup and disaster recovery
 
-The production VPS creates an encrypted backup every day around 03:30 Asia/Bangkok.
-The Windows scheduled task pulls the newest archive at 04:00 and retries when the PC
+The production VPS creates an encrypted backup every four hours at approximately
+03:30, 07:30, 11:30, 15:30, 19:30 and 23:30 Asia/Bangkok. A randomized delay of up
+to 10 minutes avoids a fixed load spike. The Windows scheduled task pulls the newest
+archive at 03:50, 07:50, 11:50, 15:50, 19:50 and 23:50, and retries when the PC
 becomes available.
+
+If Windows is off at a scheduled time, `StartWhenAvailable` runs the missed task
+after the computer starts, the owner signs in and network access is available. The
+task uses the owner's interactive Windows session, so it does not run while the
+computer remains at the sign-in screen.
 
 The recovery path was verified on 2026-07-18 by decrypting an offsite archive,
 checking its internal manifest and importing its PostgreSQL dump into a temporary
@@ -63,13 +70,17 @@ file bytes. On Windows, register the offsite pull task from the repository direc
 $script = (Resolve-Path "deploy\pull_vps_backup.ps1").Path
 $action = New-ScheduledTaskAction -Execute "powershell.exe" -Argument `
   "-NoProfile -NonInteractive -ExecutionPolicy Bypass -File `"$script`""
-$trigger = New-ScheduledTaskTrigger -Daily -At "04:00"
+$trigger = New-ScheduledTaskTrigger -Daily -At "03:50"
 $settings = New-ScheduledTaskSettingsSet -StartWhenAvailable `
   -ExecutionTimeLimit (New-TimeSpan -Minutes 30) -RestartCount 3 `
   -RestartInterval (New-TimeSpan -Minutes 30) -MultipleInstances IgnoreNew
 Register-ScheduledTask -TaskName "VietShare-Shop-Offsite-Backup" `
   -Description "Pull and verify encrypted VietShare shop backup from VPS" `
   -Action $action -Trigger $trigger -Settings $settings -Force
+$task = Get-ScheduledTask -TaskName "VietShare-Shop-Offsite-Backup"
+$task.Triggers[0].Repetition.Interval = "PT4H"
+$task.Triggers[0].Repetition.Duration = "P1D"
+Set-ScheduledTask -InputObject $task
 ```
 
 ## Locations and retention
