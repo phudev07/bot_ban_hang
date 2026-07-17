@@ -7,7 +7,7 @@ from pathlib import Path
 
 from aiogram import Bot
 from fastapi import FastAPI, Header, HTTPException, Request
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from redis.asyncio import Redis
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
@@ -21,6 +21,7 @@ from app.delivery import delivery_keyboard, delivery_text
 from app.keyboards import main_menu
 from app.models import ApiRequestAudit
 from app.public_api import client_ip, create_public_api_docs_router, create_public_api_router
+from app.rate_limit import FixedWindowRateLimiter, RateLimitDecision, RateLimitRule
 from app.services import process_sepay_payment
 from app.suppliers import SumistoreClient
 from app.utils import SecretCipher, format_vnd, verify_sepay_hmac
@@ -53,6 +54,7 @@ def create_api(
 ) -> FastAPI:
     owned_api_redis = api_redis is None
     api_redis_client = api_redis or Redis.from_url(settings.redis_url, decode_responses=True)
+    ingress_limiter = FixedWindowRateLimiter(api_redis_client, "http-limit")
 
     @asynccontextmanager
     async def lifespan(_app: FastAPI):
@@ -68,6 +70,79 @@ def create_api(
         redoc_url=None,
         lifespan=lifespan,
     )
+
+    def rate_limited_response(decision: RateLimitDecision) -> JSONResponse:
+        return JSONResponse(
+            {
+                "detail": {
+                    "code": "RATE_LIMITED",
+                    "message": "Too many requests",
+                }
+            },
+            status_code=429,
+            headers={
+                "Retry-After": str(decision.retry_after),
+                "Cache-Control": "no-store",
+            },
+        )
+
+    @app.middleware("http")
+    async def limit_public_ingress(request: Request, call_next):
+        path = request.url.path
+        remote_ip = client_ip(request) or "unknown"
+        if request.method == "POST" and path == "/webhooks/sepay":
+            per_ip = await ingress_limiter.hit(
+                f"sepay:ip:{remote_ip}",
+                (
+                    RateLimitRule("burst", 20, 10),
+                    RateLimitRule(
+                        "minute",
+                        settings.sepay_webhook_rate_limit_per_minute,
+                        60,
+                    ),
+                ),
+            )
+            if not per_ip.allowed:
+                return rate_limited_response(per_ip)
+            global_limit = await ingress_limiter.hit(
+                "sepay:global",
+                (
+                    RateLimitRule(
+                        "minute",
+                        settings.sepay_webhook_global_rate_limit_per_minute,
+                        60,
+                    ),
+                ),
+            )
+            if not global_limit.allowed:
+                return rate_limited_response(global_limit)
+        elif path.startswith("/v1/") and path not in {"/v1/health", "/v1/docs"}:
+            per_ip = await ingress_limiter.hit(
+                f"api:ip:{remote_ip}",
+                (
+                    RateLimitRule("burst", 40, 10),
+                    RateLimitRule(
+                        "minute",
+                        settings.public_api_ip_rate_limit_per_minute,
+                        60,
+                    ),
+                ),
+            )
+            if not per_ip.allowed:
+                return rate_limited_response(per_ip)
+            global_limit = await ingress_limiter.hit(
+                "api:global",
+                (
+                    RateLimitRule(
+                        "minute",
+                        settings.public_api_global_rate_limit_per_minute,
+                        60,
+                    ),
+                ),
+            )
+            if not global_limit.allowed:
+                return rate_limited_response(global_limit)
+        return await call_next(request)
 
     @app.middleware("http")
     async def security_headers(request: Request, call_next):

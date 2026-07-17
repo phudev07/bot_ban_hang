@@ -496,6 +496,10 @@ async def _purchase_product(
             )
 
 
+class PendingDepositLimitReached(RuntimeError):
+    pass
+
+
 async def create_deposit(
     session: AsyncSession,
     user_id: int,
@@ -509,7 +513,52 @@ async def create_deposit(
     discount_code_id: int | None = None,
     discount_code: str | None = None,
     expiry_seconds: int = 300,
+    max_pending_deposits: int = 3,
 ) -> Deposit:
+    now = datetime.now(UTC)
+    user = await session.scalar(
+        select(User).where(User.telegram_id == user_id).with_for_update()
+    )
+    if user is None:
+        raise ValueError("User does not exist")
+
+    # Reuse identical QR requests created in the last 30 seconds instead of growing the table.
+    reusable_after = now + timedelta(seconds=max(1, expiry_seconds - 30))
+    existing = await session.scalar(
+        select(Deposit)
+        .where(
+            Deposit.user_id == user_id,
+            Deposit.status == "pending",
+            Deposit.expires_at.is_not(None),
+            Deposit.expires_at >= reusable_after,
+            Deposit.requested_amount == amount,
+            Deposit.payment_kind == payment_kind,
+            Deposit.product_id == product_id,
+            Deposit.quantity == quantity,
+            Deposit.discount_code_id == discount_code_id,
+        )
+        .order_by(Deposit.id.desc())
+        .limit(1)
+    )
+    if existing is not None:
+        await session.commit()
+        return existing
+
+    active_count = int(
+        await session.scalar(
+            select(func.count(Deposit.id)).where(
+                Deposit.user_id == user_id,
+                Deposit.status == "pending",
+                Deposit.expires_at.is_not(None),
+                Deposit.expires_at > now,
+            )
+        )
+        or 0
+    )
+    if active_count >= max(1, max_pending_deposits):
+        await session.rollback()
+        raise PendingDepositLimitReached
+
     code = f"{payment_prefix.upper()}{user_id}{secrets.token_hex(2).upper()}"
     deposit = Deposit(
         user_id=user_id,
@@ -521,7 +570,7 @@ async def create_deposit(
         discount_amount=discount_amount,
         discount_code_id=discount_code_id,
         discount_code=discount_code,
-        expires_at=datetime.now(UTC) + timedelta(seconds=max(1, expiry_seconds)),
+        expires_at=now + timedelta(seconds=max(1, expiry_seconds)),
     )
     session.add(deposit)
     await session.commit()

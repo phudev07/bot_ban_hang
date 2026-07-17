@@ -43,6 +43,7 @@ from app.services import (
     create_deposit,
     ensure_user,
     order_bundle,
+    PendingDepositLimitReached,
     product_pricing,
     purchase_product,
     recent_orders,
@@ -832,19 +833,27 @@ def create_router(
             return
         total_amount = pricing.final_unit_price * quantity
         total_discount = pricing.discount_per_unit * quantity
-        deposit = await create_deposit(
-            session,
-            user.telegram_id,
-            total_amount,
-            settings.payment_prefix,
-            payment_kind="direct_purchase",
-            product_id=product.id,
-            quantity=quantity,
-            discount_amount=total_discount,
-            discount_code_id=pricing.coupon.id if pricing.coupon else None,
-            discount_code=pricing.coupon.code if pricing.coupon else None,
-            expiry_seconds=settings.payment_expiry_seconds,
-        )
+        try:
+            deposit = await create_deposit(
+                session,
+                user.telegram_id,
+                total_amount,
+                settings.payment_prefix,
+                payment_kind="direct_purchase",
+                product_id=product.id,
+                quantity=quantity,
+                discount_amount=total_discount,
+                discount_code_id=pricing.coupon.id if pricing.coupon else None,
+                discount_code=pricing.coupon.code if pricing.coupon else None,
+                expiry_seconds=settings.payment_expiry_seconds,
+                max_pending_deposits=settings.max_pending_deposits_per_user,
+            )
+        except PendingDepositLimitReached:
+            await callback.answer(
+                "Bạn đang có quá nhiều QR chờ thanh toán. Hãy dùng QR cũ hoặc chờ hết hạn.",
+                show_alert=True,
+            )
+            return
         qr_url = build_sepay_qr_url(
             settings.bank_code,
             settings.bank_account,
@@ -991,13 +1000,20 @@ def create_router(
         if amount < settings.min_deposit:
             await target.answer(f"Số tiền tối thiểu là {format_vnd(settings.min_deposit)}.")
             return
-        deposit = await create_deposit(
-            session,
-            user.telegram_id,
-            amount,
-            settings.payment_prefix,
-            expiry_seconds=settings.payment_expiry_seconds,
-        )
+        try:
+            deposit = await create_deposit(
+                session,
+                user.telegram_id,
+                amount,
+                settings.payment_prefix,
+                expiry_seconds=settings.payment_expiry_seconds,
+                max_pending_deposits=settings.max_pending_deposits_per_user,
+            )
+        except PendingDepositLimitReached:
+            await target.answer(
+                "Bạn đang có quá nhiều QR chờ thanh toán. Hãy dùng QR cũ hoặc chờ tối đa 5 phút."
+            )
+            return
         qr_url = build_sepay_qr_url(settings.bank_code, settings.bank_account, amount, deposit.code)
         text = (
             "💳 <b>Thông tin chuyển khoản</b>\n\n"

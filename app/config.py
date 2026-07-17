@@ -28,6 +28,17 @@ class Settings(BaseSettings):
     min_deposit: int = 10_000
     payment_expiry_seconds: int = 300
     payment_expiry_sweep_seconds: int = 2
+    max_pending_deposits_per_user: int = 3
+
+    bot_spam_protection_enabled: bool = True
+    bot_global_rate_limit_per_minute: int = 45
+    bot_burst_rate_limit: int = 8
+    bot_deposit_rate_limit_per_5_minutes: int = 4
+    bot_purchase_rate_limit_per_minute: int = 10
+    sepay_webhook_rate_limit_per_minute: int = 60
+    sepay_webhook_global_rate_limit_per_minute: int = 300
+    public_api_ip_rate_limit_per_minute: int = 180
+    public_api_global_rate_limit_per_minute: int = 1_500
 
     sumistore_enabled: bool = False
     sumistore_base_url: str = "https://sumistore.me/api"
@@ -107,6 +118,28 @@ class Settings(BaseSettings):
             raise ValueError("Payment expiry must be between 60 and 3600 seconds")
         if not 1 <= self.payment_expiry_sweep_seconds <= 60:
             raise ValueError("Payment expiry sweep must be between 1 and 60 seconds")
+        if not 1 <= self.max_pending_deposits_per_user <= 20:
+            raise ValueError("Pending deposit limit must be between 1 and 20")
+        if self.bot_global_rate_limit_per_minute < 5 or self.bot_burst_rate_limit < 2:
+            raise ValueError("Bot rate limits are too small")
+        if self.bot_deposit_rate_limit_per_5_minutes < 1:
+            raise ValueError("Bot deposit rate limit must be positive")
+        if self.bot_purchase_rate_limit_per_minute < 1:
+            raise ValueError("Bot purchase rate limit must be positive")
+        if self.sepay_webhook_rate_limit_per_minute < 10:
+            raise ValueError("SePay webhook rate limit is too small")
+        if (
+            self.sepay_webhook_global_rate_limit_per_minute
+            < self.sepay_webhook_rate_limit_per_minute
+        ):
+            raise ValueError("Global SePay webhook limit must cover the per-IP limit")
+        if self.public_api_ip_rate_limit_per_minute < 10:
+            raise ValueError("Public API IP rate limit is too small")
+        if (
+            self.public_api_global_rate_limit_per_minute
+            < self.public_api_ip_rate_limit_per_minute
+        ):
+            raise ValueError("Global public API limit must cover the per-IP limit")
         if not 0 <= self.referral_commission_percent <= 100:
             raise ValueError("Referral commission percent must be between 0 and 100")
         return self

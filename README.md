@@ -9,6 +9,10 @@ giao hang tu dong va menu tieng Viet/Anh.
 - Danh muc -> mat hang -> thong tin, gia, ton kho -> mua ngay.
 - Nap tien bang QR SePay va webhook cong tien tu dong.
 - Chong webhook lap va khoa dong khi tru tien/lay hang.
+- Chong spam bang Redis truoc database: gioi han burst/phut cho Telegram, cooldown
+  rieng cho mua hang, tao QR, xoay API secret va gioi han HTTP truoc xac thuc.
+- Tai su dung QR trung lap trong 30 giay va gioi han so QR dang cho cua moi user,
+  tranh spam lam phinh PostgreSQL hoac tin nhan Telegram.
 - Xem don mua, lay lai code/san pham da mua, ho so va ho tro.
 - Quan tri danh muc, san pham va kho ngay trong Telegram.
 - Du lieu trong kho duoc ma hoa bang Fernet truoc khi ghi vao PostgreSQL.

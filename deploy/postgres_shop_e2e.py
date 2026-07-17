@@ -28,7 +28,7 @@ from app.models import (
     User,
 )
 from app.partner_services import api_signature, ensure_api_client, rotate_api_secret
-from app.services import create_deposit, purchase_product
+from app.services import PendingDepositLimitReached, create_deposit, purchase_product
 from app.supplier_audit import reconcile_supplier_balance
 from app.suppliers import SupplierPurchase, SupplierSnapshot
 from app.utils import SecretCipher
@@ -431,6 +431,24 @@ async def main() -> None:
         )
         assert mismatch.json()["status"] == "amount_mismatch"
         assert expired.json()["status"] == "expired_payment"
+
+        async def create_concurrent_qr(amount: int) -> str:
+            async with sessions() as session:
+                try:
+                    await create_deposit(
+                        session,
+                        991004,
+                        amount,
+                        max_pending_deposits=3,
+                    )
+                except PendingDepositLimitReached:
+                    return "limited"
+                return "created"
+
+        qr_results = await asyncio.gather(
+            *(create_concurrent_qr(amount) for amount in (41_000, 42_000, 43_000, 44_000))
+        )
+        assert sorted(qr_results) == ["created", "created", "created", "limited"]
 
         multi = await purchase_product(
             sessions,

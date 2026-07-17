@@ -1,6 +1,7 @@
 import asyncio
 from datetime import UTC, datetime, timedelta
 
+import pytest
 from aiogram.exceptions import TelegramBadRequest
 from aiogram.methods import DeleteMessage
 from cryptography.fernet import Fernet
@@ -14,7 +15,7 @@ from app.payment_expiry import (
     expire_pending_deposits,
     register_deposit_message,
 )
-from app.services import create_deposit, process_sepay_payment
+from app.services import PendingDepositLimitReached, create_deposit, process_sepay_payment
 from app.utils import SecretCipher
 
 
@@ -65,6 +66,51 @@ def test_create_deposit_sets_five_minute_expiry() -> None:
             expires_at = deposit.expires_at.replace(tzinfo=UTC)
             assert before + timedelta(seconds=300) <= expires_at
             assert expires_at <= after + timedelta(seconds=300)
+        await engine.dispose()
+
+    asyncio.run(scenario())
+
+
+def test_identical_deposit_is_reused_and_pending_count_is_limited() -> None:
+    async def scenario() -> None:
+        engine, sessions = await make_database()
+        async with sessions() as session:
+            session.add(User(telegram_id=1010, full_name="Buyer"))
+            await session.commit()
+            first = await create_deposit(
+                session,
+                1010,
+                10_000,
+                expiry_seconds=300,
+                max_pending_deposits=2,
+            )
+            repeated = await create_deposit(
+                session,
+                1010,
+                10_000,
+                expiry_seconds=300,
+                max_pending_deposits=2,
+            )
+            second = await create_deposit(
+                session,
+                1010,
+                20_000,
+                expiry_seconds=300,
+                max_pending_deposits=2,
+            )
+            assert repeated.id == first.id
+            assert second.id != first.id
+            with pytest.raises(PendingDepositLimitReached):
+                await create_deposit(
+                    session,
+                    1010,
+                    30_000,
+                    expiry_seconds=300,
+                    max_pending_deposits=2,
+                )
+
+        async with sessions() as session:
+            assert int(await session.scalar(select(func.count(Deposit.id))) or 0) == 2
         await engine.dispose()
 
     asyncio.run(scenario())

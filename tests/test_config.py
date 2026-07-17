@@ -48,6 +48,23 @@ def test_payment_expiry_configuration_is_bounded() -> None:
         base_settings(payment_expiry_sweep_seconds=0)
 
 
+def test_spam_protection_configuration_is_bounded() -> None:
+    settings = base_settings()
+    assert settings.bot_spam_protection_enabled is True
+    assert settings.max_pending_deposits_per_user == 3
+    assert settings.sepay_webhook_rate_limit_per_minute == 60
+
+    with pytest.raises(ValidationError):
+        base_settings(bot_burst_rate_limit=1)
+    with pytest.raises(ValidationError):
+        base_settings(max_pending_deposits_per_user=0)
+    with pytest.raises(ValidationError):
+        base_settings(
+            sepay_webhook_rate_limit_per_minute=100,
+            sepay_webhook_global_rate_limit_per_minute=50,
+        )
+
+
 def test_enabled_sumistore_requires_api_id() -> None:
     with pytest.raises(ValidationError):
         base_settings(sumistore_enabled=True)

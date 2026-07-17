@@ -17,6 +17,7 @@ from app.database import Base, DatabaseSessionMiddleware, create_database
 from app.handlers import create_router
 from app.models import Category, Product
 from app.payment_expiry import payment_expiry_worker
+from app.rate_limit import BotSpamProtectionMiddleware
 from app.supplier_audit import reconcile_supplier_balance
 from app.suppliers import (
     SumistoreClient,
@@ -441,6 +442,7 @@ async def main() -> None:
         )
     storage = RedisStorage.from_url(settings.redis_url)
     dispatcher = Dispatcher(storage=storage)
+    dispatcher.update.outer_middleware(BotSpamProtectionMiddleware(storage.redis, settings))
     dispatcher.update.outer_middleware(DatabaseSessionMiddleware(session_factory))
     dispatcher.include_router(create_admin_router(settings, cipher))
     dispatcher.include_router(create_router(settings, cipher, supplier_client))
@@ -452,6 +454,7 @@ async def main() -> None:
         cipher,
         supplier_client,
         deposit_notification_bot,
+        api_redis=storage.redis,
     )
     server = uvicorn.Server(
         uvicorn.Config(
