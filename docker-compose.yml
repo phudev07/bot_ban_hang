@@ -43,7 +43,7 @@ services:
     environment:
       POSTGRES_DB: shop
       POSTGRES_USER: shop
-      POSTGRES_PASSWORD: change_me
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-change_me}
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U shop -d shop"]
       interval: 5s

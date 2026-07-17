@@ -4,8 +4,9 @@ from aiogram import Bot, F, Router
 from aiogram.exceptions import TelegramBadRequest
 from aiogram.filters import Command, CommandStart
 from aiogram.filters.command import CommandObject
+from aiogram.filters.exception import ExceptionMessageFilter, ExceptionTypeFilter
 from aiogram.fsm.context import FSMContext
-from aiogram.types import CallbackQuery, Message
+from aiogram.types import CallbackQuery, ErrorEvent, Message
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
@@ -104,6 +105,15 @@ def create_router(
     warehouse_docs_url = (
         f"{settings.shop_api_base_url.rstrip('/').removesuffix('/v1')}/docs"
     )
+
+    @router.error(
+        ExceptionTypeFilter(TelegramBadRequest),
+        ExceptionMessageFilter(
+            r".*(?:message is not modified|query is too old and response timeout expired).*$"
+        ),
+    )
+    async def ignore_stale_callback_error(_event: ErrorEvent) -> bool:
+        return True
 
     def bundle_values(orders, user: User) -> tuple[list[int], str, str, list[str], int]:
         order_ids = [order.id for order in orders]
