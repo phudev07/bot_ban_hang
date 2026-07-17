@@ -7,42 +7,59 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=Fraunces:opsz,wght@9..144,600;9..144,700&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="/admin-assets/admin.css?v=5">
+  <link rel="stylesheet" href="/admin-assets/admin.css?v=7">
 </head>
 <body>
   <div class="shell">
     <aside class="sidebar">
-      <a class="brand" href="/admin">
-        <span class="brand-mark">P</span>
-        <span><strong>PHP Tool</strong><small>trung tâm bán hàng</small></span>
-      </a>
-      <button class="mobile-menu-toggle" type="button" aria-expanded="false" aria-controls="admin-nav">
-        <span class="menu-icon">☰</span><span>Danh mục</span>
-      </button>
+      <div class="sidebar-head">
+        <a class="brand" href="/admin">
+          <span class="brand-mark">P</span>
+          <span><strong>PHP Tool</strong><small>commerce control</small></span>
+        </a>
+        <button class="mobile-menu-toggle" type="button" aria-expanded="false" aria-controls="admin-nav">
+          <span class="menu-icon" aria-hidden="true"><i></i><i></i><i></i></span><span>Menu</span>
+        </button>
+      </div>
       <nav id="admin-nav" class="nav" aria-label="Điều hướng quản trị">
-        <a class="{{ 'active' if section == 'dashboard' else '' }}" href="/admin"><span>⌁</span>Tổng quan</a>
-        <a class="{{ 'active' if section == 'categories' else '' }}" href="/admin/categories"><span>▦</span>Gian hàng</a>
-        <a class="{{ 'active' if section == 'products' else '' }}" href="/admin/products"><span>◇</span>Sản phẩm</a>
-        <a class="{{ 'active' if section == 'discounts' else '' }}" href="/admin/discounts"><span>％</span>Mã giảm giá</a>
-        <a class="{{ 'active' if section == 'inventory' else '' }}" href="/admin/inventory"><span>▤</span>Nhập kho</a>
-        <a class="{{ 'active' if section == 'orders' else '' }}" href="/admin/orders"><span>◎</span>Đơn hàng</a>
-        <a class="{{ 'active' if section == 'users' else '' }}" href="/admin/users"><span>◉</span>Khách hàng</a>
-        <a class="{{ 'active' if section == 'broadcasts' else '' }}" href="/admin/broadcasts"><span>◒</span>Thông báo</a>
-        <a class="{{ 'active' if section == 'payments' else '' }}" href="/admin/payments"><span>↗</span>Dòng tiền</a>
-        <a class="{{ 'active' if section == 'system' else '' }}" href="/admin/system"><span>⚙</span>Hệ thống</a>
-        <a class="{{ 'active' if section == 'supplier-audit' else '' }}" href="/admin/supplier-audit"><span>!</span>Giao dịch đáng ngờ</a>
-        <a class="{{ 'active' if section == 'api-clients' else '' }}" href="/admin/api-clients"><span>⌘</span>API đấu kho</a>
-        <a class="{{ 'active' if section == 'referrals' else '' }}" href="/admin/referrals"><span>↗</span>Giới thiệu bạn bè</a>
+        <div class="nav-group">
+          <span class="nav-group-title">Vận hành</span>
+          <a class="{{ 'active' if section == 'dashboard' else '' }}" href="/admin" {{ 'aria-current=page' if section == 'dashboard' else '' }}><span class="nav-icon">TQ</span><b>Tổng quan</b></a>
+          <a class="{{ 'active' if section == 'orders' else '' }}" href="/admin/orders" {{ 'aria-current=page' if section == 'orders' else '' }}><span class="nav-icon">ĐH</span><b>Đơn hàng</b></a>
+          <a class="{{ 'active' if section == 'payments' else '' }}" href="/admin/payments" {{ 'aria-current=page' if section == 'payments' else '' }}><span class="nav-icon">DT</span><b>Dòng tiền</b></a>
+        </div>
+        <div class="nav-group">
+          <span class="nav-group-title">Kho hàng</span>
+          <a class="{{ 'active' if section == 'categories' else '' }}" href="/admin/categories" {{ 'aria-current=page' if section == 'categories' else '' }}><span class="nav-icon">GH</span><b>Gian hàng</b></a>
+          <a class="{{ 'active' if section == 'products' else '' }}" href="/admin/products" {{ 'aria-current=page' if section == 'products' else '' }}><span class="nav-icon">SP</span><b>Sản phẩm</b></a>
+          <a class="{{ 'active' if section == 'discounts' else '' }}" href="/admin/discounts" {{ 'aria-current=page' if section == 'discounts' else '' }}><span class="nav-icon">%</span><b>Mã giảm giá</b></a>
+          <a class="{{ 'active' if section == 'inventory' else '' }}" href="/admin/inventory" {{ 'aria-current=page' if section == 'inventory' else '' }}><span class="nav-icon">TK</span><b>Nhập kho</b></a>
+        </div>
+        <div class="nav-group">
+          <span class="nav-group-title">Tăng trưởng</span>
+          <a class="{{ 'active' if section == 'users' else '' }}" href="/admin/users" {{ 'aria-current=page' if section == 'users' else '' }}><span class="nav-icon">KH</span><b>Khách hàng</b></a>
+          <a class="{{ 'active' if section == 'broadcasts' else '' }}" href="/admin/broadcasts" {{ 'aria-current=page' if section == 'broadcasts' else '' }}><span class="nav-icon">TB</span><b>Thông báo</b></a>
+          <a class="{{ 'active' if section == 'referrals' else '' }}" href="/admin/referrals" {{ 'aria-current=page' if section == 'referrals' else '' }}><span class="nav-icon">GT</span><b>Giới thiệu bạn bè</b></a>
+        </div>
+        <div class="nav-group nav-group-integrations">
+          <span class="nav-group-title">Tích hợp & bảo mật</span>
+          <a class="nav-api {{ 'active' if section == 'api-clients' else '' }}" href="/admin/api-clients" {{ 'aria-current=page' if section == 'api-clients' else '' }}><span class="nav-icon">API</span><b>API đấu kho</b><em>LIVE</em></a>
+          <a class="{{ 'active' if section == 'supplier-audit' else '' }}" href="/admin/supplier-audit" {{ 'aria-current=page' if section == 'supplier-audit' else '' }}><span class="nav-icon">!</span><b>Giao dịch đáng ngờ</b></a>
+          <a class="{{ 'active' if section == 'system' else '' }}" href="/admin/system" {{ 'aria-current=page' if section == 'system' else '' }}><span class="nav-icon">HT</span><b>Hệ thống</b></a>
+        </div>
       </nav>
-      <form class="logout" method="post" action="/admin/logout">
-        <input type="hidden" name="csrf" value="{{ csrf_token }}">
-        <button type="submit">Đăng xuất · {{ admin_username }}</button>
-      </form>
+      <div class="sidebar-foot">
+        <a class="sidebar-bot" href="https://t.me/phptool_bot" target="_blank" rel="noreferrer"><span class="live-dot"></span><span><small>Bot đang phục vụ</small><strong>@phptool_bot</strong></span></a>
+        <form class="logout" method="post" action="/admin/logout">
+          <input type="hidden" name="csrf" value="{{ csrf_token }}">
+          <button type="submit"><span>Đăng xuất</span><small>{{ admin_username }}</small></button>
+        </form>
+      </div>
     </aside>
     <main class="main">
       <header class="topbar">
-        <div><p>BẢNG ĐIỀU KHIỂN</p><h1>{{ title }}</h1></div>
-        <a class="bot-link" href="https://t.me/phptool_bot" target="_blank" rel="noreferrer">Mở bot ↗</a>
+        <div class="topbar-heading"><p><span class="live-dot"></span>BẢNG ĐIỀU KHIỂN TRỰC TIẾP</p><h1>{{ title }}</h1></div>
+        <div class="topbar-actions"><a class="button quiet" href="/docs" target="_blank" rel="noreferrer">Tài liệu API</a><a class="button primary" href="https://t.me/phptool_bot" target="_blank" rel="noreferrer">Mở bot <span aria-hidden="true">↗</span></a></div>
       </header>
       {% if flash %}<div class="flash {{ flash.level }}">{{ flash.message }}</div>{% endif %}
       {% block content %}{% endblock %}
@@ -62,6 +79,18 @@
         toggle.setAttribute('aria-expanded', String(open));
       });
       sidebar.querySelectorAll('.nav a').forEach((link) => link.addEventListener('click', closeMenu));
+      document.querySelectorAll('[data-copy-value]').forEach((button) => {
+        button.addEventListener('click', async () => {
+          const original = button.textContent;
+          try {
+            await navigator.clipboard.writeText(button.dataset.copyValue || '');
+            button.textContent = 'Đã sao chép';
+          } catch (_) {
+            button.textContent = 'Không thể sao chép';
+          }
+          window.setTimeout(() => { button.textContent = original; }, 1400);
+        });
+      });
     })();
   </script>
 </body>

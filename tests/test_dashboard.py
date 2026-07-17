@@ -1,5 +1,6 @@
 import asyncio
 import re
+from datetime import UTC, datetime
 
 from cryptography.fernet import Fernet
 from fastapi.testclient import TestClient
@@ -13,6 +14,8 @@ from app.database import Base
 from app.models import (
     BalanceAdjustment,
     BroadcastLog,
+    ApiClient,
+    ApiRequestAudit,
     Category,
     DiscountCode,
     InventoryItem,
@@ -54,6 +57,26 @@ def test_dashboard_login_catalog_inventory_and_balance(tmp_path) -> None:
                         failed_count=1,
                     ),
                 ]
+            )
+            await session.commit()
+            api_client = ApiClient(
+                owner_user_id=user.telegram_id,
+                api_id="VSADMINTEST001",
+                encrypted_secret="preview-only",
+                rate_limit_per_minute=120,
+            )
+            session.add(api_client)
+            await session.flush()
+            session.add(
+                ApiRequestAudit(
+                    api_client_id=api_client.id,
+                    method="GET",
+                    path="/v1/products",
+                    status_code=500,
+                    client_ip="127.0.0.1",
+                    duration_ms=123,
+                    created_at=datetime.now(UTC),
+                )
             )
             await session.commit()
         return engine, sessions
@@ -173,6 +196,13 @@ def test_dashboard_login_catalog_inventory_and_balance(tmp_path) -> None:
         api_clients_page = client.get("/admin/api-clients")
         assert api_clients_page.status_code == 200
         assert "API đấu kho" in api_clients_page.text
+        assert "Request 24 giờ" in api_clients_page.text
+        assert "VSADMINTEST001" in api_clients_page.text
+        filtered_api_clients = client.get(
+            "/admin/api-clients?q=VSADMINTEST001&status=active"
+        )
+        assert filtered_api_clients.status_code == 200
+        assert "Đang hiển thị 1 kết quả phù hợp" in filtered_api_clients.text
 
         referrals_page = client.get("/admin/referrals")
         assert referrals_page.status_code == 200

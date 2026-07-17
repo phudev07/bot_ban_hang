@@ -2,6 +2,7 @@ import hmac
 import re
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from urllib.parse import urlencode
 from zoneinfo import ZoneInfo
 
 from fastapi import APIRouter, Form, Request
@@ -1800,9 +1801,19 @@ def create_dashboard_router(
         )
 
     @router.get("/admin/api-clients", response_class=HTMLResponse)
-    async def api_clients_page(request: Request) -> Response:
+    async def api_clients_page(
+        request: Request,
+        q: str = "",
+        status: str = "all",
+    ) -> Response:
         if not is_admin(request):
             return redirect_to_login()
+        selected_status = (
+            status
+            if status in {"all", "active", "paused", "blocked", "attention"}
+            else "all"
+        )
+        recent_since = datetime.now(UTC) - timedelta(hours=24)
         async with session_factory() as session:
             order_stats = (
                 select(
@@ -1818,12 +1829,75 @@ def create_dashboard_router(
                 select(
                     ApiRequestAudit.api_client_id.label("api_client_id"),
                     func.count(ApiRequestAudit.id).label("request_count"),
+                    func.count(ApiRequestAudit.id)
+                    .filter(ApiRequestAudit.created_at >= recent_since)
+                    .label("recent_request_count"),
+                    func.count(ApiRequestAudit.id)
+                    .filter(
+                        ApiRequestAudit.created_at >= recent_since,
+                        ApiRequestAudit.status_code >= 400,
+                    )
+                    .label("recent_error_count"),
+                    func.coalesce(
+                        func.avg(ApiRequestAudit.duration_ms).filter(
+                            ApiRequestAudit.created_at >= recent_since
+                        ),
+                        0,
+                    ).label("average_duration_ms"),
                     func.max(ApiRequestAudit.created_at).label("last_request_at"),
                 )
                 .where(ApiRequestAudit.api_client_id.is_not(None))
                 .group_by(ApiRequestAudit.api_client_id)
                 .subquery()
             )
+            statement = (
+                select(
+                    ApiClient,
+                    User,
+                    func.coalesce(order_stats.c.order_count, 0),
+                    func.coalesce(order_stats.c.revenue, 0),
+                    func.coalesce(request_stats.c.request_count, 0),
+                    func.coalesce(request_stats.c.recent_request_count, 0),
+                    func.coalesce(request_stats.c.recent_error_count, 0),
+                    func.coalesce(request_stats.c.average_duration_ms, 0),
+                    request_stats.c.last_request_at,
+                )
+                .join(User, User.telegram_id == ApiClient.owner_user_id)
+                .outerjoin(order_stats, order_stats.c.api_client_id == ApiClient.id)
+                .outerjoin(request_stats, request_stats.c.api_client_id == ApiClient.id)
+                .order_by(request_stats.c.last_request_at.desc(), ApiClient.id.desc())
+                .limit(300)
+            )
+            if q.strip():
+                needle = f"%{q.strip()}%"
+                statement = statement.where(
+                    or_(
+                        User.full_name.ilike(needle),
+                        User.username.ilike(needle),
+                        cast(User.telegram_id, String).ilike(needle),
+                        ApiClient.api_id.ilike(needle),
+                    )
+                )
+            if selected_status == "active":
+                statement = statement.where(
+                    ApiClient.active.is_(True),
+                    ApiClient.admin_blocked.is_(False),
+                )
+            elif selected_status == "paused":
+                statement = statement.where(
+                    ApiClient.active.is_(False),
+                    ApiClient.admin_blocked.is_(False),
+                )
+            elif selected_status == "blocked":
+                statement = statement.where(ApiClient.admin_blocked.is_(True))
+            elif selected_status == "attention":
+                statement = statement.where(
+                    or_(
+                        ApiClient.admin_blocked.is_(True),
+                        ApiClient.active.is_(False),
+                        func.coalesce(request_stats.c.recent_error_count, 0) > 0,
+                    )
+                )
             rows = [
                 {
                     "client": client,
@@ -1831,34 +1905,68 @@ def create_dashboard_router(
                     "order_count": int(order_count),
                     "revenue": int(revenue),
                     "request_count": int(request_count),
+                    "recent_request_count": int(recent_request_count),
+                    "recent_error_count": int(recent_error_count),
+                    "average_duration_ms": int(average_duration_ms),
                     "last_request_at": last_request_at,
+                    "success_rate": (
+                        round((recent_request_count - recent_error_count) / recent_request_count * 100, 1)
+                        if recent_request_count
+                        else None
+                    ),
+                    "needs_attention": bool(
+                        client.admin_blocked
+                        or not client.active
+                        or recent_error_count
+                    ),
                 }
-                for client, user, order_count, revenue, request_count, last_request_at
-                in await session.execute(
-                    select(
-                        ApiClient,
-                        User,
-                        func.coalesce(order_stats.c.order_count, 0),
-                        func.coalesce(order_stats.c.revenue, 0),
-                        func.coalesce(request_stats.c.request_count, 0),
-                        request_stats.c.last_request_at,
-                    )
-                    .join(User, User.telegram_id == ApiClient.owner_user_id)
-                    .outerjoin(order_stats, order_stats.c.api_client_id == ApiClient.id)
-                    .outerjoin(request_stats, request_stats.c.api_client_id == ApiClient.id)
-                    .order_by(ApiClient.id.desc())
-                    .limit(300)
-                )
+                for (
+                    client,
+                    user,
+                    order_count,
+                    revenue,
+                    request_count,
+                    recent_request_count,
+                    recent_error_count,
+                    average_duration_ms,
+                    last_request_at,
+                ) in await session.execute(statement)
             ]
-            stats = {
-                "clients": int(await session.scalar(select(func.count(ApiClient.id))) or 0),
-                "active": int(
-                    await session.scalar(
-                        select(func.count(ApiClient.id)).where(ApiClient.active.is_(True))
-                        .where(ApiClient.admin_blocked.is_(False))
+            client_totals = (
+                await session.execute(
+                    select(
+                        func.count(ApiClient.id),
+                        func.count(ApiClient.id).filter(
+                            ApiClient.active.is_(True),
+                            ApiClient.admin_blocked.is_(False),
+                        ),
+                        func.count(ApiClient.id).filter(
+                            ApiClient.active.is_(False),
+                            ApiClient.admin_blocked.is_(False),
+                        ),
+                        func.count(ApiClient.id).filter(ApiClient.admin_blocked.is_(True)),
                     )
-                    or 0
-                ),
+                )
+            ).one()
+            request_totals = (
+                await session.execute(
+                    select(
+                        func.count(ApiRequestAudit.id),
+                        func.count(ApiRequestAudit.id).filter(
+                            ApiRequestAudit.status_code >= 400
+                        ),
+                        func.coalesce(func.avg(ApiRequestAudit.duration_ms), 0),
+                    ).where(ApiRequestAudit.created_at >= recent_since)
+                )
+            ).one()
+            stats = {
+                "clients": int(client_totals[0]),
+                "active": int(client_totals[1]),
+                "paused": int(client_totals[2]),
+                "blocked": int(client_totals[3]),
+                "requests_24h": int(request_totals[0]),
+                "errors_24h": int(request_totals[1]),
+                "average_duration_ms": int(request_totals[2]),
                 "api_orders": int(
                     await session.scalar(
                         select(func.count(func.distinct(Order.batch_code))).where(
@@ -1886,6 +1994,8 @@ def create_dashboard_router(
                 clients=rows,
                 stats=stats,
                 api_base_url=settings.shop_api_base_url,
+                query=q,
+                status=selected_status,
             ),
         )
 
@@ -1897,6 +2007,8 @@ def create_dashboard_router(
         rate_limit_per_minute: int = Form(60),
         allowed_ips: str = Form(""),
         admin_blocked: str | None = Form(None),
+        return_q: str = Form(""),
+        return_status: str = Form("all"),
     ) -> RedirectResponse:
         if not is_admin(request):
             return redirect_to_login()
@@ -1910,7 +2022,13 @@ def create_dashboard_router(
                 client.admin_blocked = admin_blocked is not None
                 await session.commit()
                 flash(request, "Đã cập nhật API client.")
-        return RedirectResponse("/admin/api-clients", status_code=303)
+        selected_status = (
+            return_status
+            if return_status in {"all", "active", "paused", "blocked", "attention"}
+            else "all"
+        )
+        query_string = urlencode({"q": return_q.strip(), "status": selected_status})
+        return RedirectResponse(f"/admin/api-clients?{query_string}", status_code=303)
 
     @router.get("/admin/api-orders")
     async def api_orders_redirect(request: Request) -> RedirectResponse:

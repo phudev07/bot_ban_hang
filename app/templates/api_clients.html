@@ -1,42 +1,103 @@
 {% extends "base.html" %}
 {% block content %}
-<section class="page-intro api-intro">
-  <div><span>WAREHOUSE PARTNERS</span><h2>Mỗi nick tự có một cổng đấu kho.</h2><p>Người dùng tự tạo và đổi API Secret trong bot. Admin chỉ theo dõi, giới hạn IP, tốc độ và khóa client vi phạm.</p></div>
-  <div class="intro-badges"><b>Base URL {{ api_base_url }}</b><b>HMAC + nonce</b><b>Trừ ví theo Telegram ID</b></div>
+<section class="page-intro api-control-hero">
+  <div class="api-hero-copy">
+    <span>WAREHOUSE API CONTROL</span>
+    <h2>Quản lý đối tác đấu kho mà không phải mở từng màn hình.</h2>
+    <p>Theo dõi request, doanh thu, lỗi và giới hạn truy cập của từng client. API Secret vẫn do người dùng tự tạo hoặc đổi trong bot.</p>
+    <div class="api-hero-actions">
+      <a class="button light" href="/docs" target="_blank" rel="noreferrer">Mở hướng dẫn đấu kho</a>
+      <a class="button ghost-light" href="/admin/api-orders">Xem đơn API</a>
+    </div>
+  </div>
+  <div class="api-connection-card">
+    <div><span>BASE URL ĐANG DÙNG</span><strong>Kết nối production</strong></div>
+    <code>{{ api_base_url }}</code>
+    <button type="button" data-copy-value="{{ api_base_url }}">Sao chép Base URL</button>
+    <dl>
+      <div><dt>Xác thực</dt><dd>HMAC-SHA256</dd></div>
+      <div><dt>Chống gửi lại</dt><dd>Nonce + timestamp</dd></div>
+      <div><dt>Thanh toán</dt><dd>Trừ ví Telegram</dd></div>
+    </dl>
+  </div>
 </section>
 
-<section class="mini-metrics">
-  <article><span>API client</span><strong>{{ stats.clients }}</strong><small>mỗi nick tối đa một client</small></article>
-  <article><span>Đang hoạt động</span><strong>{{ stats.active }}</strong><small>client có thể gọi API</small></article>
-  <article><span>Đơn API</span><strong>{{ stats.api_orders }}</strong><small>đơn đấu kho hoàn thành</small></article>
-  <article><span>Doanh thu API</span><strong>{{ stats.api_revenue|vnd }}</strong><small>trước giá vốn và hoa hồng</small></article>
+<section class="api-overview-grid">
+  <article><span>Tổng client</span><strong>{{ stats.clients }}</strong><small>{{ stats.active }} đang hoạt động</small></article>
+  <article class="positive"><span>Client hoạt động</span><strong>{{ stats.active }}</strong><small>{{ stats.paused }} tạm dừng · {{ stats.blocked }} bị khóa</small></article>
+  <article><span>Request 24 giờ</span><strong>{{ stats.requests_24h }}</strong><small>Trung bình {{ stats.average_duration_ms }}ms/request</small></article>
+  <article class="{{ 'danger' if stats.errors_24h else '' }}"><span>Lỗi 24 giờ</span><strong>{{ stats.errors_24h }}</strong><small>{{ 'Cần kiểm tra client lỗi' if stats.errors_24h else 'Không có lỗi ghi nhận' }}</small></article>
+  <article><span>Đơn API</span><strong>{{ stats.api_orders }}</strong><small>Đơn đấu kho hoàn thành</small></article>
+  <article class="revenue"><span>Doanh thu API</span><strong>{{ stats.api_revenue|vnd }}</strong><small>Trước giá vốn và hoa hồng</small></article>
 </section>
 
-<section class="panel">
-  <div class="panel-head"><div><span>CLIENT DIRECTORY</span><h2>API đấu kho của người dùng</h2></div><a href="/admin/api-orders">Xem đơn API →</a></div>
-  <div class="api-client-list">
+<section class="panel api-filter-panel">
+  <form class="api-filter-form" method="get">
+    <label class="api-search-field"><span>Tìm client</span><input name="q" value="{{ query }}" placeholder="Tên, username, Telegram ID hoặc API ID"></label>
+    <label><span>Trạng thái</span><select name="status">
+      <option value="all">Tất cả client</option>
+      <option value="active" {{ 'selected' if status == 'active' else '' }}>Đang hoạt động</option>
+      <option value="attention" {{ 'selected' if status == 'attention' else '' }}>Cần chú ý</option>
+      <option value="paused" {{ 'selected' if status == 'paused' else '' }}>Người dùng tạm dừng</option>
+      <option value="blocked" {{ 'selected' if status == 'blocked' else '' }}>Admin đã khóa</option>
+    </select></label>
+    <button class="button primary" type="submit">Lọc client</button>
+    <a class="button quiet" href="/admin/api-clients">Đặt lại</a>
+  </form>
+</section>
+
+<section class="panel api-directory-panel">
+  <div class="panel-head api-directory-head">
+    <div><span>CLIENT DIRECTORY</span><h2>API đấu kho của người dùng</h2><small>Đang hiển thị {{ clients|length }} kết quả phù hợp</small></div>
+    <a class="button quiet" href="/admin/api-orders">Mở danh sách đơn API</a>
+  </div>
+  <div class="api-client-list redesigned">
   {% for row in clients %}{% set client = row.client %}{% set user = row.user %}
-    <article class="api-client-card">
-      <div class="api-client-head">
-        <div><strong>{{ user.full_name }}</strong><small>@{{ user.username or '—' }} · <code>{{ user.telegram_id }}</code></small></div>
-        <span class="status {{ 'off' if client.admin_blocked else 'on' if client.active else 'wait' }}">{{ 'Admin khóa' if client.admin_blocked else 'Đang bật' if client.active else 'Người dùng tắt' }}</span>
+    <article class="api-client-card {{ 'needs-attention' if row.needs_attention else '' }}">
+      <header class="api-client-head">
+        <div class="api-client-person">
+          <span class="api-avatar">{{ user.full_name[:1]|upper }}</span>
+          <div><strong>{{ user.full_name }}</strong><small>@{{ user.username or 'chưa có username' }} · Telegram <code>{{ user.telegram_id }}</code></small></div>
+        </div>
+        <span class="status {{ 'off' if client.admin_blocked else 'on' if client.active else 'wait' }}">{{ 'Admin đã khóa' if client.admin_blocked else 'Đang hoạt động' if client.active else 'Người dùng tạm tắt' }}</span>
+      </header>
+
+      <div class="api-id-row">
+        <div><span>API ID</span><code>{{ client.api_id }}</code></div>
+        <button type="button" data-copy-value="{{ client.api_id }}">Sao chép</button>
       </div>
-      <dl class="api-client-stats">
-        <div><dt>API ID</dt><dd><code>{{ client.api_id }}</code></dd></div>
-        <div><dt>Số dư ví</dt><dd>{{ user.balance|vnd }}</dd></div>
-        <div><dt>Đơn / doanh thu</dt><dd>{{ row.order_count }} · {{ row.revenue|vnd }}</dd></div>
-        <div><dt>Request</dt><dd>{{ row.request_count }} · cuối {{ row.last_request_at|localtime }}</dd></div>
-        <div><dt>Đổi secret</dt><dd>v{{ client.secret_version }} · {{ client.rotated_at|localtime }}</dd></div>
-      </dl>
-      <form class="api-client-form" method="post" action="/admin/api-clients/{{ client.id }}">
-        <input type="hidden" name="csrf" value="{{ csrf_token }}">
-        <label>Request/phút<input type="number" name="rate_limit_per_minute" value="{{ client.rate_limit_per_minute }}" min="1" max="10000"></label>
-        <label class="wide">IP cho phép<textarea name="allowed_ips" rows="2" placeholder="Để trống = mọi IP; phân cách bằng dấu phẩy">{{ client.allowed_ips }}</textarea></label>
-        <label class="check"><input type="checkbox" name="admin_blocked" {{ 'checked' if client.admin_blocked else '' }}>Đình chỉ bởi admin</label>
-        <button class="button primary" type="submit">Lưu client</button>
-      </form>
+
+      <div class="api-client-kpis">
+        <div><span>Số dư ví</span><strong>{{ user.balance|vnd }}</strong></div>
+        <div><span>Đơn API</span><strong>{{ row.order_count }}</strong><small>{{ row.revenue|vnd }}</small></div>
+        <div><span>Request 24h</span><strong>{{ row.recent_request_count }}</strong><small>{{ row.request_count }} toàn thời gian</small></div>
+        <div class="{{ 'kpi-danger' if row.recent_error_count else '' }}"><span>Lỗi 24h</span><strong>{{ row.recent_error_count }}</strong><small>{{ row.success_rate ~ '% thành công' if row.success_rate is not none else 'Chưa có dữ liệu' }}</small></div>
+        <div><span>Độ trễ TB</span><strong>{{ row.average_duration_ms }}ms</strong><small>Trong 24 giờ</small></div>
+        <div><span>Request cuối</span><strong class="small-value">{{ row.last_request_at|localtime }}</strong><small>Secret v{{ client.secret_version }}</small></div>
+      </div>
+
+      <div class="api-client-summary">
+        <span><b>IP:</b> {{ client.allowed_ips or 'Cho phép mọi IP' }}</span>
+        <span><b>Giới hạn:</b> {{ client.rate_limit_per_minute }} request/phút</span>
+        <span><b>Đổi secret:</b> {{ client.rotated_at|localtime }}</span>
+      </div>
+
+      <details class="api-client-settings">
+        <summary><span><b>Cấu hình bảo mật client</b><small>Giới hạn tốc độ, IP và trạng thái khóa</small></span><i aria-hidden="true">+</i></summary>
+        <form class="api-client-form" method="post" action="/admin/api-clients/{{ client.id }}">
+          <input type="hidden" name="csrf" value="{{ csrf_token }}">
+          <input type="hidden" name="return_q" value="{{ query }}">
+          <input type="hidden" name="return_status" value="{{ status }}">
+          <label><span>Request mỗi phút</span><input type="number" name="rate_limit_per_minute" value="{{ client.rate_limit_per_minute }}" min="1" max="10000"><small>Khuyến nghị 60-300 tùy đối tác.</small></label>
+          <label class="wide"><span>IP được phép gọi API</span><textarea name="allowed_ips" rows="3" placeholder="Để trống nếu cho phép mọi IP. Nhiều IP cách nhau bằng dấu phẩy.">{{ client.allowed_ips }}</textarea><small>Chỉ nhập IP cố định của server đối tác, không nhập URL.</small></label>
+          <label class="api-block-switch"><input type="checkbox" name="admin_blocked" {{ 'checked' if client.admin_blocked else '' }}><span><b>Đình chỉ client này</b><small>Client bị khóa sẽ nhận lỗi 403 và không thể mua hàng.</small></span></label>
+          <button class="button primary" type="submit">Lưu cấu hình client</button>
+        </form>
+      </details>
     </article>
-  {% else %}<p class="empty">Chưa có người dùng nào mở mục API đấu kho trong bot.</p>{% endfor %}
+  {% else %}
+    <div class="api-empty-state"><span>API</span><h3>Không tìm thấy client phù hợp</h3><p>Thử đổi từ khóa hoặc đặt lại bộ lọc. Client mới sẽ tự xuất hiện khi người dùng mở mục API đấu kho trong bot.</p><a class="button quiet" href="/admin/api-clients">Xóa bộ lọc</a></div>
+  {% endfor %}
   </div>
 </section>
 {% endblock %}
