@@ -18,7 +18,7 @@ from app.deposit_notifications import send_deposit_notification
 from app.delivery import delivery_keyboard, delivery_text
 from app.keyboards import main_menu
 from app.models import ApiRequestAudit
-from app.public_api import client_ip, create_public_api_router
+from app.public_api import client_ip, create_public_api_docs_router, create_public_api_router
 from app.services import process_sepay_payment
 from app.suppliers import SumistoreClient
 from app.utils import SecretCipher, format_vnd, verify_sepay_hmac
@@ -98,6 +98,7 @@ def create_api(
         )
 
     if settings.shop_api_enabled:
+        app.include_router(create_public_api_docs_router(settings))
         app.include_router(
             create_public_api_router(
                 settings,

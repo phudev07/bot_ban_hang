@@ -143,6 +143,22 @@ def test_warehouse_api_purchases_from_shared_wallet_and_is_idempotent(tmp_path) 
         separators=(",", ":"),
     ).encode()
     with TestClient(app, base_url="https://testserver") as client:
+        docs = client.get("/docs")
+        assert docs.status_code == 200
+        assert "Tài liệu API đấu kho" in docs.text
+        assert "HMAC-SHA256" in docs.text
+        assert "POST /v1/orders" in docs.text
+        assert "Idempotency-Key" in docs.text
+        assert "https://token.vietshare.site/v1" in docs.text
+
+        docs_redirect = client.get("/v1/docs", follow_redirects=False)
+        assert docs_redirect.status_code == 307
+        assert docs_redirect.headers["location"] == "/docs"
+
+        information = client.get("/v1")
+        assert information.status_code == 200
+        assert information.json()["documentation"] == "https://token.vietshare.site/docs"
+
         products = client.get(
             "/v1/catalog",
             headers=signed_headers(api_id, api_secret, "GET", "/v1/catalog"),

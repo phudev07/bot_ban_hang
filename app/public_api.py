@@ -4,8 +4,11 @@ import json
 import time
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
+from pathlib import Path
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Request
+from fastapi.responses import HTMLResponse, RedirectResponse
+from fastapi.templating import Jinja2Templates
 from pydantic import BaseModel, Field
 from redis.asyncio import Redis
 from redis.exceptions import RedisError
@@ -28,6 +31,9 @@ from app.partner_services import api_signature
 from app.services import active_products, available_stock, create_deposit, purchase_product
 from app.suppliers import SumistoreClient
 from app.utils import SecretCipher, build_sepay_qr_url
+
+
+templates = Jinja2Templates(directory=Path(__file__).parent / "templates")
 
 
 class ApiOrderBody(BaseModel):
@@ -57,6 +63,38 @@ def request_path(request: Request) -> str:
 def client_ip(request: Request) -> str:
     forwarded = request.headers.get("x-forwarded-for", "").split(",", 1)[0].strip()
     return forwarded or (request.client.host if request.client else "")
+
+
+def api_docs_url(settings: Settings) -> str:
+    base_url = settings.shop_api_base_url.rstrip("/")
+    origin = base_url.removesuffix("/v1")
+    return f"{origin}/docs"
+
+
+def create_public_api_docs_router(settings: Settings) -> APIRouter:
+    router = APIRouter(tags=["shop-api-docs"])
+
+    @router.get("/docs", response_class=HTMLResponse)
+    @router.get("/docs/", response_class=HTMLResponse, include_in_schema=False)
+    async def api_docs(request: Request) -> HTMLResponse:
+        response = templates.TemplateResponse(
+            request,
+            "api_docs.html",
+            {
+                "base_url": settings.shop_api_base_url.rstrip("/"),
+                "default_rate_limit": settings.shop_api_rate_limit_per_minute,
+                "signature_tolerance_seconds": settings.shop_api_signature_tolerance_seconds,
+                "min_deposit": settings.min_deposit,
+            },
+        )
+        response.headers["Cache-Control"] = "public, max-age=300"
+        return response
+
+    @router.get("/v1/docs", include_in_schema=False)
+    async def api_docs_redirect() -> RedirectResponse:
+        return RedirectResponse("/docs", status_code=307)
+
+    return router
 
 
 def order_payload(orders: list[Order], cipher: SecretCipher) -> dict[str, object]:
@@ -198,6 +236,7 @@ def create_public_api_router(
             "version": "v1",
             "purpose": "Synchronize account products, selling prices and stock, then place orders",
             "currency": "VND",
+            "documentation": api_docs_url(settings),
             "authentication": {
                 "headers": [
                     "X-Shop-API-ID",

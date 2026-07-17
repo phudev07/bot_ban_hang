@@ -1,0 +1,656 @@
+<!doctype html>
+<html lang="vi">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="Tài liệu tích hợp API đấu kho tài khoản VietShare: xác thực HMAC, sản phẩm, tồn kho, đơn hàng và nạp ví.">
+  <title>Tài liệu API đấu kho · VietShare</title>
+  <style>
+    :root {
+      --paper: #f4f0e5;
+      --paper-2: #ebe4d4;
+      --ink: #13241f;
+      --muted: #66716b;
+      --green: #0d5f49;
+      --green-2: #168568;
+      --lime: #d9f47c;
+      --amber: #f3b84b;
+      --red: #b84432;
+      --line: rgba(19, 36, 31, .15);
+      --card: rgba(255, 253, 247, .88);
+      --code: #10231e;
+      --code-ink: #eaf7c8;
+      --shadow: 0 18px 55px rgba(32, 49, 42, .10);
+    }
+
+    * { box-sizing: border-box; }
+    html { scroll-behavior: smooth; scroll-padding-top: 24px; }
+    body {
+      margin: 0;
+      color: var(--ink);
+      background:
+        linear-gradient(rgba(13, 95, 73, .055) 1px, transparent 1px),
+        linear-gradient(90deg, rgba(13, 95, 73, .055) 1px, transparent 1px),
+        radial-gradient(circle at 90% 5%, rgba(217, 244, 124, .52), transparent 26rem),
+        var(--paper);
+      background-size: 34px 34px, 34px 34px, auto, auto;
+      font-family: "Trebuchet MS", "Gill Sans", sans-serif;
+      line-height: 1.65;
+    }
+    a { color: inherit; }
+    button, input { font: inherit; }
+    code, pre { font-family: "Cascadia Code", "IBM Plex Mono", Consolas, monospace; }
+
+    .page { width: min(1440px, calc(100% - 32px)); margin: 0 auto; padding: 20px 0 70px; }
+    .topbar {
+      position: sticky;
+      top: 12px;
+      z-index: 30;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 14px;
+      padding: 10px 12px 10px 16px;
+      border: 1px solid var(--line);
+      border-radius: 16px;
+      background: rgba(255, 253, 247, .86);
+      box-shadow: 0 8px 30px rgba(19, 36, 31, .09);
+      backdrop-filter: blur(14px);
+    }
+    .brand { display: flex; align-items: center; gap: 10px; text-decoration: none; }
+    .brand-mark {
+      display: grid;
+      width: 34px;
+      aspect-ratio: 1;
+      place-items: center;
+      border-radius: 10px;
+      color: var(--lime);
+      background: var(--green);
+      font: 700 19px/1 "Palatino Linotype", Georgia, serif;
+    }
+    .brand strong, .brand small { display: block; }
+    .brand strong { font-size: 13px; letter-spacing: .04em; }
+    .brand small { color: var(--muted); font-size: 10px; }
+    .top-actions { display: flex; align-items: center; gap: 8px; }
+    .status-pill, .top-link {
+      padding: 8px 11px;
+      border-radius: 999px;
+      font-size: 11px;
+      font-weight: 700;
+      text-decoration: none;
+    }
+    .status-pill { color: var(--green); background: rgba(22, 133, 104, .10); }
+    .status-pill::before { content: ""; display: inline-block; width: 7px; height: 7px; margin-right: 7px; border-radius: 50%; background: #20a977; box-shadow: 0 0 0 4px rgba(32, 169, 119, .13); }
+    .top-link { color: white; background: var(--green); }
+
+    .hero {
+      position: relative;
+      overflow: hidden;
+      display: grid;
+      grid-template-columns: minmax(0, 1.35fr) minmax(320px, .65fr);
+      gap: 28px;
+      margin-top: 18px;
+      padding: clamp(28px, 6vw, 72px);
+      border-radius: 28px;
+      color: #f9f7ee;
+      background: linear-gradient(125deg, #112c24 0%, #0d5f49 70%, #0b7457 100%);
+      box-shadow: var(--shadow);
+      animation: rise .5s ease-out both;
+    }
+    .hero::after {
+      content: "API";
+      position: absolute;
+      right: -18px;
+      bottom: -82px;
+      color: rgba(217, 244, 124, .10);
+      font: 700 clamp(150px, 25vw, 330px)/1 "Palatino Linotype", Georgia, serif;
+      letter-spacing: -.1em;
+    }
+    .eyebrow { color: var(--lime); font-size: 11px; font-weight: 700; letter-spacing: .22em; text-transform: uppercase; }
+    h1, h2, h3 { font-family: "Palatino Linotype", Georgia, serif; letter-spacing: -.035em; }
+    h1 { max-width: 820px; margin: 12px 0 16px; font-size: clamp(42px, 7vw, 88px); line-height: .94; }
+    .hero p { max-width: 760px; margin: 0; color: rgba(249, 247, 238, .78); font-size: clamp(15px, 1.6vw, 19px); }
+    .hero-actions { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 28px; }
+    .hero-actions a { padding: 11px 15px; border-radius: 10px; font-size: 12px; font-weight: 700; text-decoration: none; }
+    .hero-actions .primary { color: var(--ink); background: var(--lime); }
+    .hero-actions .secondary { border: 1px solid rgba(255,255,255,.24); background: rgba(255,255,255,.08); }
+    .hero-side { position: relative; z-index: 1; align-self: center; }
+    .base-label { color: rgba(255,255,255,.58); font-size: 10px; font-weight: 700; letter-spacing: .15em; }
+    .base-url {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      margin-top: 8px;
+      padding: 14px;
+      border: 1px solid rgba(255,255,255,.18);
+      border-radius: 14px;
+      background: rgba(4, 22, 17, .38);
+    }
+    .base-url code { overflow-wrap: anywhere; color: var(--lime); font-size: 12px; }
+    .copy {
+      flex: 0 0 auto;
+      padding: 6px 9px;
+      border: 0;
+      border-radius: 8px;
+      color: white;
+      background: rgba(255,255,255,.14);
+      cursor: pointer;
+      font-size: 10px;
+      font-weight: 700;
+    }
+    .hero-facts { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; margin-top: 12px; }
+    .hero-facts div { padding: 12px; border-radius: 12px; background: rgba(255,255,255,.08); }
+    .hero-facts strong, .hero-facts small { display: block; }
+    .hero-facts strong { color: var(--lime); font-size: 15px; }
+    .hero-facts small { margin-top: 3px; color: rgba(255,255,255,.57); font-size: 9px; }
+
+    .doc-layout { display: grid; grid-template-columns: 235px minmax(0, 1fr); gap: 22px; margin-top: 22px; align-items: start; }
+    .toc {
+      position: sticky;
+      top: 88px;
+      padding: 16px;
+      border: 1px solid var(--line);
+      border-radius: 18px;
+      background: var(--card);
+      box-shadow: 0 10px 30px rgba(19, 36, 31, .06);
+    }
+    .toc strong { display: block; margin: 2px 8px 10px; font-size: 10px; letter-spacing: .15em; text-transform: uppercase; }
+    .toc a { display: block; padding: 7px 9px; border-radius: 8px; color: var(--muted); font-size: 11px; text-decoration: none; }
+    .toc a:hover { color: var(--green); background: rgba(13, 95, 73, .08); }
+
+    .content { min-width: 0; }
+    .section {
+      margin-bottom: 18px;
+      padding: clamp(20px, 4vw, 38px);
+      border: 1px solid var(--line);
+      border-radius: 22px;
+      background: var(--card);
+      box-shadow: 0 12px 34px rgba(19, 36, 31, .055);
+      animation: rise .45s ease-out both;
+    }
+    .section:nth-child(2) { animation-delay: .04s; }
+    .section:nth-child(3) { animation-delay: .08s; }
+    .section:nth-child(4) { animation-delay: .12s; }
+    .section-head { display: flex; justify-content: space-between; gap: 18px; align-items: flex-start; margin-bottom: 20px; }
+    .section-number { color: var(--green-2); font: 700 12px/1 "Cascadia Code", monospace; }
+    h2 { margin: 5px 0 0; font-size: clamp(27px, 4vw, 42px); line-height: 1; }
+    h3 { margin: 0 0 8px; font-size: 20px; }
+    p { margin: 0 0 12px; }
+    .muted { color: var(--muted); }
+    .note { padding: 14px 16px; border-left: 4px solid var(--amber); border-radius: 0 12px 12px 0; background: rgba(243, 184, 75, .13); font-size: 12px; }
+    .good-note { border-left-color: var(--green-2); background: rgba(22, 133, 104, .09); }
+    .danger-note { border-left-color: var(--red); background: rgba(184, 68, 50, .08); }
+
+    .steps { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px; }
+    .step { padding: 16px; border: 1px solid var(--line); border-radius: 14px; background: rgba(244, 240, 229, .65); }
+    .step b { display: grid; width: 27px; height: 27px; place-items: center; margin-bottom: 13px; border-radius: 8px; color: var(--lime); background: var(--green); font-size: 11px; }
+    .step strong { display: block; margin-bottom: 5px; font-size: 13px; }
+    .step span { color: var(--muted); font-size: 11px; }
+
+    .grid-2 { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
+    .spec-card { padding: 16px; border: 1px solid var(--line); border-radius: 14px; background: rgba(255,255,255,.52); }
+    .spec-card code { color: var(--green); font-size: 11px; }
+    .spec-card p { color: var(--muted); font-size: 11px; }
+    .canonical { margin: 14px 0; padding: 15px; border-radius: 12px; color: var(--code-ink); background: var(--code); overflow-wrap: anywhere; font-size: 12px; }
+
+    .endpoint-list { display: grid; gap: 10px; }
+    .endpoint {
+      display: grid;
+      grid-template-columns: 72px minmax(180px, .65fr) minmax(260px, 1fr);
+      gap: 12px;
+      align-items: center;
+      padding: 13px;
+      border: 1px solid var(--line);
+      border-radius: 13px;
+      background: rgba(255,255,255,.52);
+    }
+    .method { width: max-content; min-width: 54px; padding: 5px 8px; border-radius: 7px; text-align: center; font: 700 10px/1 "Cascadia Code", monospace; }
+    .get { color: #12634e; background: rgba(22, 133, 104, .13); }
+    .post { color: #875b06; background: rgba(243, 184, 75, .20); }
+    .endpoint > code { overflow-wrap: anywhere; color: var(--ink); font-size: 11px; font-weight: 700; }
+    .endpoint span { color: var(--muted); font-size: 11px; }
+
+    .code-wrap { position: relative; margin: 12px 0 18px; }
+    pre {
+      margin: 0;
+      padding: 18px;
+      overflow: auto;
+      border-radius: 14px;
+      color: var(--code-ink);
+      background: var(--code);
+      font-size: 11px;
+      line-height: 1.65;
+      tab-size: 2;
+    }
+    .code-wrap .copy { position: absolute; top: 9px; right: 9px; background: rgba(255,255,255,.12); }
+    .field-table, .error-table { width: 100%; border-collapse: collapse; font-size: 11px; }
+    .field-table th, .field-table td, .error-table th, .error-table td { padding: 10px; border-bottom: 1px solid var(--line); text-align: left; vertical-align: top; }
+    .field-table th, .error-table th { color: var(--muted); font-size: 9px; letter-spacing: .08em; text-transform: uppercase; }
+    .field-table code, .error-table code { color: var(--green); }
+    .required { color: var(--red); font-weight: 700; }
+
+    .rules { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; }
+    .rule { padding: 15px; border-radius: 13px; color: rgba(255,255,255,.75); background: #15362d; }
+    .rule strong { display: block; margin-bottom: 5px; color: var(--lime); font-size: 12px; }
+    .rule span { font-size: 10px; }
+
+    .footer { display: flex; justify-content: space-between; gap: 18px; padding: 22px 5px 0; color: var(--muted); font-size: 10px; }
+    .footer a { color: var(--green); font-weight: 700; text-decoration: none; }
+
+    @keyframes rise { from { opacity: 0; transform: translateY(12px); } to { opacity: 1; transform: translateY(0); } }
+    @media (prefers-reduced-motion: reduce) { * { scroll-behavior: auto !important; animation: none !important; } }
+
+    @media (max-width: 980px) {
+      .hero { grid-template-columns: 1fr; }
+      .hero-side { max-width: 640px; }
+      .doc-layout { grid-template-columns: 1fr; }
+      .toc { position: static; display: flex; gap: 5px; overflow-x: auto; padding: 9px; }
+      .toc strong { display: none; }
+      .toc a { flex: 0 0 auto; white-space: nowrap; background: rgba(13, 95, 73, .06); }
+      .steps { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    }
+
+    @media (max-width: 680px) {
+      .page { width: min(100% - 18px, 1440px); padding-top: 9px; }
+      .topbar { top: 6px; border-radius: 13px; }
+      .status-pill { display: none; }
+      .top-link { padding: 8px 10px; white-space: nowrap; font-size: 10px; }
+      .hero { margin-top: 10px; padding: 28px 20px; border-radius: 20px; }
+      h1 { font-size: clamp(40px, 15vw, 61px); }
+      .hero-facts { grid-template-columns: 1fr 1fr; }
+      .hero-facts div:last-child { grid-column: span 2; }
+      .base-url code { font-size: 10px; }
+      .section { padding: 20px 14px; border-radius: 17px; }
+      .steps, .grid-2, .rules { grid-template-columns: 1fr; }
+      .endpoint { grid-template-columns: 62px minmax(0, 1fr); }
+      .endpoint span { grid-column: 1 / -1; }
+      .field-table, .error-table { display: block; overflow-x: auto; white-space: nowrap; }
+      pre { padding: 16px 12px; font-size: 10px; }
+      .footer { display: block; }
+    }
+  </style>
+</head>
+<body>
+  <div class="page">
+    <header class="topbar">
+      <a class="brand" href="/docs">
+        <span class="brand-mark">V</span>
+        <span><strong>VietShare Warehouse API</strong><small>Tài liệu tích hợp v1</small></span>
+      </a>
+      <div class="top-actions">
+        <span class="status-pill">API đang hoạt động</span>
+        <a class="top-link" href="{{ base_url }}/health" target="_blank" rel="noreferrer">Kiểm tra health ↗</a>
+      </div>
+    </header>
+
+    <section class="hero">
+      <div>
+        <span class="eyebrow">Warehouse integration · Version 1</span>
+        <h1>Đấu kho tài khoản, giao hàng tự động.</h1>
+        <p>Đồng bộ sản phẩm, giá bán và tồn kho; đặt đơn bằng ví Telegram; nhận tài khoản ngay trong phản hồi API. Giá nguồn được cập nhật động nhưng đối tác chỉ thấy giá bán của shop.</p>
+        <div class="hero-actions">
+          <a class="primary" href="#bat-dau">Tích hợp từ đầu</a>
+          <a class="secondary" href="#code-mau">Xem code mẫu</a>
+          <a class="secondary" href="https://t.me/phptool_bot" target="_blank" rel="noreferrer">Lấy API ID trong bot ↗</a>
+        </div>
+      </div>
+      <div class="hero-side">
+        <span class="base-label">PRODUCTION BASE URL</span>
+        <div class="base-url"><code>{{ base_url }}</code><button class="copy" data-copy="{{ base_url }}">Sao chép</button></div>
+        <div class="hero-facts">
+          <div><strong>HMAC</strong><small>SHA-256 signature</small></div>
+          <div><strong>{{ default_rate_limit }}/phút</strong><small>Giới hạn mặc định</small></div>
+          <div><strong>VND</strong><small>Số nguyên, không dấu chấm</small></div>
+        </div>
+      </div>
+    </section>
+
+    <div class="doc-layout">
+      <nav class="toc" aria-label="Mục lục tài liệu">
+        <strong>Mục lục</strong>
+        <a href="#bat-dau">Bắt đầu</a>
+        <a href="#xac-thuc">Xác thực HMAC</a>
+        <a href="#endpoint">Endpoint</a>
+        <a href="#san-pham">Sản phẩm & tồn</a>
+        <a href="#don-hang">Đặt đơn</a>
+        <a href="#nap-vi">Nạp ví</a>
+        <a href="#code-mau">Code mẫu</a>
+        <a href="#ma-loi">Mã lỗi</a>
+        <a href="#bao-mat">Bảo mật</a>
+      </nav>
+
+      <main class="content">
+        <section class="section" id="bat-dau">
+          <div class="section-head"><div><span class="section-number">01</span><h2>Bắt đầu trong 4 bước</h2></div></div>
+          <div class="steps">
+            <article class="step"><b>1</b><strong>Mở bot Telegram</strong><span>Vào @phptool_bot và bấm mục <em>API đấu kho</em>.</span></article>
+            <article class="step"><b>2</b><strong>Lưu thông tin</strong><span>Bot tự tạo một API ID cố định và API Secret chỉ hiện một lần.</span></article>
+            <article class="step"><b>3</b><strong>Nạp số dư</strong><span>Nạp ví Telegram bằng QR. Đơn API dùng chung số dư ví này.</span></article>
+            <article class="step"><b>4</b><strong>Ký và gọi API</strong><span>Tạo timestamp, nonce mới, ký raw body rồi gọi endpoint cần dùng.</span></article>
+          </div>
+          <div class="note good-note" style="margin-top:14px"><strong>Mỗi nick Telegram chỉ có một API client.</strong> API ID không đổi. Khi đổi API Secret trong bot, secret cũ mất hiệu lực ngay.</div>
+        </section>
+
+        <section class="section" id="xac-thuc">
+          <div class="section-head"><div><span class="section-number">02</span><h2>Xác thực HMAC-SHA256</h2></div></div>
+          <p class="muted">Tất cả endpoint nghiệp vụ yêu cầu bốn header xác thực. Hai endpoint công khai là <code>GET /v1</code> và <code>GET /v1/health</code>.</p>
+          <div class="grid-2">
+            <article class="spec-card"><h3>X-Shop-API-ID</h3><p>API ID lấy trong bot, dạng <code>VS...</code>.</p></article>
+            <article class="spec-card"><h3>X-Timestamp</h3><p>Unix timestamp tính bằng giây. Độ lệch tối đa {{ signature_tolerance_seconds }} giây.</p></article>
+            <article class="spec-card"><h3>X-Nonce</h3><p>Chuỗi ngẫu nhiên 12-128 ký tự và không được dùng lại trong cửa sổ xác thực.</p></article>
+            <article class="spec-card"><h3>X-Signature</h3><p>Chuỗi hex viết thường của HMAC-SHA256 bằng API Secret.</p></article>
+          </div>
+          <p style="margin-top:18px"><strong>Chuỗi canonical chính xác:</strong></p>
+          <div class="canonical"><code>timestamp|nonce|METHOD|PATH_WITH_QUERY|sha256(raw_body)</code></div>
+          <div class="grid-2">
+            <div class="note"><strong>PATH_WITH_QUERY phải gồm `/v1`.</strong><br>Ví dụ: <code>/v1/orders?limit=20</code>. Thứ tự query phải giống URL thực tế.</div>
+            <div class="note"><strong>Hash đúng raw body gửi đi.</strong><br>Body rỗng dùng SHA-256 của chuỗi byte rỗng. Không stringify JSON lại sau khi ký.</div>
+          </div>
+          <div class="code-wrap">
+            <button class="copy" data-copy-target="canonical-example">Sao chép</button>
+            <pre id="canonical-example">timestamp = "1784319000"
+nonce    = "a06f8c44d0fe01a4c25028df"
+method   = "POST"
+path     = "/v1/orders"
+body     = {"product_id":1,"quantity":2}
+
+body_hash = sha256(body)
+canonical = timestamp|nonce|POST|/v1/orders|body_hash
+signature = hmac_sha256(API_SECRET, canonical)</pre>
+          </div>
+          <div class="note danger-note"><strong>Lưu ý khi retry:</strong> nếu gửi lại một đơn, hãy giữ nguyên <code>Idempotency-Key</code> nhưng tạo timestamp, nonce và chữ ký mới.</div>
+        </section>
+
+        <section class="section" id="endpoint">
+          <div class="section-head"><div><span class="section-number">03</span><h2>Danh sách endpoint</h2></div></div>
+          <div class="endpoint-list">
+            <div class="endpoint"><b class="method get">GET</b><code>/v1</code><span>Thông tin phiên bản, xác thực và link tài liệu. Không cần ký.</span></div>
+            <div class="endpoint"><b class="method get">GET</b><code>/v1/health</code><span>Kiểm tra dịch vụ hoạt động. Không cần ký.</span></div>
+            <div class="endpoint"><b class="method get">GET</b><code>/v1/account</code><span>Số dư ví, trạng thái client và giới hạn request.</span></div>
+            <div class="endpoint"><b class="method get">GET</b><code>/v1/products</code><span>Danh sách sản phẩm, giá bán, mô tả và tồn kho.</span></div>
+            <div class="endpoint"><b class="method get">GET</b><code>/v1/catalog</code><span>Alias của <code>/products</code>.</span></div>
+            <div class="endpoint"><b class="method get">GET</b><code>/v1/products/{product_id}</code><span>Chi tiết một sản phẩm.</span></div>
+            <div class="endpoint"><b class="method get">GET</b><code>/v1/stock/{product_id}</code><span>Alias chi tiết sản phẩm, phù hợp tác vụ kiểm tra tồn.</span></div>
+            <div class="endpoint"><b class="method post">POST</b><code>/v1/orders</code><span>Đặt mua và nhận tài khoản. Bắt buộc Idempotency-Key.</span></div>
+            <div class="endpoint"><b class="method get">GET</b><code>/v1/orders?limit=20</code><span>Lấy 1-100 đơn API hoàn thành gần nhất.</span></div>
+            <div class="endpoint"><b class="method get">GET</b><code>/v1/orders/{order_code}</code><span>Lấy lại đầy đủ tài khoản của một đơn.</span></div>
+            <div class="endpoint"><b class="method post">POST</b><code>/v1/deposits</code><span>Tạo mã nạp và QR cho ví Telegram.</span></div>
+            <div class="endpoint"><b class="method get">GET</b><code>/v1/deposits/{deposit_code}</code><span>Kiểm tra trạng thái giao dịch nạp.</span></div>
+          </div>
+        </section>
+
+        <section class="section" id="san-pham">
+          <div class="section-head"><div><span class="section-number">04</span><h2>Sản phẩm, giá và tồn kho</h2></div></div>
+          <p><code>GET /v1/products</code> trả danh mục tài khoản đang bán. Giá là số nguyên VND. Với hàng đấu nguồn, giá bán được đồng bộ động theo giá vốn hiện tại cộng phần chênh của shop.</p>
+          <div class="code-wrap"><button class="copy" data-copy-target="products-response">Sao chép</button><pre id="products-response">{
+  "count": 1,
+  "products": [
+    {
+      "id": 7,
+      "name": "Tài khoản mẫu",
+      "description": "Thông tin bảo hành và định dạng tài khoản",
+      "price": 25000,
+      "stock": 18,
+      "allow_quantity": true,
+      "max_quantity": 10
+    }
+  ]
+}</pre></div>
+          <table class="field-table">
+            <thead><tr><th>Trường</th><th>Kiểu</th><th>Ý nghĩa</th></tr></thead>
+            <tbody>
+              <tr><td><code>id</code></td><td>integer</td><td>ID dùng cho <code>POST /v1/orders</code>.</td></tr>
+              <tr><td><code>price</code></td><td>integer</td><td>Giá bán hiện tại cho một tài khoản, đơn vị VND.</td></tr>
+              <tr><td><code>stock</code></td><td>integer</td><td>Tồn khả dụng tại lúc truy vấn. Khi mua hệ thống kiểm tra lại lần cuối.</td></tr>
+              <tr><td><code>allow_quantity</code></td><td>boolean</td><td>Có cho phép mua nhiều tài khoản trong một đơn hay không.</td></tr>
+              <tr><td><code>max_quantity</code></td><td>integer</td><td>Số lượng tối đa trong một request.</td></tr>
+            </tbody>
+          </table>
+          <div class="note" style="margin-top:14px">Tồn kho có thể thay đổi giữa lúc đọc và lúc mua. Chỉ coi đơn thành công khi <code>POST /v1/orders</code> trả HTTP 200.</div>
+        </section>
+
+        <section class="section" id="don-hang">
+          <div class="section-head"><div><span class="section-number">05</span><h2>Đặt đơn và nhận tài khoản</h2></div></div>
+          <p>Gửi JSON tới <code>POST /v1/orders</code>. Tiền được trừ từ ví Telegram của chủ API client trong cùng transaction giao hàng.</p>
+          <table class="field-table">
+            <thead><tr><th>Trường</th><th>Bắt buộc</th><th>Kiểu</th><th>Quy tắc</th></tr></thead>
+            <tbody>
+              <tr><td><code>product_id</code></td><td class="required">Có</td><td>integer</td><td>ID sản phẩm từ catalog.</td></tr>
+              <tr><td><code>quantity</code></td><td>Không</td><td>integer</td><td>Mặc định 1; tối đa theo sản phẩm và không quá 100.</td></tr>
+              <tr><td><code>coupon_code</code></td><td>Không</td><td>string</td><td>Mã giảm giá dành riêng cho sản phẩm, tối đa 64 ký tự.</td></tr>
+            </tbody>
+          </table>
+          <p style="margin-top:16px"><strong>Header riêng bắt buộc:</strong> <code>Idempotency-Key</code> dài 8-128 ký tự.</p>
+          <div class="code-wrap"><button class="copy" data-copy-target="order-request">Sao chép</button><pre id="order-request">POST /v1/orders
+Idempotency-Key: reseller-order-20260718-00001
+Content-Type: application/json
+
+{"product_id":7,"quantity":2,"coupon_code":"SALE10"}</pre></div>
+          <div class="code-wrap"><button class="copy" data-copy-target="order-response">Sao chép</button><pre id="order-response">{
+  "success": true,
+  "order": {
+    "order_code": "B8D52E11A2C",
+    "status": "completed",
+    "channel": "api",
+    "product": {"id": 7, "name": "Tài khoản mẫu"},
+    "quantity": 2,
+    "total_amount": 45000,
+    "discount_amount": 5000,
+    "accounts": [
+      "email1@example.com|password1",
+      "email2@example.com|password2"
+    ],
+    "created_at": "2026-07-18T03:15:22+00:00",
+    "delivered_at": "2026-07-18T03:15:22+00:00"
+  }
+}</pre></div>
+          <div class="grid-2">
+            <div class="note good-note"><strong>Retry an toàn.</strong><br>Cùng Idempotency-Key và cùng payload sẽ trả lại đơn cũ, không trừ tiền hoặc lấy hàng lần hai.</div>
+            <div class="note danger-note"><strong>Không đổi payload.</strong><br>Dùng lại Idempotency-Key với payload khác sẽ nhận <code>409 IDEMPOTENCY_MISMATCH</code>.</div>
+          </div>
+        </section>
+
+        <section class="section" id="nap-vi">
+          <div class="section-head"><div><span class="section-number">06</span><h2>Tạo QR nạp ví</h2></div></div>
+          <p><code>POST /v1/deposits</code> tạo nội dung chuyển khoản riêng cho chủ API client. Số tiền tối thiểu hiện tại là <strong>{{ "{:,.0f}".format(min_deposit).replace(',', '.') }}đ</strong>.</p>
+          <div class="grid-2">
+            <div class="code-wrap"><button class="copy" data-copy-target="deposit-request">Sao chép</button><pre id="deposit-request">POST /v1/deposits
+Content-Type: application/json
+
+{"amount":100000}</pre></div>
+            <div class="code-wrap"><button class="copy" data-copy-target="deposit-response">Sao chép</button><pre id="deposit-response">{
+  "code": "NAP6799701918A4F2",
+  "amount": 100000,
+  "status": "pending",
+  "qr_url": "https://img.vietqr.io/..."
+}</pre></div>
+          </div>
+          <p>Dùng <code>GET /v1/deposits/{deposit_code}</code> để kiểm tra <code>pending</code> hoặc <code>paid</code>. Webhook ngân hàng tự cộng số dư và chống ghi nhận trùng giao dịch.</p>
+        </section>
+
+        <section class="section" id="code-mau">
+          <div class="section-head"><div><span class="section-number">07</span><h2>Code mẫu hoàn chỉnh</h2></div></div>
+          <h3>Python</h3>
+          <div class="code-wrap"><button class="copy" data-copy-target="python-example">Sao chép</button><pre id="python-example">import hashlib
+import hmac
+import json
+import secrets
+import time
+
+import requests
+
+BASE_URL = "{{ base_url }}"
+API_ID = "VS_YOUR_API_ID"
+API_SECRET = "vs_live_YOUR_SECRET"
+
+
+def call_api(method, endpoint, payload=None, idempotency_key=None):
+    body = (
+        json.dumps(payload, ensure_ascii=False, separators=(",", ":")).encode()
+        if payload is not None
+        else b""
+    )
+    timestamp = str(int(time.time()))
+    nonce = secrets.token_hex(16)
+    path_with_query = f"/v1{endpoint}"
+    body_hash = hashlib.sha256(body).hexdigest()
+    canonical = "|".join(
+        (timestamp, nonce, method.upper(), path_with_query, body_hash)
+    )
+    signature = hmac.new(
+        API_SECRET.encode(), canonical.encode(), hashlib.sha256
+    ).hexdigest()
+
+    headers = {
+        "X-Shop-API-ID": API_ID,
+        "X-Timestamp": timestamp,
+        "X-Nonce": nonce,
+        "X-Signature": signature,
+    }
+    if body:
+        headers["Content-Type"] = "application/json"
+    if idempotency_key:
+        headers["Idempotency-Key"] = idempotency_key
+
+    response = requests.request(
+        method, f"{BASE_URL}{endpoint}", data=body, headers=headers, timeout=30
+    )
+    response.raise_for_status()
+    return response.json()
+
+
+catalog = call_api("GET", "/products")
+order = call_api(
+    "POST",
+    "/orders",
+    {"product_id": catalog["products"][0]["id"], "quantity": 1},
+    idempotency_key=f"my-shop-{secrets.token_hex(12)}",
+)
+print(order)</pre></div>
+
+          <h3>Node.js 18+</h3>
+          <div class="code-wrap"><button class="copy" data-copy-target="node-example">Sao chép</button><pre id="node-example">import crypto from "node:crypto";
+
+const BASE_URL = "{{ base_url }}";
+const API_ID = "VS_YOUR_API_ID";
+const API_SECRET = "vs_live_YOUR_SECRET";
+
+async function callApi(method, endpoint, payload = null, idempotencyKey = null) {
+  const normalizedMethod = method.toUpperCase();
+  const body = payload === null ? "" : JSON.stringify(payload);
+  const timestamp = Math.floor(Date.now() / 1000).toString();
+  const nonce = crypto.randomBytes(16).toString("hex");
+  const bodyHash = crypto.createHash("sha256").update(body).digest("hex");
+  const canonical = [timestamp, nonce, normalizedMethod, `/v1${endpoint}`, bodyHash].join("|");
+  const signature = crypto
+    .createHmac("sha256", API_SECRET)
+    .update(canonical)
+    .digest("hex");
+
+  const headers = {
+    "X-Shop-API-ID": API_ID,
+    "X-Timestamp": timestamp,
+    "X-Nonce": nonce,
+    "X-Signature": signature,
+  };
+  if (body) headers["Content-Type"] = "application/json";
+  if (idempotencyKey) headers["Idempotency-Key"] = idempotencyKey;
+
+  const response = await fetch(`${BASE_URL}${endpoint}`, {
+    method: normalizedMethod,
+    headers,
+    body: body || undefined,
+  });
+  const data = await response.json();
+  if (!response.ok) throw new Error(JSON.stringify(data));
+  return data;
+}
+
+const order = await callApi(
+  "POST",
+  "/orders",
+  {product_id: 7, quantity: 1},
+  `my-shop-${crypto.randomUUID()}`,
+);
+console.log(order);</pre></div>
+        </section>
+
+        <section class="section" id="ma-loi">
+          <div class="section-head"><div><span class="section-number">08</span><h2>Mã lỗi cần xử lý</h2></div></div>
+          <p class="muted">Lỗi nghiệp vụ có cấu trúc <code>{"detail":{"code":"...","message":"..."}}</code>.</p>
+          <table class="error-table">
+            <thead><tr><th>HTTP</th><th>Code phổ biến</th><th>Cách xử lý</th></tr></thead>
+            <tbody>
+              <tr><td>400</td><td><code>INVALID_IDEMPOTENCY_KEY</code><br><code>INVALID_COUPON</code><br><code>INVALID_QUANTITY</code></td><td>Sửa dữ liệu request rồi gửi lại với key mới.</td></tr>
+              <tr><td>401</td><td><code>AUTH_REQUIRED</code><br><code>INVALID_API_ID</code><br><code>INVALID_SIGNATURE</code><br><code>EXPIRED_REQUEST</code></td><td>Kiểm tra credentials, đồng hồ máy chủ và canonical string.</td></tr>
+              <tr><td>402</td><td><code>INSUFFICIENT</code></td><td>Nạp thêm số dư vào ví Telegram.</td></tr>
+              <tr><td>403</td><td><code>API_CLIENT_BLOCKED</code><br><code>IP_NOT_ALLOWED</code><br><code>BLOCKED</code></td><td>Mở lại API trong bot hoặc liên hệ admin.</td></tr>
+              <tr><td>404</td><td><code>PRODUCT_NOT_FOUND</code><br><code>ORDER_NOT_FOUND</code><br><code>DEPOSIT_NOT_FOUND</code></td><td>Đồng bộ lại catalog hoặc kiểm tra mã thuộc đúng API client.</td></tr>
+              <tr><td>409</td><td><code>OUT_OF_STOCK</code><br><code>REPLAYED_REQUEST</code><br><code>IDEMPOTENCY_MISMATCH</code><br><code>REQUEST_IN_PROGRESS</code></td><td>Đọc lại tồn; dùng nonce mới; giữ nguyên payload khi retry đơn.</td></tr>
+              <tr><td>429</td><td><code>RATE_LIMITED</code></td><td>Giảm tần suất và retry có backoff.</td></tr>
+              <tr><td>503</td><td><code>SUPPLIER_UNAVAILABLE</code><br><code>AUTH_STORE_UNAVAILABLE</code><br><code>DEPOSITS_DISABLED</code></td><td>Retry sau; không tự coi đơn là thành công.</td></tr>
+            </tbody>
+          </table>
+        </section>
+
+        <section class="section" id="bao-mat">
+          <div class="section-head"><div><span class="section-number">09</span><h2>Bảo mật và vận hành đúng</h2></div></div>
+          <div class="rules">
+            <article class="rule"><strong>Giữ Secret ở backend</strong><span>Không nhúng API Secret vào web frontend, app mobile, ảnh chụp hoặc repository công khai.</span></article>
+            <article class="rule"><strong>Đồng bộ thời gian</strong><span>Bật NTP cho máy chủ tích hợp. Timestamp lệch quá {{ signature_tolerance_seconds }} giây sẽ bị từ chối.</span></article>
+            <article class="rule"><strong>Nonce mới mỗi request</strong><span>Không dùng lại nonce, kể cả khi retry cùng một Idempotency-Key.</span></article>
+            <article class="rule"><strong>Lưu đơn của bạn</strong><span>Lưu Idempotency-Key và order_code để đối soát và lấy lại tài khoản khi mất kết nối.</span></article>
+            <article class="rule"><strong>Bảo vệ dữ liệu giao hàng</strong><span>Response chứa tài khoản thật. Không log plaintext lâu dài và không gửi sang dịch vụ phân tích bên thứ ba.</span></article>
+            <article class="rule"><strong>Chỉ tin HTTP 200</strong><span>Khi timeout, gọi lại bằng cùng Idempotency-Key hoặc tra cứu order trước khi tạo đơn mới.</span></article>
+          </div>
+          <div class="note good-note" style="margin-top:14px">Hệ thống khóa ví theo user, khóa tồn local bằng PostgreSQL, tuần tự hóa luồng mua nguồn và dùng unique idempotency. Nhiều đối tác mua đồng thời không được nhận trùng cùng tài khoản.</div>
+        </section>
+      </main>
+    </div>
+
+    <footer class="footer">
+      <span>VietShare Warehouse API · v1 · Tài liệu cập nhật theo API production</span>
+      <span>Hỗ trợ: <a href="https://t.me/phptool_bot" target="_blank" rel="noreferrer">@phptool_bot</a></span>
+    </footer>
+  </div>
+
+  <script>
+    const copyText = async (value) => {
+      if (navigator.clipboard?.writeText) {
+        try {
+          await navigator.clipboard.writeText(value);
+          return;
+        } catch (_) {}
+      }
+      const textarea = document.createElement('textarea');
+      textarea.value = value;
+      textarea.setAttribute('readonly', '');
+      textarea.style.position = 'fixed';
+      textarea.style.opacity = '0';
+      document.body.appendChild(textarea);
+      textarea.select();
+      const copied = document.execCommand('copy');
+      textarea.remove();
+      if (!copied) throw new Error('Copy is unavailable');
+    };
+
+    document.querySelectorAll('[data-copy], [data-copy-target]').forEach((button) => {
+      button.addEventListener('click', async () => {
+        const target = button.dataset.copyTarget
+          ? document.getElementById(button.dataset.copyTarget)?.textContent
+          : button.dataset.copy;
+        if (!target) return;
+        try {
+          await copyText(target);
+          const oldText = button.textContent;
+          button.textContent = 'Đã chép';
+          setTimeout(() => { button.textContent = oldText; }, 1300);
+        } catch (_) {
+          button.textContent = 'Không thể chép';
+        }
+      });
+    });
+  </script>
+</body>
+</html>

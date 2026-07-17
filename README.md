@@ -35,6 +35,12 @@ Base URL production:
 https://token.vietshare.site/v1
 ```
 
+Tai lieu tich hop day du:
+
+```text
+https://token.vietshare.site/docs
+```
+
 API nay danh cho shop doi tac dau noi kho tai khoan, khong phai API quan tri bot.
 Tien mua hang duoc tru truc tiep tu vi Telegram cua chu API client. Gia san pham
 Sumistore la gia dong: shop dong bo gia von, cong markup va luu gia von thuc te
