@@ -24,9 +24,12 @@
       <div><dt>Mã đơn API</dt><dd><code>{{ order.supplier_order_code or '—' }}</code></dd></div>
       <div><dt>Số lượng</dt><dd>{{ order.quantity }} tài khoản</dd></div>
       <div><dt>Nguồn hàng</dt><dd>{{ product.fulfillment_source }}</dd></div>
+      <div><dt>Kênh bán</dt><dd>{{ order.sales_channel }}</dd></div>
       <div><dt>Doanh thu</dt><dd>{{ order.amount|vnd }}</dd></div>
       <div><dt>Giá vốn thực tế</dt><dd>{{ order.cost_amount|vnd }}</dd></div>
       <div><dt>Lợi nhuận gộp</dt><dd class="profit-text {{ 'loss' if order.amount < order.cost_amount else '' }}">{{ (order.amount - order.cost_amount)|vnd }}</dd></div>
+      <div><dt>Hoa hồng giới thiệu</dt><dd>{{ referral_reward.commission_amount|vnd if referral_reward else '—' }}</dd></div>
+      <div><dt>Lợi nhuận ròng</dt><dd class="profit-text">{{ (order.amount - order.cost_amount - (referral_reward.commission_amount if referral_reward else 0))|vnd }}</dd></div>
       <div><dt>Mã giảm giá</dt><dd>{{ order.discount_code or '—' }}{% if order.discount_amount %} · -{{ order.discount_amount|vnd }}{% endif %}</dd></div>
       <div><dt>Sản phẩm</dt><dd>#{{ product.id }} · {{ product.name_vi }}</dd></div>
       <div><dt>Thời gian tạo</dt><dd>{{ order.created_at|localtime }}</dd></div>

@@ -112,6 +112,18 @@ async def initialize_database(engine, session_factory, seed_demo_data: bool) -> 
         )
         await connection.execute(
             text(
+                "ALTER TABLE api_clients ADD COLUMN IF NOT EXISTS "
+                "admin_blocked BOOLEAN NOT NULL DEFAULT FALSE"
+            )
+        )
+        await connection.execute(
+            text(
+                "CREATE INDEX IF NOT EXISTS ix_api_clients_admin_blocked "
+                "ON api_clients (admin_blocked)"
+            )
+        )
+        await connection.execute(
+            text(
                 "ALTER TABLE orders ADD COLUMN IF NOT EXISTS "
                 "discount_amount BIGINT NOT NULL DEFAULT 0"
             )
@@ -192,10 +204,62 @@ async def initialize_database(engine, session_factory, seed_demo_data: bool) -> 
             )
         )
         await connection.execute(
-            text("UPDATE products SET allow_quantity = TRUE WHERE name_en = 'Demo account'")
+            text("ALTER TABLE users ADD COLUMN IF NOT EXISTS referral_code VARCHAR(24) NULL")
         )
         await connection.execute(
-            text("UPDATE products SET product_type = 'key' WHERE name_en = 'Demo LLM access'")
+            text(
+                "ALTER TABLE users ADD COLUMN IF NOT EXISTS "
+                "referred_by_id BIGINT NULL REFERENCES users(telegram_id) ON DELETE SET NULL"
+            )
+        )
+        await connection.execute(
+            text(
+                "CREATE UNIQUE INDEX IF NOT EXISTS uq_users_referral_code "
+                "ON users (referral_code) WHERE referral_code IS NOT NULL"
+            )
+        )
+        await connection.execute(
+            text(
+                "CREATE INDEX IF NOT EXISTS ix_users_referred_by_id "
+                "ON users (referred_by_id)"
+            )
+        )
+        await connection.execute(
+            text(
+                "ALTER TABLE orders ADD COLUMN IF NOT EXISTS "
+                "sales_channel VARCHAR(16) NOT NULL DEFAULT 'telegram'"
+            )
+        )
+        await connection.execute(
+            text(
+                "ALTER TABLE orders ADD COLUMN IF NOT EXISTS "
+                "api_client_id INTEGER NULL REFERENCES api_clients(id) ON DELETE SET NULL"
+            )
+        )
+        await connection.execute(
+            text(
+                "ALTER TABLE orders ADD COLUMN IF NOT EXISTS "
+                "api_order_request_id INTEGER NULL REFERENCES api_order_requests(id) "
+                "ON DELETE SET NULL"
+            )
+        )
+        await connection.execute(
+            text(
+                "CREATE INDEX IF NOT EXISTS ix_orders_sales_channel "
+                "ON orders (sales_channel)"
+            )
+        )
+        await connection.execute(
+            text("CREATE INDEX IF NOT EXISTS ix_orders_api_client_id ON orders (api_client_id)")
+        )
+        await connection.execute(
+            text(
+                "CREATE INDEX IF NOT EXISTS ix_orders_api_order_request_id "
+                "ON orders (api_order_request_id)"
+            )
+        )
+        await connection.execute(
+            text("UPDATE products SET allow_quantity = TRUE WHERE name_en = 'Demo account'")
         )
         await connection.execute(
             text(

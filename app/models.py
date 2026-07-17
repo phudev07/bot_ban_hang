@@ -1,6 +1,6 @@
 from datetime import datetime
 
-from sqlalchemy import BigInteger, Boolean, DateTime, ForeignKey, String, Text, func
+from sqlalchemy import BigInteger, Boolean, DateTime, ForeignKey, String, Text, UniqueConstraint, func
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.database import Base
@@ -16,6 +16,10 @@ class User(Base):
     balance: Mapped[int] = mapped_column(BigInteger, default=0)
     is_blocked: Mapped[bool] = mapped_column(Boolean, default=False)
     has_started: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
+    referral_code: Mapped[str | None] = mapped_column(String(24), nullable=True, unique=True)
+    referred_by_id: Mapped[int | None] = mapped_column(
+        ForeignKey("users.telegram_id", ondelete="SET NULL"), nullable=True, index=True
+    )
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
@@ -117,6 +121,13 @@ class Order(Base):
     discount_code: Mapped[str | None] = mapped_column(String(64), nullable=True)
     batch_code: Mapped[str | None] = mapped_column(String(32), nullable=True, index=True)
     supplier_order_code: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
+    sales_channel: Mapped[str] = mapped_column(String(16), default="telegram", index=True)
+    api_client_id: Mapped[int | None] = mapped_column(
+        ForeignKey("api_clients.id", ondelete="SET NULL"), nullable=True, index=True
+    )
+    api_order_request_id: Mapped[int | None] = mapped_column(
+        ForeignKey("api_order_requests.id", ondelete="SET NULL"), nullable=True, index=True
+    )
     status: Mapped[str] = mapped_column(String(20), default="completed")
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     delivered_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
@@ -172,6 +183,82 @@ class BalanceAdjustment(Base):
     amount: Mapped[int] = mapped_column(BigInteger)
     reason: Mapped[str] = mapped_column(String(500))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class ApiClient(Base):
+    __tablename__ = "api_clients"
+
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    owner_user_id: Mapped[int] = mapped_column(
+        ForeignKey("users.telegram_id", ondelete="CASCADE"), unique=True, index=True
+    )
+    api_id: Mapped[str] = mapped_column(String(40), unique=True, index=True)
+    encrypted_secret: Mapped[str] = mapped_column(Text)
+    secret_version: Mapped[int] = mapped_column(default=1)
+    active: Mapped[bool] = mapped_column(Boolean, default=True, index=True)
+    admin_blocked: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
+    rate_limit_per_minute: Mapped[int] = mapped_column(default=60)
+    allowed_ips: Mapped[str] = mapped_column(Text, default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    rotated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    last_used_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
+class ApiOrderRequest(Base):
+    __tablename__ = "api_order_requests"
+    __table_args__ = (
+        UniqueConstraint("api_client_id", "idempotency_key", name="uq_api_order_idempotency"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    api_client_id: Mapped[int] = mapped_column(
+        ForeignKey("api_clients.id", ondelete="CASCADE"), index=True
+    )
+    idempotency_key: Mapped[str] = mapped_column(String(128))
+    request_hash: Mapped[str] = mapped_column(String(64))
+    status: Mapped[str] = mapped_column(String(20), default="processing", index=True)
+    error_code: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    shop_order_code: Mapped[str | None] = mapped_column(String(32), nullable=True, index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
+
+
+class ApiRequestAudit(Base):
+    __tablename__ = "api_request_audits"
+
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    api_client_id: Mapped[int | None] = mapped_column(
+        ForeignKey("api_clients.id", ondelete="SET NULL"), nullable=True, index=True
+    )
+    method: Mapped[str] = mapped_column(String(10))
+    path: Mapped[str] = mapped_column(String(255))
+    status_code: Mapped[int]
+    client_ip: Mapped[str] = mapped_column(String(64), default="")
+    duration_ms: Mapped[int] = mapped_column(default=0)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), index=True
+    )
+
+
+class ReferralReward(Base):
+    __tablename__ = "referral_rewards"
+
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    referrer_user_id: Mapped[int] = mapped_column(
+        ForeignKey("users.telegram_id", ondelete="CASCADE"), index=True
+    )
+    referred_user_id: Mapped[int] = mapped_column(
+        ForeignKey("users.telegram_id", ondelete="CASCADE"), index=True
+    )
+    shop_order_code: Mapped[str] = mapped_column(String(32), unique=True, index=True)
+    order_amount: Mapped[int] = mapped_column(BigInteger)
+    commission_amount: Mapped[int] = mapped_column(BigInteger)
+    sales_channel: Mapped[str] = mapped_column(String(16), default="telegram", index=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), index=True
+    )
 
 
 class SupplierBalanceState(Base):

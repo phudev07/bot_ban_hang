@@ -17,6 +17,7 @@ from app.models import (
     Product,
     User,
 )
+from app.partner_services import award_referral_commission, ensure_referral_code
 from app.supplier_audit import record_supplier_purchase
 from app.suppliers import (
     SumistoreClient,
@@ -27,19 +28,31 @@ from app.suppliers import (
 from app.utils import SecretCipher, find_deposit_code
 
 
-async def ensure_user(session: AsyncSession, telegram_user: TelegramUser) -> User:
+async def ensure_user(
+    session: AsyncSession,
+    telegram_user: TelegramUser,
+    referral_code: str | None = None,
+) -> User:
     user = await session.get(User, telegram_user.id)
     if user is None:
+        referrer_id = None
+        normalized_referral = (referral_code or "").strip().upper()
+        if normalized_referral:
+            referrer_id = await session.scalar(
+                select(User.telegram_id).where(User.referral_code == normalized_referral)
+            )
         user = User(
             telegram_id=telegram_user.id,
             full_name=telegram_user.full_name,
             username=telegram_user.username,
+            referred_by_id=referrer_id,
         )
         session.add(user)
         await session.flush()
     else:
         user.full_name = telegram_user.full_name
         user.username = telegram_user.username
+    await ensure_referral_code(session, user)
     return user
 
 
@@ -224,6 +237,10 @@ async def purchase_product(
     *,
     coupon_code: str | None = None,
     coupon_id: int | None = None,
+    sales_channel: str = "telegram",
+    api_client_id: int | None = None,
+    api_order_request_id: int | None = None,
+    referral_commission_percent: int = 5,
 ) -> PurchaseResult:
     uses_supplier = False
     if supplier_client is not None:
@@ -245,6 +262,10 @@ async def purchase_product(
                 supplier_client,
                 coupon_code=coupon_code,
                 coupon_id=coupon_id,
+                sales_channel=sales_channel,
+                api_client_id=api_client_id,
+                api_order_request_id=api_order_request_id,
+                referral_commission_percent=referral_commission_percent,
             )
     return await _purchase_product(
         session_factory,
@@ -255,6 +276,10 @@ async def purchase_product(
         supplier_client,
         coupon_code=coupon_code,
         coupon_id=coupon_id,
+        sales_channel=sales_channel,
+        api_client_id=api_client_id,
+        api_order_request_id=api_order_request_id,
+        referral_commission_percent=referral_commission_percent,
     )
 
 
@@ -268,6 +293,10 @@ async def _purchase_product(
     *,
     coupon_code: str | None,
     coupon_id: int | None,
+    sales_channel: str,
+    api_client_id: int | None,
+    api_order_request_id: int | None,
+    referral_commission_percent: int,
 ) -> PurchaseResult:
     async with session_factory() as session:
         async with session.begin():
@@ -358,6 +387,9 @@ async def _purchase_product(
                         discount_code=pricing.coupon.code if pricing.coupon else None,
                         batch_code=batch_code,
                         supplier_order_code=supplier_purchase.order_code or None,
+                        sales_channel=sales_channel,
+                        api_client_id=api_client_id,
+                        api_order_request_id=api_order_request_id,
                         status="completed",
                         delivered_at=now,
                         product=product,
@@ -377,6 +409,14 @@ async def _purchase_product(
                 if pricing.coupon is not None:
                     pricing.coupon.used_count += 1
                 user.balance -= total_amount
+                await award_referral_commission(
+                    session,
+                    user,
+                    shop_order_code=batch_code,
+                    order_amount=total_amount,
+                    sales_channel=sales_channel,
+                    commission_percent=referral_commission_percent,
+                )
                 await session.flush()
                 return PurchaseResult(
                     True,
@@ -421,6 +461,9 @@ async def _purchase_product(
                     discount_code_id=pricing.coupon.id if pricing.coupon else None,
                     discount_code=pricing.coupon.code if pricing.coupon else None,
                     batch_code=batch_code,
+                    sales_channel=sales_channel,
+                    api_client_id=api_client_id,
+                    api_order_request_id=api_order_request_id,
                     status="completed",
                     delivered_at=now,
                     product=product,
@@ -431,6 +474,14 @@ async def _purchase_product(
                 secret_values.append(cipher.decrypt(item.encrypted_secret))
             if pricing.coupon is not None:
                 pricing.coupon.used_count += 1
+            await award_referral_commission(
+                session,
+                user,
+                shop_order_code=batch_code,
+                order_amount=total_amount,
+                sales_channel=sales_channel,
+                commission_percent=referral_commission_percent,
+            )
             await session.flush()
             return PurchaseResult(
                 True,
@@ -498,6 +549,7 @@ async def process_sepay_payment(
     payment_prefix: str = "NAP",
     cipher: SecretCipher | None = None,
     supplier_client: SumistoreClient | None = None,
+    referral_commission_percent: int = 5,
 ) -> PaymentResult:
     if supplier_client is not None:
         payment_text = " ".join(
@@ -523,6 +575,7 @@ async def process_sepay_payment(
                         payment_prefix,
                         cipher,
                         supplier_client,
+                        referral_commission_percent,
                     )
     return await _process_sepay_payment(
         session_factory,
@@ -530,6 +583,7 @@ async def process_sepay_payment(
         payment_prefix,
         cipher,
         supplier_client,
+        referral_commission_percent,
     )
 
 
@@ -539,6 +593,7 @@ async def _process_sepay_payment(
     payment_prefix: str,
     cipher: SecretCipher | None,
     supplier_client: SumistoreClient | None,
+    referral_commission_percent: int,
 ) -> PaymentResult:
     transfer_type = str(payload.get("transferType") or payload.get("transfer_type") or "").lower()
     if transfer_type and transfer_type not in {"in", "credit", "incoming"}:
@@ -680,6 +735,7 @@ async def _process_sepay_payment(
                             discount_code=deposit.discount_code,
                             batch_code=batch_code,
                             supplier_order_code=supplier_order_code,
+                            sales_channel="telegram",
                             status="completed",
                             delivered_at=now,
                         )
@@ -702,6 +758,14 @@ async def _process_sepay_payment(
                         )
                         if coupon is not None:
                             coupon.used_count += 1
+                    await award_referral_commission(
+                        session,
+                        user,
+                        shop_order_code=batch_code,
+                        order_amount=amount,
+                        sales_channel="telegram",
+                        commission_percent=referral_commission_percent,
+                    )
                     deposit.status = "paid"
                     deposit.paid_amount = (deposit.paid_amount or 0) + amount
                     deposit.paid_at = now

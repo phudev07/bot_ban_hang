@@ -11,6 +11,7 @@ from app.models import (
     InventoryItem,
     Order,
     Product,
+    ReferralReward,
     User,
 )
 from app.services import (
@@ -605,6 +606,70 @@ def test_external_direct_payment_delivers_supplier_account() -> None:
             assert order is not None and order.amount == 20_000
             assert order.cost_amount == 15_000
             assert order.supplier_order_code == "API-TELE-TEST123"
+        await engine.dispose()
+
+    asyncio.run(scenario())
+
+
+def test_direct_qr_purchase_pays_referral_commission() -> None:
+    async def scenario() -> None:
+        engine, sessions = await make_database()
+        cipher = SecretCipher(Fernet.generate_key().decode())
+        async with sessions() as session:
+            referrer = User(telegram_id=70001, full_name="Referrer", balance=0)
+            buyer = User(
+                telegram_id=70002,
+                full_name="Buyer",
+                balance=0,
+                referred_by_id=referrer.telegram_id,
+            )
+            category = Category(name_vi="Tài khoản", name_en="Accounts")
+            session.add_all([referrer, buyer, category])
+            await session.flush()
+            product = Product(
+                category_id=category.id,
+                name_vi="Tài khoản QR",
+                name_en="QR account",
+                price=20_000,
+            )
+            session.add(product)
+            await session.flush()
+            session.add(
+                InventoryItem(
+                    product_id=product.id,
+                    encrypted_secret=cipher.encrypt("qr-account|password"),
+                )
+            )
+            session.add(
+                Deposit(
+                    user_id=buyer.telegram_id,
+                    code="NAP70002ABCD",
+                    requested_amount=20_000,
+                    payment_kind="direct_purchase",
+                    product_id=product.id,
+                )
+            )
+            await session.commit()
+
+        result = await process_sepay_payment(
+            sessions,
+            {
+                "id": 70002001,
+                "transferType": "in",
+                "transferAmount": 20_000,
+                "content": "NAP70002ABCD",
+            },
+            cipher=cipher,
+            referral_commission_percent=5,
+        )
+        assert result.status == "direct_purchase_completed"
+        async with sessions() as session:
+            referrer = await session.get(User, 70001)
+            reward = await session.scalar(select(ReferralReward))
+            assert referrer is not None and referrer.balance == 1_000
+            assert reward is not None and reward.order_amount == 20_000
+            assert reward.commission_amount == 1_000
+            assert reward.sales_channel == "telegram"
         await engine.dispose()
 
     asyncio.run(scenario())

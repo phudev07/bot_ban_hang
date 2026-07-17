@@ -18,9 +18,85 @@ giao hang tu dong va menu tieng Viet/Anh.
   nam va toan bo lich su; gia von thuc te duoc luu theo tung don.
 - Ma giam gia theo tung san pham, ho tro giam so tien hoac phan tram, thoi han va
   gioi han luot su dung cho ca mua bang vi va thanh toan QR.
+- API dau kho tai `https://token.vietshare.site/v1`: doi tac dong bo san pham,
+  gia ban, ton kho, nap vi va dat mua tai khoan tu dong.
+- Moi nick Telegram tu co mot API client khi mo muc `API dau kho`; API ID co dinh,
+  API Secret co the tu doi va secret cu mat hieu luc ngay.
+- Gioi thieu ban be nhan 5% so tien thuc tra cua moi don thanh cong. Hoa hong duoc
+  cong vao vi mot lan cho moi ma don shop, ke ca don Telegram, QR va API.
 
-Chi ban tai khoan, key hoac quyen truy cap ma ban co quyen phan phoi. Voi dich vu
-LLM, nen cap sub-key co quota qua gateway rieng thay vi giao master API key.
+Chi ban tai khoan ma ban co quyen phan phoi.
+
+## API dau kho
+
+Base URL production:
+
+```text
+https://token.vietshare.site/v1
+```
+
+API nay danh cho shop doi tac dau noi kho tai khoan, khong phai API quan tri bot.
+Tien mua hang duoc tru truc tiep tu vi Telegram cua chu API client. Gia san pham
+Sumistore la gia dong: shop dong bo gia von, cong markup va luu gia von thuc te
+vao tung don khi giao hang.
+
+Endpoint:
+
+```text
+GET  /account
+GET  /products
+GET  /catalog
+GET  /products/{product_id}
+GET  /stock/{product_id}
+POST /orders
+GET  /orders
+GET  /orders/{order_code}
+POST /deposits
+GET  /deposits/{deposit_code}
+```
+
+Moi request co xac thuc phai gui cac header:
+
+```text
+X-Shop-API-ID: VS...
+X-Timestamp: 1752796800
+X-Nonce: mot_chuoi_ngau_nhien_toi_thieu_12_ky_tu
+X-Signature: hmac_sha256_hex
+```
+
+Chuoi ky:
+
+```text
+timestamp|nonce|METHOD|PATH_WITH_QUERY|sha256(raw_body)
+```
+
+Vi du Python tao chu ky:
+
+```python
+import hashlib
+import hmac
+
+body = b'{"product_id":1,"quantity":2}'
+canonical = "|".join(
+    (timestamp, nonce, "POST", "/v1/orders", hashlib.sha256(body).hexdigest())
+)
+signature = hmac.new(api_secret.encode(), canonical.encode(), hashlib.sha256).hexdigest()
+```
+
+`POST /orders` bat buoc co them `Idempotency-Key` dai 8-128 ky tu. Gui lai cung
+key va cung payload se tra lai don cu, khong tru tien va khong lay hang lan hai.
+Khong tai su dung key do cho payload khac.
+
+Body dat hang:
+
+```json
+{"product_id": 1, "quantity": 2, "coupon_code": "SALE10"}
+```
+
+He thong khoa dong vi, khoa ton kho local bang `FOR UPDATE SKIP LOCKED`, khoa
+luong mua Sumistore va co unique idempotency trong PostgreSQL. Vi vay nhieu doi
+tac dat hang hoac thanh toan cung luc khong duoc ban trung tai khoan hay tru tien
+lap.
 
 ## Cai tren Ubuntu 22.04
 

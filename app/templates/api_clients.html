@@ -1,0 +1,42 @@
+{% extends "base.html" %}
+{% block content %}
+<section class="page-intro api-intro">
+  <div><span>WAREHOUSE PARTNERS</span><h2>Mỗi nick tự có một cổng đấu kho.</h2><p>Người dùng tự tạo và đổi API Secret trong bot. Admin chỉ theo dõi, giới hạn IP, tốc độ và khóa client vi phạm.</p></div>
+  <div class="intro-badges"><b>Base URL {{ api_base_url }}</b><b>HMAC + nonce</b><b>Trừ ví theo Telegram ID</b></div>
+</section>
+
+<section class="mini-metrics">
+  <article><span>API client</span><strong>{{ stats.clients }}</strong><small>mỗi nick tối đa một client</small></article>
+  <article><span>Đang hoạt động</span><strong>{{ stats.active }}</strong><small>client có thể gọi API</small></article>
+  <article><span>Đơn API</span><strong>{{ stats.api_orders }}</strong><small>đơn đấu kho hoàn thành</small></article>
+  <article><span>Doanh thu API</span><strong>{{ stats.api_revenue|vnd }}</strong><small>trước giá vốn và hoa hồng</small></article>
+</section>
+
+<section class="panel">
+  <div class="panel-head"><div><span>CLIENT DIRECTORY</span><h2>API đấu kho của người dùng</h2></div><a href="/admin/api-orders">Xem đơn API →</a></div>
+  <div class="api-client-list">
+  {% for row in clients %}{% set client = row.client %}{% set user = row.user %}
+    <article class="api-client-card">
+      <div class="api-client-head">
+        <div><strong>{{ user.full_name }}</strong><small>@{{ user.username or '—' }} · <code>{{ user.telegram_id }}</code></small></div>
+        <span class="status {{ 'off' if client.admin_blocked else 'on' if client.active else 'wait' }}">{{ 'Admin khóa' if client.admin_blocked else 'Đang bật' if client.active else 'Người dùng tắt' }}</span>
+      </div>
+      <dl class="api-client-stats">
+        <div><dt>API ID</dt><dd><code>{{ client.api_id }}</code></dd></div>
+        <div><dt>Số dư ví</dt><dd>{{ user.balance|vnd }}</dd></div>
+        <div><dt>Đơn / doanh thu</dt><dd>{{ row.order_count }} · {{ row.revenue|vnd }}</dd></div>
+        <div><dt>Request</dt><dd>{{ row.request_count }} · cuối {{ row.last_request_at|localtime }}</dd></div>
+        <div><dt>Đổi secret</dt><dd>v{{ client.secret_version }} · {{ client.rotated_at|localtime }}</dd></div>
+      </dl>
+      <form class="api-client-form" method="post" action="/admin/api-clients/{{ client.id }}">
+        <input type="hidden" name="csrf" value="{{ csrf_token }}">
+        <label>Request/phút<input type="number" name="rate_limit_per_minute" value="{{ client.rate_limit_per_minute }}" min="1" max="10000"></label>
+        <label class="wide">IP cho phép<textarea name="allowed_ips" rows="2" placeholder="Để trống = mọi IP; phân cách bằng dấu phẩy">{{ client.allowed_ips }}</textarea></label>
+        <label class="check"><input type="checkbox" name="admin_blocked" {{ 'checked' if client.admin_blocked else '' }}>Đình chỉ bởi admin</label>
+        <button class="button primary" type="submit">Lưu client</button>
+      </form>
+    </article>
+  {% else %}<p class="empty">Chưa có người dùng nào mở mục API đấu kho trong bot.</p>{% endfor %}
+  </div>
+</section>
+{% endblock %}

@@ -98,7 +98,7 @@ def test_dashboard_login_catalog_inventory_and_balance(tmp_path) -> None:
         home = client.get("/admin")
         assert home.status_code == 200
         assert "Thành viên mới hôm nay" in home.text
-        assert "Lợi nhuận gộp" in home.text
+        assert "Lợi nhuận ròng" in home.text
         assert "Giá vốn API" in home.text
         assert "50.000đ" in home.text
         token_match = re.search(r'name="csrf" value="([^"]+)"', home.text)
@@ -167,6 +167,14 @@ def test_dashboard_login_catalog_inventory_and_balance(tmp_path) -> None:
         assert supplier_audit_page.status_code == 200
         assert "Giao dịch đáng ngờ" in supplier_audit_page.text
         assert 'action="/admin/supplier-audit/reconcile"' in supplier_audit_page.text
+
+        api_clients_page = client.get("/admin/api-clients")
+        assert api_clients_page.status_code == 200
+        assert "API đấu kho" in api_clients_page.text
+
+        referrals_page = client.get("/admin/referrals")
+        assert referrals_page.status_code == 200
+        assert "Hoa hồng 5%" in referrals_page.text
 
         products_page = client.get("/admin/products")
         category_id = int(

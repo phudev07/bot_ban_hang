@@ -1,5 +1,6 @@
 from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 from aiogram.utils.keyboard import InlineKeyboardBuilder
+from urllib.parse import quote
 
 from app.i18n import tr
 from app.models import Category, Order, Product
@@ -21,11 +22,75 @@ def main_menu(language: str) -> InlineKeyboardMarkup:
         InlineKeyboardButton(text=tr(language, "profile"), callback_data="menu:profile"),
     )
     builder.row(
+        InlineKeyboardButton(
+            text=tr(language, "warehouse_api"), callback_data="menu:warehouse-api"
+        ),
+        InlineKeyboardButton(text=tr(language, "referral"), callback_data="menu:referral"),
+    )
+    builder.row(
         InlineKeyboardButton(text=tr(language, "support"), callback_data="menu:support"),
         InlineKeyboardButton(text=tr(language, "clear"), callback_data="menu:clear"),
     )
     builder.row(InlineKeyboardButton(text=tr(language, "language"), callback_data="menu:language"))
     return builder.as_markup()
+
+
+def warehouse_api_menu(
+    language: str,
+    active: bool,
+    admin_blocked: bool = False,
+) -> InlineKeyboardMarkup:
+    rotate_text = "🔄 Đổi API Secret" if language == "vi" else "🔄 Rotate API Secret"
+    toggle_text = (
+        "⛔ Tạm khóa API" if active and language == "vi"
+        else "✅ Mở lại API" if language == "vi"
+        else "⛔ Disable API" if active
+        else "✅ Enable API"
+    )
+    guide_text = "📘 Hướng dẫn đấu kho" if language == "vi" else "📘 Integration guide"
+    toggle_button = (
+        InlineKeyboardButton(
+            text="🔒 Admin đã khóa" if language == "vi" else "🔒 Suspended by admin",
+            callback_data="warehouse-api:blocked",
+        )
+        if admin_blocked
+        else InlineKeyboardButton(text=toggle_text, callback_data="warehouse-api:toggle")
+    )
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [InlineKeyboardButton(text=guide_text, callback_data="warehouse-api:guide")],
+            [InlineKeyboardButton(text=rotate_text, callback_data="warehouse-api:rotate")],
+            [toggle_button],
+            [InlineKeyboardButton(text=tr(language, "back"), callback_data="back:menu")],
+        ]
+    )
+
+
+def warehouse_api_rotate_confirmation(language: str) -> InlineKeyboardMarkup:
+    confirm = "✅ Xác nhận đổi Secret" if language == "vi" else "✅ Confirm rotation"
+    cancel = "❌ Hủy" if language == "vi" else "❌ Cancel"
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [InlineKeyboardButton(text=confirm, callback_data="warehouse-api:rotate-confirm")],
+            [InlineKeyboardButton(text=cancel, callback_data="menu:warehouse-api")],
+        ]
+    )
+
+
+def referral_menu(language: str, referral_url: str) -> InlineKeyboardMarkup:
+    share_text = (
+        "Mua tài khoản tự động tại PHP Tool Shop và nhận hàng ngay."
+        if language == "vi"
+        else "Buy digital accounts automatically from PHP Tool Shop."
+    )
+    share_url = f"https://t.me/share/url?url={quote(referral_url)}&text={quote(share_text)}"
+    label = "📤 Chia sẻ link mời" if language == "vi" else "📤 Share referral link"
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [InlineKeyboardButton(text=label, url=share_url)],
+            [InlineKeyboardButton(text=tr(language, "back"), callback_data="back:menu")],
+        ]
+    )
 
 
 def categories_menu(categories: list[Category], language: str) -> InlineKeyboardMarkup:

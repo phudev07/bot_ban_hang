@@ -1,11 +1,14 @@
 import hmac
 import json
 import logging
+import time
+from contextlib import asynccontextmanager, suppress
 from pathlib import Path
 
 from aiogram import Bot
 from fastapi import FastAPI, Header, HTTPException, Request
 from fastapi.staticfiles import StaticFiles
+from redis.asyncio import Redis
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from starlette.middleware.sessions import SessionMiddleware
 
@@ -14,6 +17,8 @@ from app.dashboard import create_dashboard_router
 from app.deposit_notifications import send_deposit_notification
 from app.delivery import delivery_keyboard, delivery_text
 from app.keyboards import main_menu
+from app.models import ApiRequestAudit
+from app.public_api import client_ip, create_public_api_router
 from app.services import process_sepay_payment
 from app.suppliers import SumistoreClient
 from app.utils import SecretCipher, format_vnd, verify_sepay_hmac
@@ -42,8 +47,25 @@ def create_api(
     cipher: SecretCipher,
     supplier_client: SumistoreClient | None = None,
     deposit_notification_bot: Bot | None = None,
+    api_redis: Redis | None = None,
 ) -> FastAPI:
-    app = FastAPI(title="Telegram SePay Shop", docs_url=None, redoc_url=None)
+    owned_api_redis = api_redis is None
+    api_redis_client = api_redis or Redis.from_url(settings.redis_url, decode_responses=True)
+
+    @asynccontextmanager
+    async def lifespan(_app: FastAPI):
+        try:
+            yield
+        finally:
+            if owned_api_redis:
+                await api_redis_client.aclose()
+
+    app = FastAPI(
+        title="Telegram SePay Shop",
+        docs_url=None,
+        redoc_url=None,
+        lifespan=lifespan,
+    )
     if settings.dashboard_enabled:
         app.add_middleware(
             SessionMiddleware,
@@ -74,6 +96,42 @@ def create_api(
                 supplier_client,
             )
         )
+
+    if settings.shop_api_enabled:
+        app.include_router(
+            create_public_api_router(
+                settings,
+                session_factory,
+                cipher,
+                supplier_client,
+                api_redis_client,
+            )
+        )
+
+        @app.middleware("http")
+        async def audit_shop_api(request: Request, call_next):
+            if not request.url.path.startswith("/v1"):
+                return await call_next(request)
+            started = time.perf_counter()
+            status_code = 500
+            try:
+                response = await call_next(request)
+                status_code = response.status_code
+                return response
+            finally:
+                with suppress(Exception):
+                    async with session_factory() as session:
+                        session.add(
+                            ApiRequestAudit(
+                                api_client_id=getattr(request.state, "api_client_id", None),
+                                method=request.method,
+                                path=request.url.path[:255],
+                                status_code=status_code,
+                                client_ip=client_ip(request)[:64],
+                                duration_ms=int((time.perf_counter() - started) * 1000),
+                            )
+                        )
+                        await session.commit()
 
     @app.get("/health")
     async def health() -> dict[str, str]:
@@ -116,6 +174,7 @@ def create_api(
             settings.payment_prefix,
             cipher,
             supplier_client,
+            settings.referral_commission_percent,
         )
         logger.info("SePay webhook processed: status=%s", result.status)
         if result.status == "deposit_not_found":

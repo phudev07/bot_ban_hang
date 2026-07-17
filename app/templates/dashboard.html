@@ -14,8 +14,8 @@
   {% for key, label in [('today', 'Hôm nay'), ('month', 'Tháng này'), ('year', 'Năm nay'), ('all', 'Toàn thời gian')] %}{% set item = financials[key] %}
   <article class="finance-card {{ 'featured' if key == 'month' else '' }}">
     <div class="finance-card-head"><span>{{ label }}</span><b>{{ item.orders }} đơn hàng</b></div>
-    <strong>{{ item.profit|vnd }}</strong><small>Lợi nhuận gộp · biên {{ item.margin }}%</small>
-    <dl><div><dt>Doanh thu</dt><dd>{{ item.revenue|vnd }}</dd></div><div><dt>Giá vốn API</dt><dd>{{ item.cost|vnd }}</dd></div><div><dt>Đã giảm giá</dt><dd>{{ item.discount|vnd }}</dd></div></dl>
+    <strong>{{ item.profit|vnd }}</strong><small>Lợi nhuận ròng · biên {{ item.margin }}%</small>
+    <dl><div><dt>Doanh thu</dt><dd>{{ item.revenue|vnd }}</dd></div><div><dt>Giá vốn API</dt><dd>{{ item.cost|vnd }}</dd></div><div><dt>Hoa hồng 5%</dt><dd>{{ item.referral|vnd }}</dd></div><div><dt>Đã giảm giá</dt><dd>{{ item.discount|vnd }}</dd></div></dl>
   </article>
   {% endfor %}
 </section>
@@ -58,8 +58,8 @@
 
 <section class="panel">
   <div class="panel-head"><div><span>MONTHLY P&L</span><h2>Kết quả từng tháng trong năm</h2></div><small>Tháng gần nhất hiển thị trước</small></div>
-  <div class="table-wrap"><table class="financial-table"><thead><tr><th>Tháng</th><th>Đơn hàng</th><th>Doanh thu</th><th>Giá vốn API</th><th>Giảm giá</th><th>Lợi nhuận</th><th>Biên lãi</th></tr></thead><tbody>
-    {% for row in monthly_performance %}<tr><td><strong>{{ row.label }}</strong></td><td>{{ row.orders }}</td><td>{{ row.revenue|vnd }}</td><td>{{ row.cost|vnd }}</td><td>{{ row.discount|vnd }}</td><td><strong class="profit-text {{ 'loss' if row.profit < 0 else '' }}">{{ row.profit|vnd }}</strong></td><td>{{ ((row.profit / row.revenue * 100)|round(1)) if row.revenue else 0 }}%</td></tr>{% endfor %}
+  <div class="table-wrap"><table class="financial-table"><thead><tr><th>Tháng</th><th>Đơn hàng</th><th>Doanh thu</th><th>Giá vốn API</th><th>Hoa hồng</th><th>Giảm giá</th><th>Lợi nhuận ròng</th><th>Biên lãi</th></tr></thead><tbody>
+    {% for row in monthly_performance %}<tr><td><strong>{{ row.label }}</strong></td><td>{{ row.orders }}</td><td>{{ row.revenue|vnd }}</td><td>{{ row.cost|vnd }}</td><td>{{ row.referral|vnd }}</td><td>{{ row.discount|vnd }}</td><td><strong class="profit-text {{ 'loss' if row.profit < 0 else '' }}">{{ row.profit|vnd }}</strong></td><td>{{ ((row.profit / row.revenue * 100)|round(1)) if row.revenue else 0 }}%</td></tr>{% endfor %}
   </tbody></table></div>
 </section>
 

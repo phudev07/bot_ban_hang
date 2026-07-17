@@ -41,6 +41,12 @@ class Settings(BaseSettings):
     sumistore_sync_seconds: int = 60
     sumistore_audit_seconds: int = 30
 
+    shop_api_enabled: bool = True
+    shop_api_base_url: str = "https://token.vietshare.site/v1"
+    shop_api_rate_limit_per_minute: int = 60
+    shop_api_signature_tolerance_seconds: int = 300
+    referral_commission_percent: int = 5
+
     inventory_encryption_key: SecretStr
     web_host: str = "0.0.0.0"
     web_port: int = 8080
@@ -91,6 +97,12 @@ class Settings(BaseSettings):
             raise ValueError("Sumistore price configuration is invalid")
         if self.sumistore_audit_seconds < 10:
             raise ValueError("Sumistore audit interval must be at least 10 seconds")
+        if self.shop_api_rate_limit_per_minute < 1:
+            raise ValueError("Shop API rate limit must be positive")
+        if self.shop_api_signature_tolerance_seconds < 30:
+            raise ValueError("Shop API signature tolerance is too small")
+        if not 0 <= self.referral_commission_percent <= 100:
+            raise ValueError("Referral commission percent must be between 0 and 100")
         return self
 
     @property

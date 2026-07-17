@@ -31,6 +31,8 @@
         <a class="{{ 'active' if section == 'payments' else '' }}" href="/admin/payments"><span>↗</span>Dòng tiền</a>
         <a class="{{ 'active' if section == 'system' else '' }}" href="/admin/system"><span>⚙</span>Hệ thống</a>
         <a class="{{ 'active' if section == 'supplier-audit' else '' }}" href="/admin/supplier-audit"><span>!</span>Giao dịch đáng ngờ</a>
+        <a class="{{ 'active' if section == 'api-clients' else '' }}" href="/admin/api-clients"><span>⌘</span>API đấu kho</a>
+        <a class="{{ 'active' if section == 'referrals' else '' }}" href="/admin/referrals"><span>↗</span>Giới thiệu bạn bè</a>
       </nav>
       <form class="logout" method="post" action="/admin/logout">
         <input type="hidden" name="csrf" value="{{ csrf_token }}">

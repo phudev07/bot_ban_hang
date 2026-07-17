@@ -3,8 +3,10 @@ from html import escape
 from aiogram import Bot, F, Router
 from aiogram.exceptions import TelegramBadRequest
 from aiogram.filters import Command, CommandStart
+from aiogram.filters.command import CommandObject
 from aiogram.fsm.context import FSMContext
 from aiogram.types import CallbackQuery, Message
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.chat_cleanup import delete_recent_messages
@@ -26,8 +28,12 @@ from app.keyboards import (
     products_menu,
     purchase_payment_options,
     quantity_menu,
+    referral_menu,
+    warehouse_api_menu,
+    warehouse_api_rotate_confirmation,
 )
-from app.models import Product, User
+from app.models import ApiClient, Product, User
+from app.partner_services import ensure_api_client, referral_stats, rotate_api_secret
 from app.services import (
     active_categories,
     active_products,
@@ -76,12 +82,14 @@ def home_text(user: User, settings: Settings) -> str:
 
 
 async def get_or_create_user(
-    message_or_callback: Message | CallbackQuery, session: AsyncSession
+    message_or_callback: Message | CallbackQuery,
+    session: AsyncSession,
+    referral_code: str | None = None,
 ) -> User:
     telegram_user = message_or_callback.from_user
     if telegram_user is None:
         raise RuntimeError("Telegram update has no user")
-    user = await ensure_user(session, telegram_user)
+    user = await ensure_user(session, telegram_user, referral_code)
     await session.commit()
     return user
 
@@ -135,9 +143,17 @@ def create_router(
         )
 
     @router.message(CommandStart())
-    async def start(message: Message, session: AsyncSession, state: FSMContext) -> None:
+    async def start(
+        message: Message,
+        session: AsyncSession,
+        state: FSMContext,
+        command: CommandObject,
+    ) -> None:
         await state.clear()
-        user = await get_or_create_user(message, session)
+        referral_code = None
+        if command.args and command.args.lower().startswith("ref_"):
+            referral_code = command.args[4:]
+        user = await get_or_create_user(message, session, referral_code)
         user.has_started = True
         await session.commit()
         await message.answer(
@@ -351,6 +367,7 @@ def create_router(
             quantity,
             supplier_client,
             coupon_id=coupon_id,
+            referral_commission_percent=settings.referral_commission_percent,
         )
         messages_vi = {
             "out_of_stock": "Sản phẩm vừa hết hàng.",
@@ -1086,6 +1103,204 @@ def create_router(
             await callback.message.edit_text(
                 await profile_text(user, session),
                 reply_markup=back_menu(user.language),
+            )
+        await callback.answer()
+
+    async def warehouse_api_text(user: User, client: ApiClient) -> str:
+        status = (
+            "Bị admin đình chỉ"
+            if client.admin_blocked
+            else "Đang bật" if client.active else "Người dùng tạm khóa"
+        )
+        if user.language == "en":
+            status = (
+                "Suspended by admin"
+                if client.admin_blocked
+                else "Enabled" if client.active else "Disabled by user"
+            )
+            return (
+                "🔌 <b>Warehouse integration API</b>\n\n"
+                f"• API ID: <code>{escape(client.api_id)}</code>\n"
+                f"• Status: <b>{status}</b>\n"
+                f"• Wallet balance: <b>{format_vnd(user.balance)}</b>\n"
+                f"• Base URL: <code>{escape(settings.shop_api_base_url)}</code>\n"
+                f"• Limit: <b>{client.rate_limit_per_minute} requests/minute</b>\n\n"
+                "Use this API to synchronize products, prices and stock, then buy accounts "
+                "automatically from another shop. The API uses this Telegram account's wallet."
+            )
+        return (
+            "🔌 <b>API đấu kho hàng</b>\n\n"
+            f"• API ID: <code>{escape(client.api_id)}</code>\n"
+            f"• Trạng thái: <b>{status}</b>\n"
+            f"• Số dư dùng mua hàng: <b>{format_vnd(user.balance)}</b>\n"
+            f"• Base URL: <code>{escape(settings.shop_api_base_url)}</code>\n"
+            f"• Giới hạn: <b>{client.rate_limit_per_minute} request/phút</b>\n\n"
+            "API dùng để đồng bộ sản phẩm, giá, tồn kho và mua tài khoản tự động từ shop khác. "
+            "Mọi đơn API trừ trực tiếp vào ví của nick Telegram này."
+        )
+
+    @router.callback_query(F.data == "menu:warehouse-api")
+    async def show_warehouse_api(callback: CallbackQuery, session: AsyncSession) -> None:
+        user = await get_or_create_user(callback, session)
+        client, new_secret = await ensure_api_client(
+            session,
+            user.telegram_id,
+            cipher,
+            settings.shop_api_rate_limit_per_minute,
+        )
+        await session.commit()
+        if callback.message:
+            await callback.message.edit_text(
+                await warehouse_api_text(user, client),
+                reply_markup=warehouse_api_menu(
+                    user.language,
+                    client.active,
+                    client.admin_blocked,
+                ),
+            )
+            if new_secret:
+                warning = (
+                    "⚠️ <b>API Secret chỉ hiển thị lần này</b>\n"
+                    f"<code>{escape(new_secret)}</code>\n\n"
+                    "Hãy lưu lại ngay. Nếu mất, bạn cần bấm Đổi API Secret."
+                    if user.language == "vi"
+                    else "⚠️ <b>This API Secret is shown once</b>\n"
+                    f"<code>{escape(new_secret)}</code>\n\n"
+                    "Save it now. Rotate the secret if it is lost."
+                )
+                await callback.message.answer(warning)
+        await callback.answer()
+
+    @router.callback_query(F.data == "warehouse-api:guide")
+    async def warehouse_api_guide(callback: CallbackQuery, session: AsyncSession) -> None:
+        user = await get_or_create_user(callback, session)
+        text = (
+            "📘 <b>Đấu kho qua API</b>\n\n"
+            f"Base URL: <code>{escape(settings.shop_api_base_url)}</code>\n\n"
+            "1. <code>GET /products</code> hoặc <code>GET /catalog</code>: đồng bộ sản phẩm, giá và tồn.\n"
+            "2. <code>POST /orders</code>: mua hàng, bắt buộc có <code>Idempotency-Key</code>.\n"
+            "3. <code>GET /orders/{order_code}</code>: lấy lại đơn và tài khoản.\n\n"
+            "Header xác thực: <code>X-Shop-API-ID</code>, <code>X-Timestamp</code>, "
+            "<code>X-Nonce</code>, <code>X-Signature</code>.\n"
+            "Chữ ký HMAC-SHA256: timestamp|nonce|METHOD|PATH|sha256(body)."
+            if user.language == "vi"
+            else "📘 <b>Warehouse API integration</b>\n\n"
+            f"Base URL: <code>{escape(settings.shop_api_base_url)}</code>\n\n"
+            "Use <code>GET /products</code> to synchronize catalog and stock, "
+            "<code>POST /orders</code> to purchase, and <code>GET /orders/{order_code}</code> "
+            "to retrieve delivered accounts. Every purchase requires an Idempotency-Key."
+        )
+        if callback.message:
+            await callback.message.edit_text(text, reply_markup=back_menu(user.language))
+        await callback.answer()
+
+    @router.callback_query(F.data == "warehouse-api:rotate")
+    async def confirm_api_rotation(callback: CallbackQuery, session: AsyncSession) -> None:
+        user = await get_or_create_user(callback, session)
+        text = (
+            "Đổi API Secret sẽ làm secret cũ mất hiệu lực ngay. Bạn chắc chắn muốn đổi?"
+            if user.language == "vi"
+            else "Rotating the API Secret immediately invalidates the old secret. Continue?"
+        )
+        if callback.message:
+            await callback.message.edit_text(
+                text,
+                reply_markup=warehouse_api_rotate_confirmation(user.language),
+            )
+        await callback.answer()
+
+    @router.callback_query(F.data == "warehouse-api:rotate-confirm")
+    async def rotate_warehouse_api(callback: CallbackQuery, session: AsyncSession) -> None:
+        user = await get_or_create_user(callback, session)
+        client, secret = await rotate_api_secret(session, user.telegram_id, cipher)
+        await session.commit()
+        if callback.message:
+            await callback.message.edit_text(
+                await warehouse_api_text(user, client),
+                reply_markup=warehouse_api_menu(
+                    user.language,
+                    client.active,
+                    client.admin_blocked,
+                ),
+            )
+            await callback.message.answer(
+                (
+                    "✅ <b>API Secret mới</b>\n"
+                    f"<code>{escape(secret)}</code>\n\nSecret cũ đã bị khóa. Hãy lưu secret mới ngay."
+                    if user.language == "vi"
+                    else "✅ <b>New API Secret</b>\n"
+                    f"<code>{escape(secret)}</code>\n\nThe old secret is disabled. Save this one now."
+                )
+            )
+        await callback.answer("Đã đổi API Secret" if user.language == "vi" else "Secret rotated")
+
+    @router.callback_query(F.data == "warehouse-api:toggle")
+    async def toggle_warehouse_api(callback: CallbackQuery, session: AsyncSession) -> None:
+        user = await get_or_create_user(callback, session)
+        client = await session.scalar(
+            select(ApiClient)
+            .where(ApiClient.owner_user_id == user.telegram_id)
+            .with_for_update()
+        )
+        if client is None:
+            client, _ = await ensure_api_client(
+                session,
+                user.telegram_id,
+                cipher,
+                settings.shop_api_rate_limit_per_minute,
+            )
+        if client.admin_blocked:
+            await callback.answer(
+                "API đang bị admin đình chỉ. Hãy liên hệ hỗ trợ.",
+                show_alert=True,
+            )
+            return
+        client.active = not client.active
+        await session.commit()
+        if callback.message:
+            await callback.message.edit_text(
+                await warehouse_api_text(user, client),
+                reply_markup=warehouse_api_menu(
+                    user.language,
+                    client.active,
+                    client.admin_blocked,
+                ),
+            )
+        await callback.answer()
+
+    @router.callback_query(F.data == "warehouse-api:blocked")
+    async def warehouse_api_blocked(callback: CallbackQuery) -> None:
+        await callback.answer(
+            "API đang bị admin đình chỉ. Hãy liên hệ hỗ trợ.",
+            show_alert=True,
+        )
+
+    @router.callback_query(F.data == "menu:referral")
+    async def show_referral(callback: CallbackQuery, bot: Bot, session: AsyncSession) -> None:
+        user = await get_or_create_user(callback, session)
+        stats = await referral_stats(session, user.telegram_id)
+        bot_user = await bot.get_me()
+        referral_url = f"https://t.me/{bot_user.username}?start=ref_{user.referral_code}"
+        text = (
+            "🎁 <b>Giới thiệu bạn bè · Hoa hồng 5%</b>\n\n"
+            f"Link của bạn:\n<code>{escape(referral_url)}</code>\n\n"
+            f"• Người đã mời: <b>{stats.invited_users}</b>\n"
+            f"• Đơn đã nhận hoa hồng: <b>{stats.rewarded_orders}</b>\n"
+            f"• Tổng hoa hồng: <b>{format_vnd(stats.total_commission)}</b>\n\n"
+            "Bạn nhận 5% số tiền thực trả của mọi đơn thành công từ người được giới thiệu. "
+            "Hoa hồng được cộng thẳng vào ví."
+            if user.language == "vi"
+            else "🎁 <b>Refer friends · 5% commission</b>\n\n"
+            f"Your link:\n<code>{escape(referral_url)}</code>\n\n"
+            f"• Invited users: <b>{stats.invited_users}</b>\n"
+            f"• Rewarded orders: <b>{stats.rewarded_orders}</b>\n"
+            f"• Total commission: <b>{format_vnd(stats.total_commission)}</b>"
+        )
+        if callback.message:
+            await callback.message.edit_text(
+                text,
+                reply_markup=referral_menu(user.language, referral_url),
+                disable_web_page_preview=True,
             )
         await callback.answer()
 

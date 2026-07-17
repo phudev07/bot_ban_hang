@@ -1,0 +1,33 @@
+{% extends "base.html" %}
+{% block content %}
+<section class="page-intro referral-intro">
+  <div><span>REFERRAL ENGINE</span><h2>Hoa hồng {{ commission_percent }}% trên mọi đơn thành công.</h2><p>Hoa hồng tính trên số tiền thực trả sau giảm giá, cộng thẳng vào ví và chỉ ghi một lần cho mỗi mã đơn shop.</p></div>
+  <div class="intro-badges"><b>Ví + QR + API</b><b>Không giới hạn số đơn</b><b>Chống cộng trùng</b></div>
+</section>
+
+<section class="mini-metrics">
+  <article><span>Khách được giới thiệu</span><strong>{{ stats.referred_users }}</strong><small>đã gắn người giới thiệu</small></article>
+  <article><span>Đơn có hoa hồng</span><strong>{{ stats.rewarded_orders }}</strong><small>mỗi batch tính một lần</small></article>
+  <article><span>Doanh thu giới thiệu</span><strong>{{ stats.revenue|vnd }}</strong><small>giá trị thực trả</small></article>
+  <article><span>Hoa hồng đã cộng</span><strong>{{ stats.commission|vnd }}</strong><small>chi phí được trừ khỏi lợi nhuận</small></article>
+</section>
+
+<div class="split-layout referral-layout">
+  <section class="panel">
+    <div class="panel-head"><div><span>REWARD LEDGER</span><h2>Hoa hồng gần nhất</h2></div><small>Tối đa 300 giao dịch</small></div>
+    <div class="table-wrap"><table><thead><tr><th>Mã đơn</th><th>Người giới thiệu</th><th>Người mua</th><th>Giá trị đơn</th><th>Hoa hồng</th><th>Kênh</th><th>Thời gian</th></tr></thead><tbody>
+    {% for row in rewards %}{% set reward = row.reward %}
+      <tr><td><a class="text-link" href="/admin/orders?q={{ reward.shop_order_code }}"><code>{{ reward.shop_order_code }}</code></a></td><td><strong>{{ row.referrer.full_name }}</strong><small>{{ row.referrer.telegram_id }}</small></td><td><strong>{{ row.referred.full_name }}</strong><small>{{ row.referred.telegram_id }}</small></td><td>{{ reward.order_amount|vnd }}</td><td><strong class="profit-text">+{{ reward.commission_amount|vnd }}</strong></td><td><span class="status {{ 'wait' if reward.sales_channel == 'api' else 'on' }}">{{ reward.sales_channel }}</span></td><td>{{ reward.created_at|localtime }}</td></tr>
+    {% else %}<tr><td colspan="7" class="empty">Chưa có đơn giới thiệu phát sinh hoa hồng.</td></tr>{% endfor %}
+    </tbody></table></div>
+  </section>
+
+  <section class="panel">
+    <div class="panel-head"><div><span>TOP REFERRERS</span><h2>Người giới thiệu tốt nhất</h2></div></div>
+    <div class="stack-list ranked-list">
+    {% for row in top_referrers %}<article><b>{{ loop.index }}</b><div><strong>{{ row.user.full_name }}</strong><small>@{{ row.user.username or '—' }} · {{ row.user.telegram_id }}</small></div><span>{{ row.orders }} đơn · {{ row.commission|vnd }}</span></article>
+    {% else %}<p class="empty">Chưa có dữ liệu xếp hạng.</p>{% endfor %}
+    </div>
+  </section>
+</div>
+{% endblock %}

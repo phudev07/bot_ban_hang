@@ -9,11 +9,14 @@ from fastapi.responses import HTMLResponse, RedirectResponse, Response
 from fastapi.templating import Jinja2Templates
 from sqlalchemy import String, cast, delete, func, literal, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
+from sqlalchemy.orm import aliased
 
 from app.config import Settings
 from app.models import (
     BalanceAdjustment,
     BroadcastLog,
+    ApiClient,
+    ApiRequestAudit,
     Category,
     Deposit,
     DiscountCode,
@@ -21,6 +24,7 @@ from app.models import (
     Order,
     PaymentTransaction,
     Product,
+    ReferralReward,
     SupplierBalanceState,
     SupplierBalanceTransaction,
     User,
@@ -101,6 +105,7 @@ def group_order_rows(rows, limit: int | None = None) -> list[dict[str, object]]:
                 "primary_order_id": order.id,
                 "shop_order_code": key,
                 "supplier_order_code": order.supplier_order_code,
+                "sales_channel": order.sales_channel,
                 "quantity": 0,
                 "amount": 0,
                 "cost_amount": 0,
@@ -169,11 +174,20 @@ async def financial_summary(
     order_count, revenue, cost, discount = (await session.execute(statement)).one()
     revenue = int(revenue)
     cost = int(cost)
-    profit = revenue - cost
+    reward_statement = select(
+        func.coalesce(func.sum(ReferralReward.commission_amount), 0)
+    )
+    if start_at is not None:
+        reward_statement = reward_statement.where(ReferralReward.created_at >= start_at)
+    referral = int(await session.scalar(reward_statement) or 0)
+    gross_profit = revenue - cost
+    profit = gross_profit - referral
     return {
         "orders": int(order_count),
         "revenue": revenue,
         "cost": cost,
+        "gross_profit": gross_profit,
+        "referral": referral,
         "profit": profit,
         "discount": int(discount),
         "margin": round(profit / revenue * 100, 1) if revenue else 0,
@@ -214,18 +228,51 @@ async def financial_summaries(
         Product.product_type == "account",
     )
     values = (await session.execute(statement)).one()
+    reward_values = (
+        await session.execute(
+            select(
+                func.coalesce(
+                    func.sum(ReferralReward.commission_amount).filter(
+                        ReferralReward.created_at >= periods["today"]
+                    ),
+                    0,
+                ).label("today_referral"),
+                func.coalesce(
+                    func.sum(ReferralReward.commission_amount).filter(
+                        ReferralReward.created_at >= periods["month"]
+                    ),
+                    0,
+                ).label("month_referral"),
+                func.coalesce(
+                    func.sum(ReferralReward.commission_amount).filter(
+                        ReferralReward.created_at >= periods["year"]
+                    ),
+                    0,
+                ).label("year_referral"),
+                func.coalesce(func.sum(ReferralReward.commission_amount), 0).label(
+                    "all_referral"
+                ),
+            )
+        )
+    ).one()
     fields = values._mapping
+    reward_fields = reward_values._mapping
     result: dict[str, dict[str, int | float]] = {}
     for key in ("today", "month", "year", "all"):
         revenue = int(fields[f"{key}_revenue"])
         cost = int(fields[f"{key}_cost"])
+        referral = int(reward_fields[f"{key}_referral"])
+        gross_profit = revenue - cost
+        profit = gross_profit - referral
         result[key] = {
             "orders": int(fields[f"{key}_orders"]),
             "revenue": revenue,
             "cost": cost,
-            "profit": revenue - cost,
+            "gross_profit": gross_profit,
+            "referral": referral,
+            "profit": profit,
             "discount": int(fields[f"{key}_discount"]),
-            "margin": round((revenue - cost) / revenue * 100, 1) if revenue else 0,
+            "margin": round(profit / revenue * 100, 1) if revenue else 0,
         }
     return result
 
@@ -516,6 +563,16 @@ def create_dashboard_router(
                     Product.product_type == "account",
                 )
             )
+            trend_reward_rows = await session.execute(
+                select(ReferralReward.created_at, ReferralReward.commission_amount).where(
+                    ReferralReward.created_at >= periods["fourteen_days"]
+                )
+            )
+            year_reward_rows = await session.execute(
+                select(ReferralReward.created_at, ReferralReward.commission_amount).where(
+                    ReferralReward.created_at >= periods["year"]
+                )
+            )
 
         today_local = datetime.now(LOCAL_TIMEZONE).date()
         sales_by_day = {
@@ -529,6 +586,12 @@ def create_dashboard_router(
             if local_day in sales_by_day:
                 sales_by_day[local_day]["revenue"] += int(amount)
                 sales_by_day[local_day]["profit"] += int(amount) - int(cost)
+        for created_at, commission in trend_reward_rows:
+            if created_at.tzinfo is None:
+                created_at = created_at.replace(tzinfo=UTC)
+            local_day = created_at.astimezone(LOCAL_TIMEZONE).date()
+            if local_day in sales_by_day:
+                sales_by_day[local_day]["profit"] -= int(commission)
         trend_max = max(
             (value["revenue"] for value in sales_by_day.values()),
             default=0,
@@ -551,7 +614,14 @@ def create_dashboard_router(
         ]
         now_local = datetime.now(LOCAL_TIMEZONE)
         monthly_values = {
-            month: {"revenue": 0, "cost": 0, "profit": 0, "discount": 0, "orders": 0}
+            month: {
+                "revenue": 0,
+                "cost": 0,
+                "referral": 0,
+                "profit": 0,
+                "discount": 0,
+                "orders": 0,
+            }
             for month in range(1, now_local.month + 1)
         }
         monthly_order_keys: dict[int, set[str]] = {
@@ -567,6 +637,13 @@ def create_dashboard_router(
                 monthly_values[month]["profit"] += int(amount) - int(cost)
                 monthly_values[month]["discount"] += int(discount)
                 monthly_order_keys[month].add(str(group_key))
+        for created_at, commission in year_reward_rows:
+            if created_at.tzinfo is None:
+                created_at = created_at.replace(tzinfo=UTC)
+            month = created_at.astimezone(LOCAL_TIMEZONE).month
+            if month in monthly_values:
+                monthly_values[month]["referral"] += int(commission)
+                monthly_values[month]["profit"] -= int(commission)
         for month, keys in monthly_order_keys.items():
             monthly_values[month]["orders"] = len(keys)
         monthly_performance = [
@@ -1489,6 +1566,7 @@ def create_dashboard_router(
         q: str = "",
         status: str = "all",
         source: str = "all",
+        channel: str = "all",
         period: str = "all",
     ) -> Response:
         if not is_admin(request):
@@ -1514,6 +1592,8 @@ def create_dashboard_router(
             conditions.append(Order.status == status)
         if source in {"local", "sumistore"}:
             conditions.append(Product.fulfillment_source == source)
+        if channel in {"telegram", "api"}:
+            conditions.append(Order.sales_channel == channel)
         if period == "today":
             conditions.append(Order.created_at >= periods["today"])
         elif period == "month":
@@ -1568,6 +1648,26 @@ def create_dashboard_router(
             order_count, revenue, cost, discount, customer_count = (
                 await session.execute(summary_statement)
             ).one()
+            reward_keys = (
+                select(order_group_key())
+                .select_from(Order)
+                .join(Product, Product.id == Order.product_id)
+                .join(User, User.telegram_id == Order.user_id)
+                .where(*conditions)
+                .distinct()
+            )
+            if matching_keys is not None:
+                reward_keys = reward_keys.where(
+                    order_group_key().in_(select(matching_keys.c.group_key))
+                )
+            referral = int(
+                await session.scalar(
+                    select(func.coalesce(func.sum(ReferralReward.commission_amount), 0)).where(
+                        ReferralReward.shop_order_code.in_(reward_keys)
+                    )
+                )
+                or 0
+            )
         return templates.TemplateResponse(
             request,
             "orders.html",
@@ -1579,12 +1679,14 @@ def create_dashboard_router(
                 query=q,
                 status=status,
                 source=source,
+                channel=channel,
                 period=period,
                 summary={
                     "orders": int(order_count),
                     "revenue": int(revenue),
                     "cost": int(cost),
-                    "profit": int(revenue) - int(cost),
+                    "referral": referral,
+                    "profit": int(revenue) - int(cost) - referral,
                     "discount": int(discount),
                     "customers": int(customer_count),
                 },
@@ -1670,6 +1772,11 @@ def create_dashboard_router(
                     .limit(8)
                 )
             )
+            referral_reward = await session.scalar(
+                select(ReferralReward).where(
+                    ReferralReward.shop_order_code == str(order_group["shop_order_code"])
+                )
+            )
         return templates.TemplateResponse(
             request,
             "order_detail.html",
@@ -1686,6 +1793,194 @@ def create_dashboard_router(
                 user_spent=user_spent,
                 deposits=deposits,
                 adjustments=adjustments,
+                referral_reward=referral_reward,
+            ),
+        )
+
+    @router.get("/admin/api-clients", response_class=HTMLResponse)
+    async def api_clients_page(request: Request) -> Response:
+        if not is_admin(request):
+            return redirect_to_login()
+        async with session_factory() as session:
+            order_stats = (
+                select(
+                    Order.api_client_id.label("api_client_id"),
+                    purchase_order_count().label("order_count"),
+                    func.coalesce(func.sum(Order.amount), 0).label("revenue"),
+                )
+                .where(Order.api_client_id.is_not(None))
+                .group_by(Order.api_client_id)
+                .subquery()
+            )
+            request_stats = (
+                select(
+                    ApiRequestAudit.api_client_id.label("api_client_id"),
+                    func.count(ApiRequestAudit.id).label("request_count"),
+                    func.max(ApiRequestAudit.created_at).label("last_request_at"),
+                )
+                .where(ApiRequestAudit.api_client_id.is_not(None))
+                .group_by(ApiRequestAudit.api_client_id)
+                .subquery()
+            )
+            rows = [
+                {
+                    "client": client,
+                    "user": user,
+                    "order_count": int(order_count),
+                    "revenue": int(revenue),
+                    "request_count": int(request_count),
+                    "last_request_at": last_request_at,
+                }
+                for client, user, order_count, revenue, request_count, last_request_at
+                in await session.execute(
+                    select(
+                        ApiClient,
+                        User,
+                        func.coalesce(order_stats.c.order_count, 0),
+                        func.coalesce(order_stats.c.revenue, 0),
+                        func.coalesce(request_stats.c.request_count, 0),
+                        request_stats.c.last_request_at,
+                    )
+                    .join(User, User.telegram_id == ApiClient.owner_user_id)
+                    .outerjoin(order_stats, order_stats.c.api_client_id == ApiClient.id)
+                    .outerjoin(request_stats, request_stats.c.api_client_id == ApiClient.id)
+                    .order_by(ApiClient.id.desc())
+                    .limit(300)
+                )
+            ]
+            stats = {
+                "clients": int(await session.scalar(select(func.count(ApiClient.id))) or 0),
+                "active": int(
+                    await session.scalar(
+                        select(func.count(ApiClient.id)).where(ApiClient.active.is_(True))
+                        .where(ApiClient.admin_blocked.is_(False))
+                    )
+                    or 0
+                ),
+                "api_orders": int(
+                    await session.scalar(
+                        select(func.count(func.distinct(Order.batch_code))).where(
+                            Order.sales_channel == "api"
+                        )
+                    )
+                    or 0
+                ),
+                "api_revenue": int(
+                    await session.scalar(
+                        select(func.coalesce(func.sum(Order.amount), 0)).where(
+                            Order.sales_channel == "api"
+                        )
+                    )
+                    or 0
+                ),
+            }
+        return templates.TemplateResponse(
+            request,
+            "api_clients.html",
+            page_context(
+                request,
+                "API đấu kho",
+                "api-clients",
+                clients=rows,
+                stats=stats,
+                api_base_url=settings.shop_api_base_url,
+            ),
+        )
+
+    @router.post("/admin/api-clients/{client_id}")
+    async def update_api_client(
+        client_id: int,
+        request: Request,
+        csrf: str = Form(...),
+        rate_limit_per_minute: int = Form(60),
+        allowed_ips: str = Form(""),
+        admin_blocked: str | None = Form(None),
+    ) -> RedirectResponse:
+        if not is_admin(request):
+            return redirect_to_login()
+        if not valid_csrf(request, csrf):
+            return RedirectResponse("/admin/api-clients", status_code=303)
+        async with session_factory() as session:
+            client = await session.get(ApiClient, client_id)
+            if client is not None:
+                client.rate_limit_per_minute = max(1, min(rate_limit_per_minute, 10_000))
+                client.allowed_ips = allowed_ips.strip()[:2000]
+                client.admin_blocked = admin_blocked is not None
+                await session.commit()
+                flash(request, "Đã cập nhật API client.")
+        return RedirectResponse("/admin/api-clients", status_code=303)
+
+    @router.get("/admin/api-orders")
+    async def api_orders_redirect(request: Request) -> RedirectResponse:
+        if not is_admin(request):
+            return redirect_to_login()
+        return RedirectResponse("/admin/orders?channel=api", status_code=303)
+
+    @router.get("/admin/referrals", response_class=HTMLResponse)
+    async def referrals_page(request: Request) -> Response:
+        if not is_admin(request):
+            return redirect_to_login()
+        referrer = aliased(User)
+        referred = aliased(User)
+        async with session_factory() as session:
+            rewards = [
+                {"reward": reward, "referrer": source, "referred": target}
+                for reward, source, target in await session.execute(
+                    select(ReferralReward, referrer, referred)
+                    .join(referrer, referrer.telegram_id == ReferralReward.referrer_user_id)
+                    .join(referred, referred.telegram_id == ReferralReward.referred_user_id)
+                    .order_by(ReferralReward.id.desc())
+                    .limit(300)
+                )
+            ]
+            top_referrers = [
+                {"user": user, "orders": int(order_count), "commission": int(commission)}
+                for user, order_count, commission in await session.execute(
+                    select(
+                        User,
+                        func.count(ReferralReward.id),
+                        func.coalesce(func.sum(ReferralReward.commission_amount), 0),
+                    )
+                    .join(ReferralReward, ReferralReward.referrer_user_id == User.telegram_id)
+                    .group_by(User.telegram_id)
+                    .order_by(func.sum(ReferralReward.commission_amount).desc())
+                    .limit(20)
+                )
+            ]
+            stats = {
+                "referred_users": int(
+                    await session.scalar(
+                        select(func.count(User.telegram_id)).where(User.referred_by_id.is_not(None))
+                    )
+                    or 0
+                ),
+                "rewarded_orders": int(
+                    await session.scalar(select(func.count(ReferralReward.id))) or 0
+                ),
+                "commission": int(
+                    await session.scalar(
+                        select(func.coalesce(func.sum(ReferralReward.commission_amount), 0))
+                    )
+                    or 0
+                ),
+                "revenue": int(
+                    await session.scalar(
+                        select(func.coalesce(func.sum(ReferralReward.order_amount), 0))
+                    )
+                    or 0
+                ),
+            }
+        return templates.TemplateResponse(
+            request,
+            "referrals.html",
+            page_context(
+                request,
+                "Giới thiệu bạn bè",
+                "referrals",
+                rewards=rewards,
+                top_referrers=top_referrers,
+                stats=stats,
+                commission_percent=settings.referral_commission_percent,
             ),
         )
 
