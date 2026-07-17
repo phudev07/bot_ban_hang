@@ -5,7 +5,7 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 
 WORKDIR /app
 
-COPY pyproject.toml README.md ./
+COPY pyproject.toml ./
 
 RUN python - <<'PY'
 import tomllib
@@ -16,8 +16,10 @@ with open("/tmp/requirements.txt", "w", encoding="utf-8") as target:
     target.write("\n".join(dependencies) + "\n")
 PY
 
-RUN pip install --no-cache-dir -r /tmp/requirements.txt
+RUN python -m pip install --no-cache-dir --upgrade "pip>=26.1.2,<27" \
+    && pip install --no-cache-dir -r /tmp/requirements.txt
 
+COPY README.md ./
 COPY app ./app
 
 CMD ["python", "-m", "app.main"]

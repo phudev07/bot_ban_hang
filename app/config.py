@@ -26,6 +26,8 @@ class Settings(BaseSettings):
     bank_account_name: str = ""
     payment_prefix: str = "NAP"
     min_deposit: int = 10_000
+    payment_expiry_seconds: int = 300
+    payment_expiry_sweep_seconds: int = 2
 
     sumistore_enabled: bool = False
     sumistore_base_url: str = "https://sumistore.me/api"
@@ -101,6 +103,10 @@ class Settings(BaseSettings):
             raise ValueError("Shop API rate limit must be positive")
         if self.shop_api_signature_tolerance_seconds < 30:
             raise ValueError("Shop API signature tolerance is too small")
+        if not 60 <= self.payment_expiry_seconds <= 3600:
+            raise ValueError("Payment expiry must be between 60 and 3600 seconds")
+        if not 1 <= self.payment_expiry_sweep_seconds <= 60:
+            raise ValueError("Payment expiry sweep must be between 1 and 60 seconds")
         if not 0 <= self.referral_commission_percent <= 100:
             raise ValueError("Referral commission percent must be between 0 and 100")
         return self

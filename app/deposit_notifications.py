@@ -21,10 +21,25 @@ def deposit_notification_text(result: PaymentResult) -> str:
         if paid_at.tzinfo is None:
             paid_at = paid_at.replace(tzinfo=UTC)
         paid_time = paid_at.astimezone(LOCAL_TIMEZONE).strftime("%d/%m/%Y %H:%M:%S")
-    return (
+    base = (
         "💰 <b>Nạp tiền shop bot</b>\n"
         f"{username} đã nạp <b>{format_vnd(result.amount)}</b>\n"
         f"Mã nạp: <code>{safe_html(result.deposit_code or '—')}</code>\n"
+        f"Thời gian: <b>{paid_time}</b>"
+    )
+    if result.status in {"credited", "direct_purchase_completed", "direct_purchase_fallback"}:
+        return base
+    status_labels = {
+        "expired_payment": "Đến sau thời hạn 5 phút - không cộng tiền",
+        "amount_mismatch": "Sai số tiền - không cộng tiền",
+        "already_paid_payment": "QR đã được dùng - không cộng tiền lần hai",
+        "failed_request_payment": "Yêu cầu đã thất bại - không cộng tiền",
+    }
+    return (
+        "🚨 <b>Giao dịch cần kiểm tra</b>\n"
+        f"{username} chuyển <b>{format_vnd(result.amount)}</b>\n"
+        f"Mã nạp: <code>{safe_html(result.deposit_code or '—')}</code>\n"
+        f"Kết quả: <b>{status_labels.get(result.status, safe_html(result.status))}</b>\n"
         f"Thời gian: <b>{paid_time}</b>"
     )
 

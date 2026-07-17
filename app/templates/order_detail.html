@@ -63,7 +63,7 @@
 
 <div class="dashboard-grid lower-grid">
   <section class="panel"><div class="panel-head"><div><span>PAYMENT REQUESTS</span><h2>Nạp tiền gần đây</h2></div><a href="/admin/payments?q={{ user.telegram_id }}">Xem dòng tiền →</a></div><div class="stack-list compact">
-    {% for item in deposits %}<article><div><strong>{{ item.requested_amount|vnd }} · {{ item.status }}</strong><small>{{ item.code }} · tạo {{ item.created_at|localtime }} · trả {{ item.paid_at|localtime }}</small></div><span>{{ (item.paid_amount or 0)|vnd }}</span></article>{% else %}<p class="empty">Khách chưa có yêu cầu nạp.</p>{% endfor %}
+    {% for item in deposits %}<article><div><strong>{{ item.requested_amount|vnd }} · {{ item.status }}</strong><small>{{ item.code }} · tạo {{ item.created_at|localtime }} · hết hạn {{ item.expires_at|localtime }}{% if item.failure_reason %} · lỗi {{ item.failure_reason }}{% endif %}</small></div><span>{{ (item.paid_amount or 0)|vnd }}</span></article>{% else %}<p class="empty">Khách chưa có yêu cầu nạp.</p>{% endfor %}
   </div></section>
   <section class="panel"><div class="panel-head"><div><span>BALANCE AUDIT</span><h2>Điều chỉnh số dư</h2></div></div><div class="stack-list compact">
     {% for item in adjustments %}<article><div><strong>{{ item.amount|vnd }}</strong><small>{{ item.reason }} · {{ item.admin_username }} · {{ item.created_at|localtime }}</small></div></article>{% else %}<p class="empty">Chưa có điều chỉnh thủ công.</p>{% endfor %}

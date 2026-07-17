@@ -268,12 +268,12 @@ def test_sepay_payment_is_idempotent() -> None:
         assert first.deposit_code == "NAP123456ABCD"
         assert first.paid_at is not None
         assert second.status == "duplicate"
-        assert another_transfer.status == "credited"
+        assert another_transfer.status == "already_paid_payment"
 
         async with sessions() as session:
             user = await session.get(User, 123456)
             assert user is not None
-            assert user.balance == 200_000
+            assert user.balance == 100_000
         await engine.dispose()
 
     asyncio.run(scenario())

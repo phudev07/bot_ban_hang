@@ -1,6 +1,6 @@
 import secrets
 from dataclasses import dataclass, field
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 from aiogram.types import User as TelegramUser
 from sqlalchemy import func, select
@@ -205,7 +205,8 @@ async def user_activity_stats(session: AsyncSession, user_id: int) -> UserActivi
     deposit_count = int(
         await session.scalar(
             select(func.count(PaymentTransaction.id)).where(
-                PaymentTransaction.user_id == user_id
+                PaymentTransaction.user_id == user_id,
+                PaymentTransaction.credit_status == "credited",
             )
         )
         or 0
@@ -213,7 +214,8 @@ async def user_activity_stats(session: AsyncSession, user_id: int) -> UserActivi
     total_deposited = int(
         await session.scalar(
             select(func.coalesce(func.sum(PaymentTransaction.amount), 0)).where(
-                PaymentTransaction.user_id == user_id
+                PaymentTransaction.user_id == user_id,
+                PaymentTransaction.credit_status == "credited",
             )
         )
         or 0
@@ -506,6 +508,7 @@ async def create_deposit(
     discount_amount: int = 0,
     discount_code_id: int | None = None,
     discount_code: str | None = None,
+    expiry_seconds: int = 300,
 ) -> Deposit:
     code = f"{payment_prefix.upper()}{user_id}{secrets.token_hex(2).upper()}"
     deposit = Deposit(
@@ -518,6 +521,7 @@ async def create_deposit(
         discount_amount=discount_amount,
         discount_code_id=discount_code_id,
         discount_code=discount_code,
+        expires_at=datetime.now(UTC) + timedelta(seconds=max(1, expiry_seconds)),
     )
     session.add(deposit)
     await session.commit()
@@ -622,6 +626,11 @@ async def _process_sepay_payment(
 
     async with session_factory() as session:
         async with session.begin():
+            deposit = await session.scalar(
+                select(Deposit).where(Deposit.code == deposit_code).with_for_update()
+            )
+            if deposit is None:
+                return PaymentResult("deposit_not_found")
             existing = await session.scalar(
                 select(PaymentTransaction).where(
                     PaymentTransaction.provider_tx_id == provider_tx_id
@@ -629,25 +638,86 @@ async def _process_sepay_payment(
             )
             if existing is not None:
                 return PaymentResult("duplicate", existing.user_id, existing.amount)
-
-            deposit = await session.scalar(
-                select(Deposit).where(Deposit.code == deposit_code).with_for_update()
-            )
-            if deposit is None:
-                return PaymentResult("deposit_not_found")
             user = await session.scalar(
                 select(User).where(User.telegram_id == deposit.user_id).with_for_update()
             )
             if user is None:
                 return PaymentResult("user_not_found")
 
+            now = datetime.now(UTC)
+            expires_at = _as_utc(deposit.expires_at)
+            if expires_at is None:
+                created_at = _as_utc(deposit.created_at) or now
+                expires_at = created_at + timedelta(minutes=5)
+
+            rejected_status: str | None = None
+            credit_status: str | None = None
+            if now >= expires_at:
+                if deposit.status == "pending":
+                    deposit.status = "failed"
+                    deposit.failed_at = now
+                    deposit.failure_reason = "expired"
+                rejected_status = "expired_payment"
+                credit_status = "expired"
+            elif deposit.status != "pending":
+                rejected_status = (
+                    "already_paid_payment"
+                    if deposit.status == "paid"
+                    else "failed_request_payment"
+                )
+                credit_status = (
+                    "already_paid" if deposit.status == "paid" else "failed_request"
+                )
+            elif amount != deposit.requested_amount:
+                rejected_status = "amount_mismatch"
+                credit_status = "amount_mismatch"
+            elif user.is_blocked:
+                deposit.status = "failed"
+                deposit.failed_at = now
+                deposit.failure_reason = "blocked_user"
+                rejected_status = "failed_request_payment"
+                credit_status = "failed_request"
+            elif deposit.payment_kind not in {"wallet", "direct_purchase"}:
+                deposit.status = "failed"
+                deposit.failed_at = now
+                deposit.failure_reason = "invalid_payment_kind"
+                rejected_status = "failed_request_payment"
+                credit_status = "failed_request"
+            elif deposit.payment_kind == "direct_purchase" and (
+                deposit.product_id is None or deposit.quantity < 1
+            ):
+                deposit.status = "failed"
+                deposit.failed_at = now
+                deposit.failure_reason = "invalid_purchase_request"
+                rejected_status = "failed_request_payment"
+                credit_status = "failed_request"
+
+            if rejected_status is not None and credit_status is not None:
+                session.add(
+                    PaymentTransaction(
+                        deposit_id=deposit.id,
+                        user_id=user.telegram_id,
+                        provider_tx_id=provider_tx_id,
+                        amount=amount,
+                        credit_status=credit_status,
+                    )
+                )
+                await session.flush()
+                return PaymentResult(
+                    rejected_status,
+                    user.telegram_id,
+                    amount,
+                    quantity=deposit.quantity,
+                    language=user.language,
+                    balance=user.balance,
+                    deposit_code=deposit.code,
+                    username=user.username,
+                    paid_at=now,
+                )
+
             direct_purchase_ready = (
                 deposit.payment_kind == "direct_purchase"
-                and deposit.status == "pending"
                 and deposit.product_id is not None
-                and amount == deposit.requested_amount
-                and not user.is_blocked
-                and deposit.quantity >= 1
             )
             if direct_purchase_ready:
                 product = await session.get(Product, deposit.product_id)
@@ -714,7 +784,6 @@ async def _process_sepay_payment(
                                 )
                             )
                 if product is not None and len(items) == deposit.quantity:
-                    now = datetime.now(UTC)
                     batch_code = f"B{secrets.token_hex(5).upper()}"
                     orders = []
                     for item in items:
@@ -767,7 +836,7 @@ async def _process_sepay_payment(
                         commission_percent=referral_commission_percent,
                     )
                     deposit.status = "paid"
-                    deposit.paid_amount = (deposit.paid_amount or 0) + amount
+                    deposit.paid_amount = amount
                     deposit.paid_at = now
                     session.add(
                         PaymentTransaction(
@@ -775,6 +844,7 @@ async def _process_sepay_payment(
                             user_id=user.telegram_id,
                             provider_tx_id=provider_tx_id,
                             amount=amount,
+                            credit_status="credited",
                         )
                     )
                     await session.flush()
@@ -796,14 +866,15 @@ async def _process_sepay_payment(
 
             user.balance += amount
             deposit.status = "paid"
-            deposit.paid_amount = (deposit.paid_amount or 0) + amount
-            deposit.paid_at = datetime.now(UTC)
+            deposit.paid_amount = amount
+            deposit.paid_at = now
             session.add(
                 PaymentTransaction(
                     deposit_id=deposit.id,
                     user_id=user.telegram_id,
                     provider_tx_id=provider_tx_id,
                     amount=amount,
+                    credit_status="credited",
                 )
             )
             user_id = user.telegram_id

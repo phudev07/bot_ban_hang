@@ -34,6 +34,7 @@ from app.keyboards import (
 )
 from app.models import ApiClient, Product, User
 from app.partner_services import ensure_api_client, referral_stats, rotate_api_secret
+from app.payment_expiry import register_deposit_message
 from app.services import (
     active_categories,
     active_products,
@@ -832,6 +833,7 @@ def create_router(
             discount_amount=total_discount,
             discount_code_id=pricing.coupon.id if pricing.coupon else None,
             discount_code=pricing.coupon.code if pricing.coupon else None,
+            expiry_seconds=settings.payment_expiry_seconds,
         )
         qr_url = build_sepay_qr_url(
             settings.bank_code,
@@ -864,6 +866,7 @@ def create_router(
             f"• Nội dung bắt buộc: <code>{deposit.code}</code>\n\n"
             "Giữ nguyên số tiền và nội dung. Sản phẩm sẽ được giao tự động sau khi "
             "giao dịch được ghi nhận."
+            "\n\n⏳ QR chỉ có hiệu lực 5 phút. Quá hạn bot sẽ xóa tin nhắn và giao dịch thất bại."
             if user.language == "vi"
             else "🧾 <b>Product payment</b>\n\n"
             f"• Product: <b>{escape(product_name)}</b>\n"
@@ -876,20 +879,28 @@ def create_router(
             f"• Required content: <code>{deposit.code}</code>\n\n"
             "Keep the exact amount and content. The product is delivered automatically "
             "after the payment is recorded."
+            "\n\n⏳ This QR is valid for 5 minutes. After that, the message is deleted and "
+            "the payment request fails."
         )
         if callback.message:
             try:
-                await callback.message.answer_photo(
+                sent = await callback.message.answer_photo(
                     qr_url,
                     caption=text,
                     reply_markup=back_menu(user.language),
                 )
             except TelegramBadRequest:
-                await callback.message.answer(
+                sent = await callback.message.answer(
                     f'{text}\n\n<a href="{qr_url}">Mở mã QR / Open QR</a>',
                     reply_markup=back_menu(user.language),
                     disable_web_page_preview=True,
                 )
+            await register_deposit_message(
+                session,
+                deposit.id,
+                sent.chat.id,
+                sent.message_id,
+            )
         await callback.answer()
 
     @router.callback_query(F.data == "menu:deposit")
@@ -975,6 +986,7 @@ def create_router(
             user.telegram_id,
             amount,
             settings.payment_prefix,
+            expiry_seconds=settings.payment_expiry_seconds,
         )
         qr_url = build_sepay_qr_url(settings.bank_code, settings.bank_account, amount, deposit.code)
         text = (
@@ -985,6 +997,7 @@ def create_router(
             f"• Số tiền: <b>{format_vnd(amount)}</b>\n"
             f"• Nội dung bắt buộc: <code>{deposit.code}</code>\n\n"
             "Giữ nguyên số tiền và nội dung. Số dư sẽ được cập nhật tự động."
+            "\n\n⏳ QR chỉ có hiệu lực 5 phút. Quá hạn bot sẽ xóa tin nhắn và giao dịch thất bại."
             if user.language == "vi"
             else "💳 <b>Bank transfer details</b>\n\n"
             f"• Bank: <b>{escape(settings.bank_code)}</b>\n"
@@ -993,15 +1006,27 @@ def create_router(
             f"• Amount: <b>{format_vnd(amount)}</b>\n"
             f"• Required content: <code>{deposit.code}</code>\n\n"
             "Keep the exact amount and content. Your balance updates automatically."
+            "\n\n⏳ This QR is valid for 5 minutes. After that, the message is deleted and "
+            "the payment request fails."
         )
         try:
-            await target.answer_photo(qr_url, caption=text, reply_markup=back_menu(user.language))
+            sent = await target.answer_photo(
+                qr_url,
+                caption=text,
+                reply_markup=back_menu(user.language),
+            )
         except TelegramBadRequest:
-            await target.answer(
+            sent = await target.answer(
                 f'{text}\n\n<a href="{qr_url}">Mở mã QR / Open QR</a>',
                 reply_markup=back_menu(user.language),
                 disable_web_page_preview=True,
             )
+        await register_deposit_message(
+            session,
+            deposit.id,
+            sent.chat.id,
+            sent.message_id,
+        )
 
     @router.callback_query(F.data == "menu:orders")
     async def show_orders(callback: CallbackQuery, session: AsyncSession) -> None:

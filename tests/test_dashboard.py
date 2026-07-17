@@ -80,6 +80,8 @@ def test_dashboard_login_catalog_inventory_and_balance(tmp_path) -> None:
         login_page = client.get("/admin/login")
         assert login_page.status_code == 200
         assert "Đăng nhập quản trị" in login_page.text
+        assert login_page.headers["x-frame-options"] == "DENY"
+        assert login_page.headers["x-content-type-options"] == "nosniff"
 
         rejected = client.post(
             "/admin/login",

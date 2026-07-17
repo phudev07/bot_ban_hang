@@ -1,0 +1,47 @@
+(shop_security) {
+	encode zstd gzip
+
+	header {
+		-Server
+		X-Content-Type-Options "nosniff"
+		X-Frame-Options "DENY"
+		Referrer-Policy "no-referrer"
+		Permissions-Policy "camera=(), microphone=(), geolocation=(), payment=(), usb=()"
+		Strict-Transport-Security "max-age=31536000; includeSubDomains"
+	}
+
+	request_body {
+		max_size 1MB
+	}
+}
+
+160-191-243-91.sslip.io {
+	import shop_security
+
+	@warehouse_public path /v1 /v1/* /docs /docs/
+	handle @warehouse_public {
+		respond 404
+	}
+
+	handle {
+		reverse_proxy 127.0.0.1:8080
+	}
+}
+
+token.vietshare.site {
+	import shop_security
+
+	@api_docs path /docs /docs/
+	handle @api_docs {
+		reverse_proxy 127.0.0.1:8080
+	}
+
+	@warehouse_api path /v1 /v1/*
+	handle @warehouse_api {
+		reverse_proxy 127.0.0.1:8080
+	}
+
+	handle {
+		respond 404
+	}
+}

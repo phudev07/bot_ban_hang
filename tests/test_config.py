@@ -37,6 +37,15 @@ def test_hmac_sepay_configuration() -> None:
         payment_prefix="nap",
     )
     assert settings.payment_prefix == "NAP"
+    assert settings.payment_expiry_seconds == 300
+    assert settings.payment_expiry_sweep_seconds == 2
+
+
+def test_payment_expiry_configuration_is_bounded() -> None:
+    with pytest.raises(ValidationError):
+        base_settings(payment_expiry_seconds=59)
+    with pytest.raises(ValidationError):
+        base_settings(payment_expiry_sweep_seconds=0)
 
 
 def test_enabled_sumistore_requires_api_id() -> None:

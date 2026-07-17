@@ -1,4 +1,4 @@
-from app.dashboard_security import hash_dashboard_password, verify_dashboard_password
+from app.dashboard_security import LoginRateLimiter, hash_dashboard_password, verify_dashboard_password
 
 
 def test_dashboard_password_round_trip() -> None:
@@ -18,3 +18,13 @@ def test_dashboard_password_rejects_malformed_hashes() -> None:
     )
 
     assert all(not verify_dashboard_password("password", value) for value in malformed)
+
+
+def test_login_rate_limiter_blocks_and_resets() -> None:
+    limiter = LoginRateLimiter(max_failures=2, window_seconds=300)
+    assert limiter.blocked("127.0.0.1") is False
+    limiter.record_failure("127.0.0.1")
+    limiter.record_failure("127.0.0.1")
+    assert limiter.blocked("127.0.0.1") is True
+    limiter.reset("127.0.0.1")
+    assert limiter.blocked("127.0.0.1") is False

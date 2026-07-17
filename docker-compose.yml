@@ -2,6 +2,7 @@ services:
   app:
     build: .
     restart: unless-stopped
+    init: true
     env_file: .env
     depends_on:
       postgres:
@@ -10,6 +11,26 @@ services:
         condition: service_healthy
     ports:
       - "127.0.0.1:8080:8080"
+    read_only: true
+    tmpfs:
+      - /tmp:size=64m,mode=1777
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    pids_limit: 256
+    mem_limit: 768m
+    stop_grace_period: 30s
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8080/health', timeout=2)"
+      interval: 15s
+      timeout: 3s
+      retries: 5
+      start_period: 30s
     logging:
       driver: json-file
       options:

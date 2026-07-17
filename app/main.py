@@ -16,6 +16,7 @@ from app.config import get_settings
 from app.database import Base, DatabaseSessionMiddleware, create_database
 from app.handlers import create_router
 from app.models import Category, Product
+from app.payment_expiry import payment_expiry_worker
 from app.supplier_audit import reconcile_supplier_balance
 from app.suppliers import (
     SumistoreClient,
@@ -151,6 +152,54 @@ async def initialize_database(engine, session_factory, seed_demo_data: bool) -> 
         )
         await connection.execute(
             text("ALTER TABLE deposits ADD COLUMN IF NOT EXISTS discount_code VARCHAR(64) NULL")
+        )
+        await connection.execute(
+            text("ALTER TABLE deposits ADD COLUMN IF NOT EXISTS expires_at TIMESTAMPTZ NULL")
+        )
+        await connection.execute(
+            text("ALTER TABLE deposits ADD COLUMN IF NOT EXISTS failed_at TIMESTAMPTZ NULL")
+        )
+        await connection.execute(
+            text("ALTER TABLE deposits ADD COLUMN IF NOT EXISTS failure_reason VARCHAR(64) NULL")
+        )
+        await connection.execute(
+            text("ALTER TABLE deposits ADD COLUMN IF NOT EXISTS telegram_chat_id BIGINT NULL")
+        )
+        await connection.execute(
+            text(
+                "ALTER TABLE deposits ADD COLUMN IF NOT EXISTS "
+                "telegram_message_ids TEXT NOT NULL DEFAULT ''"
+            )
+        )
+        await connection.execute(
+            text(
+                "ALTER TABLE deposits ADD COLUMN IF NOT EXISTS "
+                "messages_deleted_at TIMESTAMPTZ NULL"
+            )
+        )
+        await connection.execute(
+            text(
+                "UPDATE deposits SET expires_at = created_at + INTERVAL '5 minutes' "
+                "WHERE expires_at IS NULL"
+            )
+        )
+        await connection.execute(
+            text(
+                "CREATE INDEX IF NOT EXISTS ix_deposits_status_expires_at "
+                "ON deposits (status, expires_at)"
+            )
+        )
+        await connection.execute(
+            text(
+                "ALTER TABLE payment_transactions ADD COLUMN IF NOT EXISTS "
+                "credit_status VARCHAR(32) NOT NULL DEFAULT 'credited'"
+            )
+        )
+        await connection.execute(
+            text(
+                "CREATE INDEX IF NOT EXISTS ix_payment_transactions_credit_status "
+                "ON payment_transactions (credit_status)"
+            )
         )
         await connection.execute(
             text("ALTER TABLE orders ADD COLUMN IF NOT EXISTS supplier_order_code VARCHAR(64) NULL")
@@ -413,6 +462,13 @@ async def main() -> None:
         )
     )
     api_task = asyncio.create_task(server.serve())
+    payment_expiry_task = asyncio.create_task(
+        payment_expiry_worker(
+            session_factory,
+            bot,
+            settings.payment_expiry_sweep_seconds,
+        )
+    )
     supplier_task = (
         asyncio.create_task(
             supplier_sync_worker(
@@ -441,6 +497,9 @@ async def main() -> None:
         await bot.delete_webhook(drop_pending_updates=False)
         await dispatcher.start_polling(bot)
     finally:
+        payment_expiry_task.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await payment_expiry_task
         if supplier_task is not None:
             supplier_task.cancel()
             with contextlib.suppress(asyncio.CancelledError):

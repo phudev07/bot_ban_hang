@@ -4,6 +4,8 @@ import hashlib
 import hmac
 import os
 import secrets
+import time
+from collections import defaultdict, deque
 
 
 PASSWORD_ITERATIONS = 310_000
@@ -50,3 +52,33 @@ def verify_dashboard_password(password: str, encoded: str) -> bool:
 
 def new_csrf_token() -> str:
     return secrets.token_urlsafe(24)
+
+
+class LoginRateLimiter:
+    def __init__(self, max_failures: int = 8, window_seconds: int = 300) -> None:
+        self.max_failures = max_failures
+        self.window_seconds = window_seconds
+        self._failures: dict[str, deque[float]] = defaultdict(deque)
+
+    def _active_failures(self, key: str, now: float) -> deque[float]:
+        failures = self._failures[key]
+        cutoff = now - self.window_seconds
+        while failures and failures[0] <= cutoff:
+            failures.popleft()
+        if not failures:
+            self._failures.pop(key, None)
+            return deque()
+        return failures
+
+    def blocked(self, key: str) -> bool:
+        return len(self._active_failures(key, time.monotonic())) >= self.max_failures
+
+    def record_failure(self, key: str) -> None:
+        now = time.monotonic()
+        failures = self._active_failures(key, now)
+        if not failures:
+            failures = self._failures[key]
+        failures.append(now)
+
+    def reset(self, key: str) -> None:
+        self._failures.pop(key, None)

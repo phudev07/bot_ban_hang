@@ -7,6 +7,7 @@ from pathlib import Path
 
 from aiogram import Bot
 from fastapi import FastAPI, Header, HTTPException, Request
+from fastapi.responses import HTMLResponse
 from fastapi.staticfiles import StaticFiles
 from redis.asyncio import Redis
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
@@ -14,6 +15,7 @@ from starlette.middleware.sessions import SessionMiddleware
 
 from app.config import Settings
 from app.dashboard import create_dashboard_router
+from app.dashboard_security import LoginRateLimiter
 from app.deposit_notifications import send_deposit_notification
 from app.delivery import delivery_keyboard, delivery_text
 from app.keyboards import main_menu
@@ -66,7 +68,40 @@ def create_api(
         redoc_url=None,
         lifespan=lifespan,
     )
+
+    @app.middleware("http")
+    async def security_headers(request: Request, call_next):
+        response = await call_next(request)
+        response.headers["X-Content-Type-Options"] = "nosniff"
+        response.headers["X-Frame-Options"] = "DENY"
+        response.headers["Referrer-Policy"] = "no-referrer"
+        response.headers["Permissions-Policy"] = (
+            "camera=(), microphone=(), geolocation=(), payment=(), usb=()"
+        )
+        response.headers["Strict-Transport-Security"] = "max-age=31536000; includeSubDomains"
+        return response
+
     if settings.dashboard_enabled:
+        login_rate_limiter = LoginRateLimiter()
+
+        @app.middleware("http")
+        async def limit_admin_login(request: Request, call_next):
+            if request.method != "POST" or request.url.path != "/admin/login":
+                return await call_next(request)
+            key = client_ip(request) or "unknown"
+            if login_rate_limiter.blocked(key):
+                return HTMLResponse(
+                    "Đăng nhập sai quá nhiều lần. Vui lòng thử lại sau 5 phút.",
+                    status_code=429,
+                    headers={"Retry-After": "300"},
+                )
+            response = await call_next(request)
+            if response.status_code == 401:
+                login_rate_limiter.record_failure(key)
+            elif response.status_code in {302, 303}:
+                login_rate_limiter.reset(key)
+            return response
+
         app.add_middleware(
             SessionMiddleware,
             secret_key=settings.dashboard_session_secret.get_secret_value(),
@@ -148,7 +183,12 @@ def create_api(
     ) -> dict[str, object]:
         if not settings.sepay_enabled:
             raise HTTPException(status_code=503, detail="SePay integration is disabled")
+        content_length = request.headers.get("content-length")
+        if content_length and content_length.isdigit() and int(content_length) > 64 * 1024:
+            raise HTTPException(status_code=413, detail="Webhook payload is too large")
         raw_body = await request.body()
+        if len(raw_body) > 64 * 1024:
+            raise HTTPException(status_code=413, detail="Webhook payload is too large")
         if settings.sepay_auth_mode == "hmac":
             if not verify_sepay_hmac(
                 raw_body,
@@ -196,6 +236,10 @@ def create_api(
                 "credited",
                 "direct_purchase_completed",
                 "direct_purchase_fallback",
+                "expired_payment",
+                "amount_mismatch",
+                "already_paid_payment",
+                "failed_request_payment",
             }
         ):
             await send_deposit_notification(
@@ -278,6 +322,51 @@ def create_api(
                 logger.exception(
                     "Could not notify user %s about direct payment fallback",
                     result.user_id,
+                )
+
+        rejected_payment_messages = {
+            "expired_payment": (
+                "⚠️ Giao dịch đến sau khi QR đã hết hạn 5 phút nên hệ thống không cộng tiền. "
+                "Vui lòng liên hệ hỗ trợ để được kiểm tra."
+                if result.language == "vi"
+                else "⚠️ The transfer arrived after the 5-minute QR expiry and was not credited. "
+                "Please contact support for review."
+            ),
+            "amount_mismatch": (
+                "⚠️ Số tiền chuyển không khớp chính xác với QR nên hệ thống không cộng tiền. "
+                "Vui lòng liên hệ hỗ trợ để được kiểm tra."
+                if result.language == "vi"
+                else "⚠️ The transfer amount did not exactly match the QR and was not credited. "
+                "Please contact support for review."
+            ),
+            "already_paid_payment": (
+                "⚠️ Mã QR này đã được thanh toán trước đó nên giao dịch mới không được cộng lần hai. "
+                "Vui lòng liên hệ hỗ trợ nếu bạn đã chuyển tiền."
+                if result.language == "vi"
+                else "⚠️ This QR was already paid, so the new transfer was not credited again. "
+                "Please contact support if you sent money."
+            ),
+            "failed_request_payment": (
+                "⚠️ Yêu cầu thanh toán này đã thất bại nên giao dịch không được tự động cộng tiền. "
+                "Vui lòng liên hệ hỗ trợ để được kiểm tra."
+                if result.language == "vi"
+                else "⚠️ This payment request had failed, so the transfer was not credited. "
+                "Please contact support for review."
+            ),
+        }
+        rejected_message = rejected_payment_messages.get(result.status)
+        if rejected_message is not None and result.user_id is not None:
+            try:
+                await bot.send_message(
+                    result.user_id,
+                    rejected_message,
+                    reply_markup=main_menu(result.language),
+                )
+            except Exception:
+                logger.exception(
+                    "Could not notify user %s about rejected payment %s",
+                    result.user_id,
+                    result.status,
                 )
 
         return {"success": True, "status": result.status}

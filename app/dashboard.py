@@ -474,7 +474,8 @@ def create_dashboard_router(
             received_today = int(
                 await session.scalar(
                     select(func.coalesce(func.sum(PaymentTransaction.amount), 0)).where(
-                        PaymentTransaction.created_at >= periods["today"]
+                        PaymentTransaction.created_at >= periods["today"],
+                        PaymentTransaction.credit_status == "credited",
                     )
                 )
                 or 0
@@ -1405,6 +1406,7 @@ def create_dashboard_router(
                     func.coalesce(func.sum(PaymentTransaction.amount), 0).label("deposited"),
                     func.max(PaymentTransaction.created_at).label("last_deposit_at"),
                 )
+                .where(PaymentTransaction.credit_status == "credited")
                 .group_by(PaymentTransaction.user_id)
                 .subquery()
             )
@@ -2003,7 +2005,7 @@ def create_dashboard_router(
                     User.username.ilike(needle),
                 )
             )
-        if status in {"pending", "paid"}:
+        if status in {"pending", "paid", "failed"}:
             deposit_conditions.append(Deposit.status == status)
         periods = dashboard_periods()
         async with session_factory() as session:
@@ -2040,14 +2042,33 @@ def create_dashboard_router(
             ]
             received_total = int(
                 await session.scalar(
-                    select(func.coalesce(func.sum(PaymentTransaction.amount), 0))
+                    select(func.coalesce(func.sum(PaymentTransaction.amount), 0)).where(
+                        PaymentTransaction.credit_status == "credited"
+                    )
                 )
                 or 0
             )
             received_today = int(
                 await session.scalar(
                     select(func.coalesce(func.sum(PaymentTransaction.amount), 0)).where(
-                        PaymentTransaction.created_at >= periods["today"]
+                        PaymentTransaction.created_at >= periods["today"],
+                        PaymentTransaction.credit_status == "credited",
+                    )
+                )
+                or 0
+            )
+            review_amount = int(
+                await session.scalar(
+                    select(func.coalesce(func.sum(PaymentTransaction.amount), 0)).where(
+                        PaymentTransaction.credit_status != "credited"
+                    )
+                )
+                or 0
+            )
+            review_count = int(
+                await session.scalar(
+                    select(func.count(PaymentTransaction.id)).where(
+                        PaymentTransaction.credit_status != "credited"
                     )
                 )
                 or 0
@@ -2083,6 +2104,8 @@ def create_dashboard_router(
                     "received_today": received_today,
                     "pending_count": pending_count,
                     "pending_amount": pending_amount,
+                    "review_count": review_count,
+                    "review_amount": review_amount,
                 },
             ),
         )
