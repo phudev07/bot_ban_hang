@@ -100,6 +100,9 @@ def create_router(
     supplier_client: SumistoreClient | None = None,
 ) -> Router:
     router = Router(name="customer")
+    warehouse_docs_url = (
+        f"{settings.shop_api_base_url.rstrip('/').removesuffix('/v1')}/docs"
+    )
 
     def bundle_values(orders, user: User) -> tuple[list[int], str, str, list[str], int]:
         order_ids = [order.id for order in orders]
@@ -1155,6 +1158,7 @@ def create_router(
                 reply_markup=warehouse_api_menu(
                     user.language,
                     client.active,
+                    warehouse_docs_url,
                     client.admin_blocked,
                 ),
             )
@@ -1169,29 +1173,6 @@ def create_router(
                     "Save it now. Rotate the secret if it is lost."
                 )
                 await callback.message.answer(warning)
-        await callback.answer()
-
-    @router.callback_query(F.data == "warehouse-api:guide")
-    async def warehouse_api_guide(callback: CallbackQuery, session: AsyncSession) -> None:
-        user = await get_or_create_user(callback, session)
-        text = (
-            "📘 <b>Đấu kho qua API</b>\n\n"
-            f"Base URL: <code>{escape(settings.shop_api_base_url)}</code>\n\n"
-            "1. <code>GET /products</code> hoặc <code>GET /catalog</code>: đồng bộ sản phẩm, giá và tồn.\n"
-            "2. <code>POST /orders</code>: mua hàng, bắt buộc có <code>Idempotency-Key</code>.\n"
-            "3. <code>GET /orders/{order_code}</code>: lấy lại đơn và tài khoản.\n\n"
-            "Header xác thực: <code>X-Shop-API-ID</code>, <code>X-Timestamp</code>, "
-            "<code>X-Nonce</code>, <code>X-Signature</code>.\n"
-            "Chữ ký HMAC-SHA256: timestamp|nonce|METHOD|PATH|sha256(body)."
-            if user.language == "vi"
-            else "📘 <b>Warehouse API integration</b>\n\n"
-            f"Base URL: <code>{escape(settings.shop_api_base_url)}</code>\n\n"
-            "Use <code>GET /products</code> to synchronize catalog and stock, "
-            "<code>POST /orders</code> to purchase, and <code>GET /orders/{order_code}</code> "
-            "to retrieve delivered accounts. Every purchase requires an Idempotency-Key."
-        )
-        if callback.message:
-            await callback.message.edit_text(text, reply_markup=back_menu(user.language))
         await callback.answer()
 
     @router.callback_query(F.data == "warehouse-api:rotate")
@@ -1220,6 +1201,7 @@ def create_router(
                 reply_markup=warehouse_api_menu(
                     user.language,
                     client.active,
+                    warehouse_docs_url,
                     client.admin_blocked,
                 ),
             )
@@ -1263,6 +1245,7 @@ def create_router(
                 reply_markup=warehouse_api_menu(
                     user.language,
                     client.active,
+                    warehouse_docs_url,
                     client.admin_blocked,
                 ),
             )

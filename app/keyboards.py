@@ -38,6 +38,7 @@ def main_menu(language: str) -> InlineKeyboardMarkup:
 def warehouse_api_menu(
     language: str,
     active: bool,
+    docs_url: str,
     admin_blocked: bool = False,
 ) -> InlineKeyboardMarkup:
     rotate_text = "🔄 Đổi API Secret" if language == "vi" else "🔄 Rotate API Secret"
@@ -58,7 +59,7 @@ def warehouse_api_menu(
     )
     return InlineKeyboardMarkup(
         inline_keyboard=[
-            [InlineKeyboardButton(text=guide_text, callback_data="warehouse-api:guide")],
+            [InlineKeyboardButton(text=guide_text, url=docs_url)],
             [InlineKeyboardButton(text=rotate_text, callback_data="warehouse-api:rotate")],
             [toggle_button],
             [InlineKeyboardButton(text=tr(language, "back"), callback_data="back:menu")],

@@ -3,6 +3,7 @@ from app.keyboards import (
     order_history_menu,
     product_detail,
     quantity_menu,
+    warehouse_api_menu,
 )
 from app.models import Order, Product
 
@@ -32,6 +33,18 @@ def test_main_menu_exposes_warehouse_api_and_referrals() -> None:
 
     assert "menu:warehouse-api" in callbacks
     assert "menu:referral" in callbacks
+
+
+def test_warehouse_api_guide_opens_public_documentation() -> None:
+    keyboard = warehouse_api_menu(
+        "vi",
+        active=True,
+        docs_url="https://token.vietshare.site/docs",
+    )
+    guide_button = keyboard.inline_keyboard[0][0]
+
+    assert guide_button.url == "https://token.vietshare.site/docs"
+    assert guide_button.callback_data is None
 
 
 def test_quantity_buttons_do_not_exceed_available_stock() -> None:
