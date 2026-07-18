@@ -101,7 +101,10 @@ def _update_action(subject: Message | CallbackQuery) -> str:
             return "clear_chat"
         return "callback"
 
-    command = (subject.text or "").strip().split(maxsplit=1)[0].lower()
+    content = (subject.text or subject.caption or "").strip()
+    if not content:
+        return "message"
+    command = content.split(maxsplit=1)[0].lower()
     command = command.split("@", 1)[0]
     if command == "/naptien":
         return "deposit_menu"

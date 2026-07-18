@@ -1,7 +1,7 @@
 import asyncio
 from datetime import UTC, datetime
 
-from aiogram.types import CallbackQuery, Chat, Message, Update, User as TelegramUser
+from aiogram.types import CallbackQuery, Chat, Message, PhotoSize, Update, User as TelegramUser
 from cryptography.fernet import Fernet
 from redis.exceptions import RedisError
 
@@ -75,6 +75,17 @@ def message(text: str) -> Message:
     )
 
 
+def photo_message(caption: str | None = None) -> Message:
+    return Message(
+        message_id=2,
+        date=datetime.now(UTC),
+        chat=Chat(id=1001, type="private"),
+        from_user=telegram_user(),
+        caption=caption,
+        photo=[PhotoSize(file_id="photo", file_unique_id="photo-unique", width=1, height=1)],
+    )
+
+
 def test_fixed_window_limit_and_redis_failure_are_safe() -> None:
     async def scenario() -> None:
         now = [100.0]
@@ -107,6 +118,16 @@ def test_sensitive_bot_actions_receive_stricter_limits() -> None:
     assert any(rule.name == "purchase" for rule in purchase_rules)
     assert any(rule.name == "rotate_secret" and rule.limit == 2 for rule in rotate_rules)
     assert any(rule.name == "clear_chat" for rule in command_rules)
+
+
+def test_media_messages_without_text_are_rate_limited_without_crashing() -> None:
+    config = settings()
+
+    rules = bot_rate_rules(photo_message(), config)
+    caption_rules = bot_rate_rules(photo_message("Nội dung kèm ảnh"), config)
+
+    assert any(rule.name == "message" for rule in rules)
+    assert any(rule.name == "message" for rule in caption_rules)
 
 
 def test_bot_middleware_drops_burst_before_handler() -> None:
