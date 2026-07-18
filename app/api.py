@@ -284,14 +284,49 @@ def create_api(
             raise HTTPException(status_code=400, detail="Invalid JSON payload") from exc
         if not isinstance(payload, dict):
             raise HTTPException(status_code=400, detail="Invalid payload")
-        result = await process_sepay_payment(
-            session_factory,
-            payload,
-            settings.payment_prefix,
-            cipher,
-            supplier_client,
-            settings.referral_commission_percent,
-        )
+        fulfillment_message: tuple[int, int] | None = None
+
+        async def show_fulfillment_started(user_id: int, language: str) -> None:
+            nonlocal fulfillment_message
+            try:
+                message = await bot.send_message(
+                    user_id,
+                    (
+                        "✅ <b>Thanh toán thành công</b>\n"
+                        "⏳ Đang lấy hàng, bạn vui lòng chờ trong giây lát..."
+                        if language == "vi"
+                        else "✅ <b>Payment successful</b>\n"
+                        "⏳ Getting your product, please wait a moment..."
+                    ),
+                )
+            except Exception:
+                logger.exception("Could not send fulfillment status to user %s", user_id)
+                return
+            message_id = getattr(message, "message_id", None)
+            if message_id is not None:
+                fulfillment_message = (user_id, int(message_id))
+
+        try:
+            result = await process_sepay_payment(
+                session_factory,
+                payload,
+                settings.payment_prefix,
+                cipher,
+                supplier_client,
+                settings.referral_commission_percent,
+                show_fulfillment_started,
+            )
+        finally:
+            if fulfillment_message is not None:
+                chat_id, message_id = fulfillment_message
+                try:
+                    await bot.delete_message(chat_id, message_id)
+                except Exception:
+                    logger.warning(
+                        "Could not delete fulfillment status message user=%s message=%s",
+                        chat_id,
+                        message_id,
+                    )
         logger.info("SePay webhook processed: status=%s", result.status)
         if result.status == "deposit_not_found":
             logger.warning(

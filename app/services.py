@@ -1,5 +1,6 @@
 import logging
 import secrets
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 
@@ -37,6 +38,21 @@ RECOVERABLE_SUPPLIER_ERRORS = {
     "SUPPLIER_INVALID_RESPONSE",
     "SUPPLIER_DELIVERY_INCOMPLETE",
 }
+
+FulfillmentStartedCallback = Callable[[int, str], Awaitable[None]]
+
+
+async def notify_fulfillment_started(
+    callback: FulfillmentStartedCallback | None,
+    user_id: int,
+    language: str,
+) -> None:
+    if callback is None:
+        return
+    try:
+        await callback(user_id, language)
+    except Exception:
+        logger.exception("Could not notify user %s that fulfillment started", user_id)
 
 
 async def reserve_available_inventory(
@@ -311,6 +327,7 @@ async def purchase_product(
     api_client_id: int | None = None,
     api_order_request_id: int | None = None,
     referral_commission_percent: int = 5,
+    on_fulfillment_started: FulfillmentStartedCallback | None = None,
 ) -> PurchaseResult:
     uses_supplier = False
     if supplier_client is not None:
@@ -336,6 +353,7 @@ async def purchase_product(
                 api_client_id=api_client_id,
                 api_order_request_id=api_order_request_id,
                 referral_commission_percent=referral_commission_percent,
+                on_fulfillment_started=on_fulfillment_started,
             )
     return await _purchase_product(
         session_factory,
@@ -350,6 +368,7 @@ async def purchase_product(
         api_client_id=api_client_id,
         api_order_request_id=api_order_request_id,
         referral_commission_percent=referral_commission_percent,
+        on_fulfillment_started=on_fulfillment_started,
     )
 
 
@@ -367,6 +386,7 @@ async def _purchase_product(
     api_client_id: int | None,
     api_order_request_id: int | None,
     referral_commission_percent: int,
+    on_fulfillment_started: FulfillmentStartedCallback | None,
 ) -> PurchaseResult:
     async with session_factory() as session:
         async with session.begin():
@@ -474,6 +494,11 @@ async def _purchase_product(
                         discount_amount=total_discount,
                         coupon_code=pricing.coupon.code if pricing.coupon else None,
                     )
+                await notify_fulfillment_started(
+                    on_fulfillment_started,
+                    user.telegram_id,
+                    user.language,
+                )
                 try:
                     supplier_purchase = await buy_supplier_product(
                         session,
@@ -738,6 +763,7 @@ async def process_sepay_payment(
     cipher: SecretCipher | None = None,
     supplier_client: SumistoreClient | None = None,
     referral_commission_percent: int = 5,
+    on_fulfillment_started: FulfillmentStartedCallback | None = None,
 ) -> PaymentResult:
     if supplier_client is not None:
         payment_text = " ".join(
@@ -764,6 +790,7 @@ async def process_sepay_payment(
                         cipher,
                         supplier_client,
                         referral_commission_percent,
+                        on_fulfillment_started,
                     )
     return await _process_sepay_payment(
         session_factory,
@@ -772,6 +799,7 @@ async def process_sepay_payment(
         cipher,
         supplier_client,
         referral_commission_percent,
+        on_fulfillment_started,
     )
 
 
@@ -782,6 +810,7 @@ async def _process_sepay_payment(
     cipher: SecretCipher | None,
     supplier_client: SumistoreClient | None,
     referral_commission_percent: int,
+    on_fulfillment_started: FulfillmentStartedCallback | None,
 ) -> PaymentResult:
     transfer_type = str(payload.get("transferType") or payload.get("transfer_type") or "").lower()
     if transfer_type and transfer_type not in {"in", "credit", "incoming"}:
@@ -923,6 +952,11 @@ async def _process_sepay_payment(
                             else:
                                 recovered_stock = len(items)
                                 items = []
+                                await notify_fulfillment_started(
+                                    on_fulfillment_started,
+                                    user.telegram_id,
+                                    user.language,
+                                )
                                 await refresh_external_product(
                                     session,
                                     product,

@@ -683,6 +683,7 @@ def test_external_direct_payment_delivers_supplier_account() -> None:
         engine, sessions = await make_database()
         cipher = SecretCipher(Fernet.generate_key().decode())
         supplier = FakeSupplier(balance=100_000, stock=100)
+        fulfillment_events: list[tuple[int, str]] = []
         async with sessions() as session:
             category = Category(name_vi="ChatGPT", name_en="ChatGPT")
             session.add(category)
@@ -720,8 +721,14 @@ def test_external_direct_payment_delivers_supplier_account() -> None:
             },
             cipher=cipher,
             supplier_client=supplier,  # type: ignore[arg-type]
+            on_fulfillment_started=lambda user_id, language: _record_fulfillment_event(
+                fulfillment_events,
+                user_id,
+                language,
+            ),
         )
         assert result.status == "direct_purchase_completed"
+        assert fulfillment_events == [(123456, "vi")]
         assert [cipher.decrypt(value) for value in result.encrypted_secrets] == [
             "chatgpt1:password"
         ]
@@ -733,6 +740,14 @@ def test_external_direct_payment_delivers_supplier_account() -> None:
         await engine.dispose()
 
     asyncio.run(scenario())
+
+
+async def _record_fulfillment_event(
+    events: list[tuple[int, str]],
+    user_id: int,
+    language: str,
+) -> None:
+    events.append((user_id, language))
 
 
 def test_external_direct_payment_uses_recovered_inventory_first() -> None:

@@ -374,16 +374,34 @@ def create_router(
         session_factory: async_sessionmaker[AsyncSession],
         coupon_id: int | None = None,
     ) -> str:
-        result = await purchase_product(
-            session_factory,
-            user.telegram_id,
-            product_id,
-            cipher,
-            quantity,
-            supplier_client,
-            coupon_id=coupon_id,
-            referral_commission_percent=settings.referral_commission_percent,
-        )
+        fulfillment_message: Message | None = None
+
+        async def show_fulfillment_started(_user_id: int, language: str) -> None:
+            nonlocal fulfillment_message
+            fulfillment_message = await target.answer(
+                "⏳ <b>Đang lấy hàng...</b>\nBạn vui lòng chờ trong giây lát."
+                if language == "vi"
+                else "⏳ <b>Getting your product...</b>\nPlease wait a moment."
+            )
+
+        try:
+            result = await purchase_product(
+                session_factory,
+                user.telegram_id,
+                product_id,
+                cipher,
+                quantity,
+                supplier_client,
+                coupon_id=coupon_id,
+                referral_commission_percent=settings.referral_commission_percent,
+                on_fulfillment_started=show_fulfillment_started,
+            )
+        finally:
+            if fulfillment_message is not None:
+                try:
+                    await fulfillment_message.delete()
+                except Exception:
+                    pass
         messages_vi = {
             "out_of_stock": "Sản phẩm vừa hết hàng.",
             "blocked": "Tài khoản đang bị khóa. Liên hệ hỗ trợ.",
