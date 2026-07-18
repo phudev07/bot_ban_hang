@@ -192,7 +192,7 @@ def create_router(
         await session.commit()
         await message.answer(
             home_text(user, settings),
-            reply_markup=main_menu(user.language),
+            reply_markup=main_menu(user.language, sms_enabled=rentsim_client is not None),
             disable_web_page_preview=True,
         )
 
@@ -283,7 +283,7 @@ def create_router(
         await bot.send_message(
             message.chat.id,
             home_text(user, settings),
-            reply_markup=main_menu(user.language),
+            reply_markup=main_menu(user.language, sms_enabled=rentsim_client is not None),
             disable_web_page_preview=True,
         )
 
@@ -296,7 +296,7 @@ def create_router(
         if callback.message:
             await callback.message.edit_text(
                 home_text(user, settings),
-                reply_markup=main_menu(user.language),
+                reply_markup=main_menu(user.language, sms_enabled=rentsim_client is not None),
                 disable_web_page_preview=True,
             )
         await callback.answer()
@@ -1723,7 +1723,7 @@ def create_router(
         if callback.message:
             await callback.message.edit_text(
                 home_text(user, settings),
-                reply_markup=main_menu(user.language),
+                reply_markup=main_menu(user.language, sms_enabled=rentsim_client is not None),
                 disable_web_page_preview=True,
             )
         await callback.answer("Đã đổi ngôn ngữ" if language == "vi" else "Language changed")
@@ -1747,7 +1747,7 @@ def create_router(
             await bot.send_message(
                 callback.message.chat.id,
                 home_text(user, settings),
-                reply_markup=main_menu(user.language),
+                reply_markup=main_menu(user.language, sms_enabled=rentsim_client is not None),
                 disable_web_page_preview=True,
             )
             return

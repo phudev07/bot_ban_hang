@@ -7,7 +7,7 @@ from app.models import Category, Order, Product
 from app.utils import format_vnd
 
 
-def main_menu(language: str) -> InlineKeyboardMarkup:
+def main_menu(language: str, *, sms_enabled: bool = False) -> InlineKeyboardMarkup:
     builder = InlineKeyboardBuilder()
     builder.row(
         InlineKeyboardButton(text=tr(language, "quick"), callback_data="menu:quick"),
@@ -17,7 +17,8 @@ def main_menu(language: str) -> InlineKeyboardMarkup:
         InlineKeyboardButton(text=tr(language, "codes"), callback_data="menu:codes"),
         InlineKeyboardButton(text=tr(language, "products"), callback_data="menu:products"),
     )
-    builder.row(InlineKeyboardButton(text=tr(language, "sms"), callback_data="menu:sms"))
+    if sms_enabled:
+        builder.row(InlineKeyboardButton(text=tr(language, "sms"), callback_data="menu:sms"))
     builder.row(
         InlineKeyboardButton(text=tr(language, "orders"), callback_data="menu:orders"),
         InlineKeyboardButton(text=tr(language, "profile"), callback_data="menu:profile"),

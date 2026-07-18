@@ -28,12 +28,19 @@ def test_out_of_stock_product_has_no_buy_button() -> None:
 
 
 def test_main_menu_exposes_warehouse_api_and_referrals() -> None:
-    keyboard = main_menu("vi")
+    keyboard = main_menu("vi", sms_enabled=True)
     callbacks = [button.callback_data for row in keyboard.inline_keyboard for button in row]
 
     assert "menu:warehouse-api" in callbacks
     assert "menu:referral" in callbacks
     assert "menu:sms" in callbacks
+
+
+def test_main_menu_hides_sms_until_provider_is_configured() -> None:
+    keyboard = main_menu("vi")
+    callbacks = [button.callback_data for row in keyboard.inline_keyboard for button in row]
+
+    assert "menu:sms" not in callbacks
 
 
 def test_warehouse_api_guide_opens_public_documentation() -> None:

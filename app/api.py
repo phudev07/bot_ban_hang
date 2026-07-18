@@ -379,7 +379,10 @@ def create_api(
                     f"Số tiền: <b>{format_vnd(result.amount)}</b>\n"
                     f"{balance_line}\n\n"
                     "Số dư đã được cập nhật, bạn có thể mua hàng ngay.",
-                    reply_markup=main_menu(result.language),
+                    reply_markup=main_menu(
+                        result.language,
+                        sms_enabled=rentsim_client is not None,
+                    ),
                 )
             except Exception:
                 logger.exception("Could not notify user %s about deposit", result.user_id)
@@ -434,7 +437,10 @@ def create_api(
                 await bot.send_message(
                     result.user_id,
                     text,
-                    reply_markup=main_menu(result.language),
+                    reply_markup=main_menu(
+                        result.language,
+                        sms_enabled=rentsim_client is not None,
+                    ),
                 )
             except Exception:
                 logger.exception(
@@ -478,7 +484,10 @@ def create_api(
                 await bot.send_message(
                     result.user_id,
                     rejected_message,
-                    reply_markup=main_menu(result.language),
+                    reply_markup=main_menu(
+                        result.language,
+                        sms_enabled=rentsim_client is not None,
+                    ),
                 )
             except Exception:
                 logger.exception(
