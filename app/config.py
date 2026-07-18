@@ -64,6 +64,7 @@ class Settings(BaseSettings):
     lehai_markup: int = 5_000
     lehai_timeout_seconds: float = 15
     lehai_sync_seconds: int = 60
+    lehai_audit_seconds: int = 30
 
     shop_api_enabled: bool = True
     shop_api_base_url: str = "https://token.vietshare.site/v1"
@@ -127,6 +128,8 @@ class Settings(BaseSettings):
             raise ValueError("Le Hai Premium price or timeout configuration is invalid")
         if self.lehai_sync_seconds < 15:
             raise ValueError("Le Hai Premium sync interval must be at least 15 seconds")
+        if self.lehai_audit_seconds < 10:
+            raise ValueError("Le Hai Premium audit interval must be at least 10 seconds")
         if self.shop_api_rate_limit_per_minute < 1:
             raise ValueError("Shop API rate limit must be positive")
         if self.shop_api_signature_tolerance_seconds < 30:

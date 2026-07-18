@@ -206,6 +206,7 @@ def create_api(
                 session_factory,
                 cipher,
                 supplier_client,
+                lehai_client,
             )
         )
 

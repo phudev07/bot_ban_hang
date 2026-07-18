@@ -11,7 +11,7 @@ from app.models import (
     SupplierBalanceState,
     SupplierBalanceTransaction,
 )
-from app.suppliers import SumistoreClient, supplier_balance_guard
+from app.suppliers import ExternalSupplierClient, SumistoreClient, supplier_balance_guard
 from app.utils import SecretCipher
 
 
@@ -134,7 +134,10 @@ def record_supplier_purchase(
 
 async def reconcile_supplier_balance(
     session_factory: async_sessionmaker[AsyncSession],
-    client: SumistoreClient,
+    client: ExternalSupplierClient,
+    *,
+    provider: str = PROVIDER,
+    provider_label: str = "Sumi",
 ) -> SupplierReconcileResult:
     async with supplier_balance_guard(client):
         current_balance = await client.fetch_balance()
@@ -143,13 +146,13 @@ async def reconcile_supplier_balance(
             async with session.begin():
                 state = await session.scalar(
                     select(SupplierBalanceState)
-                    .where(SupplierBalanceState.provider == PROVIDER)
+                    .where(SupplierBalanceState.provider == provider)
                     .with_for_update()
                 )
                 latest_purchase_id = int(
                     await session.scalar(
                         select(func.coalesce(func.max(SupplierBalanceTransaction.id), 0)).where(
-                            SupplierBalanceTransaction.provider == PROVIDER,
+                            SupplierBalanceTransaction.provider == provider,
                             SupplierBalanceTransaction.kind == "purchase",
                         )
                     )
@@ -157,7 +160,7 @@ async def reconcile_supplier_balance(
                 )
                 if state is None or state.last_balance is None:
                     if state is None:
-                        state = SupplierBalanceState(provider=PROVIDER)
+                        state = SupplierBalanceState(provider=provider)
                         session.add(state)
                     state.last_balance = current_balance
                     state.last_purchase_id = latest_purchase_id
@@ -167,7 +170,7 @@ async def reconcile_supplier_balance(
                 purchases = list(
                     await session.scalars(
                         select(SupplierBalanceTransaction).where(
-                            SupplierBalanceTransaction.provider == PROVIDER,
+                            SupplierBalanceTransaction.provider == provider,
                             SupplierBalanceTransaction.kind == "purchase",
                             SupplierBalanceTransaction.id > state.last_purchase_id,
                         )
@@ -179,13 +182,13 @@ async def reconcile_supplier_balance(
                 transaction: SupplierBalanceTransaction | None = None
                 if unexplained_delta < 0:
                     transaction = SupplierBalanceTransaction(
-                        provider=PROVIDER,
+                        provider=provider,
                         kind="suspicious",
                         amount=unexplained_delta,
                         balance_before=state.last_balance,
                         balance_after=current_balance,
                         note=(
-                            "Số dư Sumi giảm nhiều hơn tổng chi phí các đơn do shop ghi nhận "
+                            f"Số dư {provider_label} giảm nhiều hơn tổng chi phí các đơn do shop ghi nhận "
                             "trong cùng kỳ đối soát."
                         ),
                         period_started_at=state.checked_at,
@@ -194,7 +197,8 @@ async def reconcile_supplier_balance(
                     session.add(transaction)
                     await session.flush()
                     logger.warning(
-                        "Suspicious Sumi balance decrease detected: amount=%s before=%s after=%s",
+                        "Suspicious %s balance decrease detected: amount=%s before=%s after=%s",
+                        provider,
                         unexplained_delta,
                         state.last_balance,
                         current_balance,
@@ -202,12 +206,12 @@ async def reconcile_supplier_balance(
                 elif unexplained_delta > 0:
                     session.add(
                         SupplierBalanceTransaction(
-                            provider=PROVIDER,
+                            provider=provider,
                             kind="credit",
                             amount=unexplained_delta,
                             balance_before=state.last_balance,
                             balance_after=current_balance,
-                            note="Số dư Sumi tăng ngoài các đơn mua của shop.",
+                            note=f"Số dư {provider_label} tăng ngoài các đơn mua của shop.",
                             period_started_at=state.checked_at,
                             created_at=checked_at,
                         )

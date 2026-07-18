@@ -2,19 +2,30 @@
 {% block content %}
 <section class="page-intro audit-intro">
   <div>
-    <span>SUMI BALANCE WATCH</span>
+    <span>{{ provider_label|upper }} BALANCE WATCH</span>
     <h2>Phát hiện tiền bị trừ ngoài đơn của shop.</h2>
     <p>Mỗi đơn mua qua API được ghi chi phí thực tế. Phần số dư giảm vượt quá tổng chi phí đó sẽ tự động được đánh dấu đáng ngờ.</p>
   </div>
   <form method="post" action="/admin/supplier-audit/reconcile">
     <input type="hidden" name="csrf" value="{{ csrf_token }}">
+    <input type="hidden" name="provider" value="{{ selected_provider }}">
     <button class="button secondary" type="submit" {{ 'disabled' if not supplier_connected else '' }}>Đối soát ngay</button>
   </form>
 </section>
 
+<section class="panel filter-panel">
+  <div class="audit-filters">
+    <div><span>Nguồn đối soát</span><strong>Chọn ví nhà cung cấp</strong></div>
+    <nav aria-label="Chọn nhà cung cấp">
+      <a class="{{ 'active' if selected_provider == 'sumistore' else '' }}" href="/admin/supplier-audit?provider=sumistore">Sumi</a>
+      <a class="{{ 'active' if selected_provider == 'lehai' else '' }}" href="/admin/supplier-audit?provider=lehai">Lê Hải Premium</a>
+    </nav>
+  </div>
+</section>
+
 <section class="metric-grid audit-metrics">
   <article class="metric">
-    <span>Số dư Sumi hiện tại</span>
+    <span>Số dư {{ provider_label }} hiện tại</span>
     <strong>{{ stats.current_balance|vnd if stats.current_balance != None else 'Chưa có mốc' }}</strong>
     <small>Kiểm tra cuối: {{ stats.last_checked|localtime }}</small>
   </article>
@@ -31,7 +42,7 @@
   <article class="metric">
     <span>Tiền tăng ngoài shop</span>
     <strong>+{{ stats.credit_total|vnd }}</strong>
-    <small>Nạp thêm hoặc điều chỉnh số dư Sumi</small>
+    <small>Nạp thêm hoặc điều chỉnh số dư {{ provider_label }}</small>
   </article>
 </section>
 
@@ -41,12 +52,12 @@
       <span>Hiển thị</span>
       <strong>Lịch sử đối soát số dư</strong>
     </div>
-    <nav aria-label="Lọc giao dịch Sumi">
-      <a class="{{ 'active' if selected_kind == 'all' else '' }}" href="/admin/supplier-audit">Tất cả</a>
-      <a class="{{ 'active' if selected_kind == 'suspicious' else '' }}" href="/admin/supplier-audit?kind=suspicious">Đáng ngờ</a>
-      <a class="{{ 'active' if selected_kind == 'recovered' else '' }}" href="/admin/supplier-audit?kind=recovered">Đã thu hồi</a>
-      <a class="{{ 'active' if selected_kind == 'purchase' else '' }}" href="/admin/supplier-audit?kind=purchase">Mua hợp lệ</a>
-      <a class="{{ 'active' if selected_kind == 'credit' else '' }}" href="/admin/supplier-audit?kind=credit">Tiền tăng</a>
+    <nav aria-label="Lọc giao dịch {{ provider_label }}">
+      <a class="{{ 'active' if selected_kind == 'all' else '' }}" href="/admin/supplier-audit?provider={{ selected_provider }}">Tất cả</a>
+      <a class="{{ 'active' if selected_kind == 'suspicious' else '' }}" href="/admin/supplier-audit?provider={{ selected_provider }}&kind=suspicious">Đáng ngờ</a>
+      {% if selected_provider == 'sumistore' %}<a class="{{ 'active' if selected_kind == 'recovered' else '' }}" href="/admin/supplier-audit?provider=sumistore&kind=recovered">Đã thu hồi</a>{% endif %}
+      <a class="{{ 'active' if selected_kind == 'purchase' else '' }}" href="/admin/supplier-audit?provider={{ selected_provider }}&kind=purchase">Mua hợp lệ</a>
+      <a class="{{ 'active' if selected_kind == 'credit' else '' }}" href="/admin/supplier-audit?provider={{ selected_provider }}&kind=credit">Tiền tăng</a>
     </nav>
   </div>
 </section>

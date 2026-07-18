@@ -13,6 +13,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from sqlalchemy.orm import aliased
 
 from app.config import Settings
+from app.lehai_suppliers import LeHaiPremiumClient
 from app.models import (
     BalanceAdjustment,
     BroadcastLog,
@@ -25,6 +26,7 @@ from app.models import (
     Order,
     PaymentTransaction,
     Product,
+    QuantityDiscount,
     ReferralReward,
     SupplierBalanceState,
     SupplierBalanceTransaction,
@@ -344,6 +346,7 @@ def create_dashboard_router(
     session_factory: async_sessionmaker[AsyncSession],
     cipher: SecretCipher,
     supplier_client: SumistoreClient | None = None,
+    lehai_client: LeHaiPremiumClient | None = None,
 ) -> APIRouter:
     router = APIRouter()
 
@@ -1109,6 +1112,9 @@ def create_dashboard_router(
             await session.execute(
                 delete(DiscountCode).where(DiscountCode.product_id == product_id)
             )
+            await session.execute(
+                delete(QuantityDiscount).where(QuantityDiscount.product_id == product_id)
+            )
             await session.delete(product)
             await session.commit()
         flash(request, "Đã xóa sản phẩm và toàn bộ kho chưa bán của sản phẩm đó.")
@@ -1144,6 +1150,28 @@ def create_dashboard_router(
                 {"code": code, "product": product}
                 for code, product in await session.execute(statement)
             ]
+            quantity_statement = (
+                select(QuantityDiscount, Product)
+                .join(Product, Product.id == QuantityDiscount.product_id)
+                .where(
+                    Product.fulfillment_source.in_(SELLABLE_FULFILLMENT_SOURCES),
+                    Product.product_type == "account",
+                )
+                .order_by(
+                    Product.name_vi,
+                    QuantityDiscount.min_quantity,
+                )
+            )
+            if product_id is not None:
+                quantity_statement = quantity_statement.where(
+                    QuantityDiscount.product_id == product_id
+                )
+            quantity_tiers = [
+                {"tier": tier, "product": product}
+                for tier, product in await session.execute(
+                    quantity_statement
+                )
+            ]
             active_count = int(
                 await session.scalar(
                     select(func.count(DiscountCode.id))
@@ -1173,6 +1201,18 @@ def create_dashboard_router(
                 )
                 or 0
             )
+            active_quantity_tiers = int(
+                await session.scalar(
+                    select(func.count(QuantityDiscount.id))
+                    .join(Product, Product.id == QuantityDiscount.product_id)
+                    .where(
+                        QuantityDiscount.active.is_(True),
+                        Product.fulfillment_source.in_(SELLABLE_FULFILLMENT_SOURCES),
+                        Product.product_type == "account",
+                    )
+                )
+                or 0
+            )
         return templates.TemplateResponse(
             request,
             "discounts.html",
@@ -1182,14 +1222,101 @@ def create_dashboard_router(
                 "discounts",
                 products=products,
                 codes=codes,
+                quantity_tiers=quantity_tiers,
                 selected_product_id=product_id,
                 stats={
                     "active": active_count,
                     "uses": total_uses,
                     "discount": total_discount,
+                    "quantity_tiers": active_quantity_tiers,
                 },
             ),
         )
+
+    @router.post("/admin/quantity-discounts")
+    async def create_quantity_discount(
+        request: Request,
+        csrf: str = Form(...),
+        product_id: int = Form(...),
+        min_quantity: int = Form(...),
+        discount_percent: int = Form(...),
+    ) -> RedirectResponse:
+        if not is_admin(request):
+            return redirect_to_login()
+        if not valid_csrf(request, csrf):
+            return RedirectResponse("/admin/discounts", status_code=303)
+        if min_quantity < 2 or min_quantity > 100 or not 1 <= discount_percent <= 99:
+            flash(request, "Mốc số lượng hoặc phần trăm giảm không hợp lệ.", "error")
+            return RedirectResponse("/admin/discounts", status_code=303)
+        async with session_factory() as session:
+            product = await session.get(Product, product_id)
+            duplicate = await session.scalar(
+                select(QuantityDiscount.id).where(
+                    QuantityDiscount.product_id == product_id,
+                    QuantityDiscount.min_quantity == min_quantity,
+                )
+            )
+            if (
+                product is None
+                or product.fulfillment_source not in SELLABLE_FULFILLMENT_SOURCES
+                or product.product_type != "account"
+                or min_quantity > product.max_quantity
+                or duplicate is not None
+            ):
+                flash(
+                    request,
+                    "Sản phẩm không hợp lệ, mốc vượt giới hạn mua hoặc đã được tạo.",
+                    "error",
+                )
+                return RedirectResponse("/admin/discounts", status_code=303)
+            session.add(
+                QuantityDiscount(
+                    product_id=product.id,
+                    min_quantity=min_quantity,
+                    discount_percent=discount_percent,
+                )
+            )
+            await session.commit()
+        flash(
+            request,
+            f"Đã tạo ưu đãi từ {min_quantity} sản phẩm giảm {discount_percent}%.",
+        )
+        return RedirectResponse("/admin/discounts", status_code=303)
+
+    @router.post("/admin/quantity-discounts/{tier_id}/toggle")
+    async def toggle_quantity_discount(
+        tier_id: int,
+        request: Request,
+        csrf: str = Form(...),
+    ) -> RedirectResponse:
+        if not is_admin(request):
+            return redirect_to_login()
+        if valid_csrf(request, csrf):
+            async with session_factory() as session:
+                tier = await session.get(QuantityDiscount, tier_id)
+                if tier is not None:
+                    tier.active = not tier.active
+                    await session.commit()
+                    flash(request, "Đã cập nhật trạng thái ưu đãi số lượng.")
+        return RedirectResponse("/admin/discounts", status_code=303)
+
+    @router.post("/admin/quantity-discounts/{tier_id}/delete")
+    async def delete_quantity_discount(
+        tier_id: int,
+        request: Request,
+        csrf: str = Form(...),
+    ) -> RedirectResponse:
+        if not is_admin(request):
+            return redirect_to_login()
+        if not valid_csrf(request, csrf):
+            return RedirectResponse("/admin/discounts", status_code=303)
+        async with session_factory() as session:
+            tier = await session.get(QuantityDiscount, tier_id)
+            if tier is not None:
+                await session.delete(tier)
+                await session.commit()
+                flash(request, "Đã xóa mốc ưu đãi số lượng.")
+        return RedirectResponse("/admin/discounts", status_code=303)
 
     @router.post("/admin/discounts")
     async def create_discount(
@@ -2250,19 +2377,28 @@ def create_dashboard_router(
         )
 
     @router.get("/admin/supplier-audit", response_class=HTMLResponse)
-    async def supplier_audit_page(request: Request, kind: str = "all") -> Response:
+    async def supplier_audit_page(
+        request: Request,
+        provider: str = PROVIDER,
+        kind: str = "all",
+    ) -> Response:
         if not is_admin(request):
             return redirect_to_login()
+        selected_provider = provider if provider in {PROVIDER, "lehai"} else PROVIDER
+        provider_label = "Sumi" if selected_provider == PROVIDER else "Lê Hải Premium"
+        selected_client = (
+            supplier_client if selected_provider == PROVIDER else lehai_client
+        )
         selected_kind = (
             kind
             if kind in {"all", "suspicious", "recovered", "purchase", "credit"}
             else "all"
         )
         async with session_factory() as session:
-            state = await session.get(SupplierBalanceState, PROVIDER)
+            state = await session.get(SupplierBalanceState, selected_provider)
             statement = (
                 select(SupplierBalanceTransaction)
-                .where(SupplierBalanceTransaction.provider == PROVIDER)
+                .where(SupplierBalanceTransaction.provider == selected_provider)
                 .order_by(SupplierBalanceTransaction.id.desc())
                 .limit(300)
             )
@@ -2275,7 +2411,7 @@ def create_dashboard_router(
                         func.count(SupplierBalanceTransaction.id),
                         func.coalesce(func.sum(SupplierBalanceTransaction.amount), 0),
                     ).where(
-                        SupplierBalanceTransaction.provider == PROVIDER,
+                        SupplierBalanceTransaction.provider == selected_provider,
                         SupplierBalanceTransaction.kind == "suspicious",
                     )
                 )
@@ -2286,7 +2422,7 @@ def create_dashboard_router(
                         func.count(SupplierBalanceTransaction.id),
                         func.coalesce(func.sum(SupplierBalanceTransaction.amount), 0),
                     ).where(
-                        SupplierBalanceTransaction.provider == PROVIDER,
+                        SupplierBalanceTransaction.provider == selected_provider,
                         SupplierBalanceTransaction.kind == "purchase",
                     )
                 )
@@ -2294,7 +2430,7 @@ def create_dashboard_router(
             credit_sum = int(
                 await session.scalar(
                     select(func.coalesce(func.sum(SupplierBalanceTransaction.amount), 0)).where(
-                        SupplierBalanceTransaction.provider == PROVIDER,
+                        SupplierBalanceTransaction.provider == selected_provider,
                         SupplierBalanceTransaction.kind == "credit",
                     )
                 )
@@ -2309,7 +2445,9 @@ def create_dashboard_router(
                 "supplier-audit",
                 transactions=transactions,
                 selected_kind=selected_kind,
-                supplier_connected=supplier_client is not None,
+                selected_provider=selected_provider,
+                provider_label=provider_label,
+                supplier_connected=selected_client is not None,
                 stats={
                     "current_balance": state.last_balance if state else None,
                     "last_checked": state.checked_at if state else None,
@@ -2326,21 +2464,44 @@ def create_dashboard_router(
     async def reconcile_supplier_audit(
         request: Request,
         csrf: str = Form(...),
+        provider: str = Form(PROVIDER),
     ) -> RedirectResponse:
         if not is_admin(request):
             return redirect_to_login()
         if not valid_csrf(request, csrf):
             return RedirectResponse("/admin/supplier-audit", status_code=303)
-        if supplier_client is None:
-            flash(request, "Sumi chưa được kết nối nên không thể đối soát.", "error")
-            return RedirectResponse("/admin/supplier-audit", status_code=303)
+        selected_provider = provider if provider in {PROVIDER, "lehai"} else PROVIDER
+        provider_label = "Sumi" if selected_provider == PROVIDER else "Lê Hải Premium"
+        selected_client = (
+            supplier_client if selected_provider == PROVIDER else lehai_client
+        )
+        redirect_url = f"/admin/supplier-audit?provider={selected_provider}"
+        if selected_client is None:
+            flash(
+                request,
+                f"{provider_label} chưa được kết nối nên không thể đối soát.",
+                "error",
+            )
+            return RedirectResponse(redirect_url, status_code=303)
         try:
-            result = await reconcile_supplier_balance(session_factory, supplier_client)
+            result = await reconcile_supplier_balance(
+                session_factory,
+                selected_client,
+                provider=selected_provider,
+                provider_label=provider_label,
+            )
         except SupplierError:
-            flash(request, "Không lấy được số dư Sumi. Hãy thử lại sau.", "error")
+            flash(
+                request,
+                f"Không lấy được số dư {provider_label}. Hãy thử lại sau.",
+                "error",
+            )
         else:
             if result.initialized:
-                flash(request, "Đã lưu số dư Sumi làm mốc đối soát ban đầu.")
+                flash(
+                    request,
+                    f"Đã lưu số dư {provider_label} làm mốc đối soát ban đầu.",
+                )
             elif result.suspicious_amount < 0:
                 flash(
                     request,
@@ -2349,7 +2510,7 @@ def create_dashboard_router(
                 )
             else:
                 flash(request, "Đối soát hoàn tất, không có khoản giảm bất thường.")
-        return RedirectResponse("/admin/supplier-audit", status_code=303)
+        return RedirectResponse(redirect_url, status_code=303)
 
     @router.get("/admin/system", response_class=HTMLResponse)
     async def system_page(request: Request) -> Response:

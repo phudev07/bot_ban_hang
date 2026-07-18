@@ -11,12 +11,14 @@ from app.models import (
     InventoryItem,
     Order,
     Product,
+    QuantityDiscount,
     ReferralReward,
     User,
 )
 from app.services import (
     order_bundle,
     process_sepay_payment,
+    product_pricing,
     purchase_product,
     recent_orders,
     user_activity_stats,
@@ -180,6 +182,92 @@ def test_product_coupon_reduces_each_item_and_tracks_usage() -> None:
             assert all(order.discount_amount == 5_000 for order in orders)
             assert all(order.discount_code == "SAVE5K" for order in orders)
             assert all(order.cost_amount == 0 for order in orders)
+        await engine.dispose()
+
+    asyncio.run(scenario())
+
+
+def test_quantity_discount_uses_highest_tier_and_stacks_with_coupon() -> None:
+    async def scenario() -> None:
+        engine, sessions = await make_database()
+        cipher = SecretCipher(Fernet.generate_key().decode())
+        async with sessions() as session:
+            category = Category(name_vi="Test", name_en="Test")
+            session.add(category)
+            await session.flush()
+            product = Product(
+                category_id=category.id,
+                name_vi="Tai khoan so luong lon",
+                name_en="Bulk account",
+                price=50_000,
+                allow_quantity=True,
+                max_quantity=20,
+            )
+            user = User(telegram_id=654321, full_name="Bulk buyer", balance=1_000_000)
+            session.add_all([product, user])
+            await session.flush()
+            coupon = DiscountCode(
+                product_id=product.id,
+                code="BULK5K",
+                discount_type="fixed",
+                discount_value=5_000,
+                max_uses=5,
+            )
+            session.add_all(
+                [
+                    coupon,
+                    QuantityDiscount(
+                        product_id=product.id,
+                        min_quantity=5,
+                        discount_percent=5,
+                    ),
+                    QuantityDiscount(
+                        product_id=product.id,
+                        min_quantity=10,
+                        discount_percent=10,
+                    ),
+                ]
+            )
+            session.add_all(
+                [
+                    InventoryItem(
+                        product_id=product.id,
+                        encrypted_secret=cipher.encrypt(f"bulk{index}:password"),
+                    )
+                    for index in range(1, 11)
+                ]
+            )
+            await session.commit()
+
+            lower_tier = await product_pricing(session, product, quantity=6)
+            assert lower_tier is not None
+            assert lower_tier.quantity_discount_percent == 5
+            assert lower_tier.final_unit_price == 47_500
+
+        result = await purchase_product(
+            sessions,
+            user.telegram_id,
+            product.id,
+            cipher,
+            quantity=10,
+            coupon_code="bulk5k",
+        )
+        assert result.ok is True
+        assert result.total_amount == 400_000
+        assert result.discount_amount == 100_000
+        assert result.coupon_code == "BULK5K"
+        assert result.quantity_discount_percent == 10
+
+        async with sessions() as session:
+            stored_user = await session.get(User, user.telegram_id)
+            stored_coupon = await session.scalar(select(DiscountCode))
+            orders = list(await session.scalars(select(Order).order_by(Order.id)))
+            assert stored_user is not None and stored_user.balance == 600_000
+            assert stored_coupon is not None and stored_coupon.used_count == 1
+            assert len(orders) == 10
+            assert all(order.amount == 40_000 for order in orders)
+            assert all(order.discount_amount == 10_000 for order in orders)
+            assert all(order.discount_code == "BULK5K" for order in orders)
         await engine.dispose()
 
     asyncio.run(scenario())

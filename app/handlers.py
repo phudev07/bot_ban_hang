@@ -40,6 +40,7 @@ from app.payment_expiry import register_deposit_message
 from app.services import (
     active_categories,
     active_products,
+    active_quantity_discounts,
     available_stock,
     create_deposit,
     ensure_user,
@@ -355,6 +356,7 @@ def create_router(
             lehai_client=lehai_client,
             refresh_external=True,
         )
+        quantity_discounts = await active_quantity_discounts(session, product.id)
         name = product.name_en if user.language == "en" else product.name_vi
         description = product.description_en if user.language == "en" else product.description_vi
         labels = (
@@ -368,6 +370,21 @@ def create_router(
             f"💵 {labels[0]}: <b>{format_vnd(product.price)}</b>\n"
             f"📊 {labels[1]}: <b>{stock}</b>"
         )
+        if quantity_discounts:
+            tier_lines = "\n".join(
+                (
+                    f"• Từ <b>{tier.min_quantity}</b>: giảm <b>{tier.discount_percent}%</b>"
+                    if user.language == "vi"
+                    else f"• From <b>{tier.min_quantity}</b>: <b>{tier.discount_percent}%</b> off"
+                )
+                for tier in quantity_discounts
+            )
+            tier_title = (
+                "🎁 <b>Ưu đãi số lượng</b>"
+                if user.language == "vi"
+                else "🎁 <b>Quantity discounts</b>"
+            )
+            text += f"\n\n{tier_title}\n{tier_lines}"
         if callback.message:
             await callback.message.edit_text(
                 text,
@@ -438,14 +455,24 @@ def create_router(
                     total_amount = result.total_amount or product.price * quantity
                     coupon_line_vi = (
                         f"Mã giảm giá: <b>{escape(result.coupon_code)}</b> "
-                        f"(giảm {format_vnd(result.discount_amount)})\n"
+                        f"(tổng ưu đãi {format_vnd(result.discount_amount)})\n"
                         if result.coupon_code
                         else ""
                     )
                     coupon_line_en = (
                         f"Discount code: <b>{escape(result.coupon_code)}</b> "
-                        f"(-{format_vnd(result.discount_amount)})\n"
+                        f"(total savings {format_vnd(result.discount_amount)})\n"
                         if result.coupon_code
+                        else ""
+                    )
+                    quantity_line_vi = (
+                        f"Ưu đãi số lượng: <b>-{result.quantity_discount_percent}%</b>\n"
+                        if result.quantity_discount_percent
+                        else ""
+                    )
+                    quantity_line_en = (
+                        f"Quantity discount: <b>-{result.quantity_discount_percent}%</b>\n"
+                        if result.quantity_discount_percent
                         else ""
                     )
                     text = (
@@ -453,6 +480,7 @@ def create_router(
                         f"Sản phẩm: <b>{escape(product.name_vi)}</b>\n"
                         f"Số lượng: <b>{quantity}</b>\n"
                         f"{coupon_line_vi}"
+                        f"{quantity_line_vi}"
                         f"Tổng tiền: <b>{format_vnd(total_amount)}</b>\n"
                         f"Số dư hiện có: <b>{format_vnd(user.balance)}</b>\n\n"
                         "Bạn có thể thanh toán QR trực tiếp cho sản phẩm này. "
@@ -462,6 +490,7 @@ def create_router(
                         f"Product: <b>{escape(product.name_en)}</b>\n"
                         f"Quantity: <b>{quantity}</b>\n"
                         f"{coupon_line_en}"
+                        f"{quantity_line_en}"
                         f"Total: <b>{format_vnd(total_amount)}</b>\n"
                         f"Current balance: <b>{format_vnd(user.balance)}</b>\n\n"
                         "You can pay for this product directly by QR. "
@@ -494,15 +523,28 @@ def create_router(
                 total_amount=result.total_amount,
                 language=user.language,
             )
-            if result.coupon_code:
-                coupon_note = (
-                    f"\n\n🏷 Mã <b>{escape(result.coupon_code)}</b> đã giảm "
+            if result.discount_amount:
+                discount_label = (
+                    f"Mã <b>{escape(result.coupon_code)}</b> và ưu đãi số lượng"
+                    if result.coupon_code and result.quantity_discount_percent
+                    else f"Mã <b>{escape(result.coupon_code)}</b>"
+                    if result.coupon_code
+                    else f"Ưu đãi số lượng <b>-{result.quantity_discount_percent}%</b>"
+                )
+                discount_label_en = (
+                    f"Code <b>{escape(result.coupon_code)}</b> and quantity discount"
+                    if result.coupon_code and result.quantity_discount_percent
+                    else f"Code <b>{escape(result.coupon_code)}</b>"
+                    if result.coupon_code
+                    else f"Quantity discount <b>-{result.quantity_discount_percent}%</b>"
+                )
+                text += (
+                    f"\n\n🏷 {discount_label} đã giảm tổng "
                     f"<b>{format_vnd(result.discount_amount)}</b>."
                     if user.language == "vi"
-                    else f"\n\n🏷 Code <b>{escape(result.coupon_code)}</b> saved "
+                    else f"\n\n🏷 {discount_label_en} saved "
                     f"<b>{format_vnd(result.discount_amount)}</b>."
                 )
-                text += coupon_note
             await target.answer(
                 text,
                 reply_markup=delivery_keyboard(
@@ -621,6 +663,7 @@ def create_router(
             lehai_client=lehai_client,
             refresh_external=True,
         )
+        quantity_discounts = await active_quantity_discounts(session, product.id)
         if stock <= 0:
             if callback.message:
                 await callback.message.edit_reply_markup(
@@ -641,6 +684,12 @@ def create_router(
             f"• In stock: <b>{stock}</b>\n"
             f"• Maximum per order: <b>{product.max_quantity}</b>"
         )
+        if quantity_discounts:
+            tier_summary = " · ".join(
+                f"{tier.min_quantity}+: -{tier.discount_percent}%"
+                for tier in quantity_discounts
+            )
+            text += f"\n\n🎁 {tier_summary}"
         if callback.message:
             await callback.message.edit_text(
                 text,
@@ -867,7 +916,12 @@ def create_router(
             await callback.answer("Sản phẩm vừa hết hàng.", show_alert=True)
             return
 
-        pricing = await product_pricing(session, product, coupon_id=coupon_id)
+        pricing = await product_pricing(
+            session,
+            product,
+            coupon_id=coupon_id,
+            quantity=quantity,
+        )
         if pricing is None:
             await callback.answer("Mã giảm giá không còn hiệu lực.", show_alert=True)
             return
@@ -903,14 +957,26 @@ def create_router(
         product_name = product.name_en if user.language == "en" else product.name_vi
         coupon_line_vi = (
             f"• Mã giảm giá: <b>{escape(pricing.coupon.code)}</b> "
-            f"(-{format_vnd(total_discount)})\n"
+            f"(-{format_vnd(pricing.coupon_discount_per_unit * quantity)})\n"
             if pricing.coupon
             else ""
         )
         coupon_line_en = (
             f"• Discount code: <b>{escape(pricing.coupon.code)}</b> "
-            f"(-{format_vnd(total_discount)})\n"
+            f"(-{format_vnd(pricing.coupon_discount_per_unit * quantity)})\n"
             if pricing.coupon
+            else ""
+        )
+        quantity_line_vi = (
+            f"• Ưu đãi số lượng: <b>-{pricing.quantity_discount_percent}%</b> "
+            f"(-{format_vnd(pricing.quantity_discount_per_unit * quantity)})\n"
+            if pricing.quantity_discount_percent
+            else ""
+        )
+        quantity_line_en = (
+            f"• Quantity discount: <b>-{pricing.quantity_discount_percent}%</b> "
+            f"(-{format_vnd(pricing.quantity_discount_per_unit * quantity)})\n"
+            if pricing.quantity_discount_percent
             else ""
         )
         text = (
@@ -918,6 +984,7 @@ def create_router(
             f"• Sản phẩm: <b>{escape(product_name)}</b>\n"
             f"• Số lượng: <b>{quantity}</b>\n"
             f"{coupon_line_vi}"
+            f"{quantity_line_vi}"
             f"• Ngân hàng: <b>{escape(settings.bank_code)}</b>\n"
             f"• Số tài khoản: <code>{escape(settings.bank_account)}</code>\n"
             f"• Chủ tài khoản: <b>{escape(settings.bank_account_name)}</b>\n"
@@ -931,6 +998,7 @@ def create_router(
             f"• Product: <b>{escape(product_name)}</b>\n"
             f"• Quantity: <b>{quantity}</b>\n"
             f"{coupon_line_en}"
+            f"{quantity_line_en}"
             f"• Bank: <b>{escape(settings.bank_code)}</b>\n"
             f"• Account: <code>{escape(settings.bank_account)}</code>\n"
             f"• Account name: <b>{escape(settings.bank_account_name)}</b>\n"

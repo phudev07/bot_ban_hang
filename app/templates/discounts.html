@@ -2,7 +2,33 @@
 {% block content %}
 <section class="page-intro">
   <div><span>ƯU ĐÃI THEO SẢN PHẨM</span><h2>Tạo mã đúng mặt hàng, kiểm soát đúng ngân sách.</h2><p>Mỗi mã chỉ áp dụng cho một sản phẩm. Lượt dùng chỉ tăng khi đơn được giao thành công.</p></div>
-  <div class="intro-badges"><b>{{ stats.active }} mã đang bật</b><b>{{ stats.uses }} lượt đã dùng</b><b>{{ stats.discount|vnd }} đã giảm</b></div>
+  <div class="intro-badges"><b>{{ stats.active }} mã đang bật</b><b>{{ stats.quantity_tiers }} mốc số lượng</b><b>{{ stats.discount|vnd }} đã giảm</b></div>
+</section>
+
+<section class="panel form-panel">
+  <div class="panel-head"><div><span>QUANTITY DISCOUNT</span><h2>Giảm tự động khi mua số lượng lớn</h2></div><small>Mốc cao nhất phù hợp sẽ được dùng và cộng thêm với mã giảm giá nếu khách có nhập mã.</small></div>
+  <form method="post" action="/admin/quantity-discounts" class="form-grid cols-3">
+    <input type="hidden" name="csrf" value="{{ csrf_token }}">
+    <label>Sản phẩm<select name="product_id" required>{% for product in products %}<option value="{{ product.id }}" {{ 'selected' if product.id == selected_product_id else '' }}>#{{ product.id }} · {{ product.name_vi }}</option>{% endfor %}</select></label>
+    <label>Mua tối thiểu<input type="number" name="min_quantity" value="10" min="2" max="100" required><small>Ví dụ nhập 10 để áp dụng từ 10 tài khoản.</small></label>
+    <label>Giảm phần trăm<input type="number" name="discount_percent" value="10" min="1" max="99" required><small>Ví dụ 10 tương ứng giảm 10%.</small></label>
+    <button class="button primary" type="submit">Tạo mốc ưu đãi</button>
+  </form>
+</section>
+
+<section class="panel">
+  <div class="panel-head"><div><span>QUANTITY TIERS</span><h2>Các mốc đang cấu hình</h2></div><small>Cùng một sản phẩm không thể có hai mốc số lượng giống nhau.</small></div>
+  <div class="table-wrap"><table><thead><tr><th>Sản phẩm</th><th>Mốc áp dụng</th><th>Mức giảm</th><th>Trạng thái</th><th>Thao tác</th></tr></thead><tbody>
+    {% for row in quantity_tiers %}{% set tier = row.tier %}
+    <tr>
+      <td><a class="text-link" href="/admin/products/{{ row.product.id }}">#{{ row.product.id }} · {{ row.product.name_vi }}</a><small>Giá hiện tại {{ row.product.price|vnd }}</small></td>
+      <td><strong>Từ {{ tier.min_quantity }} sản phẩm</strong><small>Mốc #{{ tier.id }} · tạo {{ tier.created_at|localtime }}</small></td>
+      <td><strong>-{{ tier.discount_percent }}%</strong><small>Tự động, không cần nhập mã</small></td>
+      <td><span class="status {{ 'on' if tier.active else 'off' }}">{{ 'Đang bật' if tier.active else 'Đã tắt' }}</span></td>
+      <td><div class="row-actions"><form method="post" action="/admin/quantity-discounts/{{ tier.id }}/toggle"><input type="hidden" name="csrf" value="{{ csrf_token }}"><button class="button compact quiet">{{ 'Tắt' if tier.active else 'Bật' }}</button></form><form method="post" action="/admin/quantity-discounts/{{ tier.id }}/delete" onsubmit="return confirm('Xóa mốc ưu đãi này?')"><input type="hidden" name="csrf" value="{{ csrf_token }}"><button class="button compact danger">Xóa</button></form></div></td>
+    </tr>
+    {% else %}<tr><td colspan="5" class="empty">Chưa có mốc giảm giá số lượng.</td></tr>{% endfor %}
+  </tbody></table></div>
 </section>
 
 <section class="panel form-panel">

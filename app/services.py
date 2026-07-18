@@ -18,6 +18,7 @@ from app.models import (
     Order,
     PaymentTransaction,
     Product,
+    QuantityDiscount,
     SupplierBalanceTransaction,
     User,
 )
@@ -238,6 +239,9 @@ class ProductPricing:
     discount_per_unit: int
     final_unit_price: int
     coupon: DiscountCode | None = None
+    coupon_discount_per_unit: int = 0
+    quantity_discount_percent: int = 0
+    quantity_discount_per_unit: int = 0
 
 
 async def product_pricing(
@@ -246,41 +250,88 @@ async def product_pricing(
     *,
     coupon_code: str | None = None,
     coupon_id: int | None = None,
+    quantity: int = 1,
     lock_coupon: bool = False,
 ) -> ProductPricing | None:
-    if not coupon_code and coupon_id is None:
-        return ProductPricing(product.price, 0, product.price)
+    coupon: DiscountCode | None = None
+    coupon_discount = 0
+    if coupon_code or coupon_id is not None:
+        statement = select(DiscountCode).where(DiscountCode.product_id == product.id)
+        if coupon_id is not None:
+            statement = statement.where(DiscountCode.id == coupon_id)
+        else:
+            statement = statement.where(
+                DiscountCode.code == normalize_discount_code(coupon_code or "")
+            )
+        if lock_coupon:
+            statement = statement.with_for_update()
+        coupon = await session.scalar(statement)
+        now = datetime.now(UTC)
+        if (
+            coupon is None
+            or not coupon.active
+            or (_as_utc(coupon.starts_at) is not None and _as_utc(coupon.starts_at) > now)
+            or (_as_utc(coupon.expires_at) is not None and _as_utc(coupon.expires_at) <= now)
+            or (coupon.max_uses > 0 and coupon.used_count >= coupon.max_uses)
+        ):
+            return None
 
-    statement = select(DiscountCode).where(DiscountCode.product_id == product.id)
-    if coupon_id is not None:
-        statement = statement.where(DiscountCode.id == coupon_id)
-    else:
-        statement = statement.where(
-            DiscountCode.code == normalize_discount_code(coupon_code or "")
+        if coupon.discount_type == "percent":
+            coupon_discount = product.price * coupon.discount_value // 100
+        else:
+            coupon_discount = coupon.discount_value
+        coupon_discount = max(
+            0,
+            min(coupon_discount, max(0, product.price - 1)),
         )
-    if lock_coupon:
-        statement = statement.with_for_update()
-    coupon = await session.scalar(statement)
-    now = datetime.now(UTC)
-    if (
-        coupon is None
-        or not coupon.active
-        or (_as_utc(coupon.starts_at) is not None and _as_utc(coupon.starts_at) > now)
-        or (_as_utc(coupon.expires_at) is not None and _as_utc(coupon.expires_at) <= now)
-        or (coupon.max_uses > 0 and coupon.used_count >= coupon.max_uses)
-    ):
-        return None
 
-    if coupon.discount_type == "percent":
-        discount = product.price * coupon.discount_value // 100
-    else:
-        discount = coupon.discount_value
-    discount = max(0, min(discount, max(0, product.price - 1)))
+    tier = await session.scalar(
+        select(QuantityDiscount)
+        .where(
+            QuantityDiscount.product_id == product.id,
+            QuantityDiscount.active.is_(True),
+            QuantityDiscount.min_quantity <= max(1, quantity),
+        )
+        .order_by(
+            QuantityDiscount.min_quantity.desc(),
+            QuantityDiscount.discount_percent.desc(),
+        )
+        .limit(1)
+    )
+    quantity_percent = tier.discount_percent if tier is not None else 0
+    raw_quantity_discount = product.price * quantity_percent // 100
+    quantity_discount = max(
+        0,
+        min(
+            raw_quantity_discount,
+            max(0, product.price - coupon_discount - 1),
+        ),
+    )
+    discount = coupon_discount + quantity_discount
     return ProductPricing(
         original_unit_price=product.price,
         discount_per_unit=discount,
         final_unit_price=product.price - discount,
         coupon=coupon,
+        coupon_discount_per_unit=coupon_discount,
+        quantity_discount_percent=quantity_percent,
+        quantity_discount_per_unit=quantity_discount,
+    )
+
+
+async def active_quantity_discounts(
+    session: AsyncSession,
+    product_id: int,
+) -> list[QuantityDiscount]:
+    return list(
+        await session.scalars(
+            select(QuantityDiscount)
+            .where(
+                QuantityDiscount.product_id == product_id,
+                QuantityDiscount.active.is_(True),
+            )
+            .order_by(QuantityDiscount.min_quantity, QuantityDiscount.discount_percent)
+        )
     )
 
 
@@ -293,6 +344,7 @@ class PurchaseResult:
     total_amount: int = 0
     discount_amount: int = 0
     coupon_code: str | None = None
+    quantity_discount_percent: int = 0
 
     @property
     def order(self) -> Order | None:
@@ -497,6 +549,7 @@ async def _purchase_product(
                 product,
                 coupon_code=coupon_code,
                 coupon_id=coupon_id,
+                quantity=quantity,
                 lock_coupon=bool(coupon_code or coupon_id is not None),
             )
             if pricing is None:
@@ -510,6 +563,7 @@ async def _purchase_product(
                     total_amount=total_amount,
                     discount_amount=total_discount,
                     coupon_code=pricing.coupon.code if pricing.coupon else None,
+                    quantity_discount_percent=pricing.quantity_discount_percent,
                 )
 
             if product.fulfillment_source in EXTERNAL_FULFILLMENT_SOURCES:
@@ -565,6 +619,7 @@ async def _purchase_product(
                         total_amount=total_amount,
                         discount_amount=total_discount,
                         coupon_code=pricing.coupon.code if pricing.coupon else None,
+                        quantity_discount_percent=pricing.quantity_discount_percent,
                     )
                 await notify_fulfillment_started(
                     on_fulfillment_started,
@@ -668,6 +723,7 @@ async def _purchase_product(
                     total_amount=total_amount,
                     discount_amount=total_discount,
                     coupon_code=pricing.coupon.code if pricing.coupon else None,
+                    quantity_discount_percent=pricing.quantity_discount_percent,
                 )
 
             items = list(
@@ -733,6 +789,7 @@ async def _purchase_product(
                 total_amount=total_amount,
                 discount_amount=total_discount,
                 coupon_code=pricing.coupon.code if pricing.coupon else None,
+                quantity_discount_percent=pricing.quantity_discount_percent,
             )
 
 

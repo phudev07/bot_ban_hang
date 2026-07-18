@@ -10,6 +10,7 @@ from app.models import (
     Deposit,
     InventoryItem,
     Product,
+    SupplierBalanceState,
     SupplierBalanceTransaction,
     User,
 )
@@ -106,6 +107,77 @@ def test_unmatched_supplier_balance_drop_is_recorded_once() -> None:
             assert transactions[0].amount == -13_000
             assert transactions[0].balance_before == 100_000
             assert transactions[0].balance_after == 87_000
+        await engine.dispose()
+
+    asyncio.run(scenario())
+
+
+def test_lehai_reconciliation_is_isolated_and_detects_unmatched_drop() -> None:
+    async def scenario() -> None:
+        engine, sessions = await make_database()
+        sumi = ConcurrentSupplier(balance=100_000)
+        lehai = ConcurrentSupplier(balance=80_000)
+
+        await reconcile_supplier_balance(sessions, sumi)  # type: ignore[arg-type]
+        baseline = await reconcile_supplier_balance(
+            sessions,
+            lehai,  # type: ignore[arg-type]
+            provider="lehai",
+            provider_label="Le Hai Premium",
+        )
+        assert baseline.initialized is True
+
+        async with sessions() as session:
+            session.add(
+                SupplierBalanceTransaction(
+                    provider="lehai",
+                    kind="purchase",
+                    amount=-15_000,
+                    shop_order_code="B-LEHAI-1",
+                )
+            )
+            await session.commit()
+
+        lehai.balance = 65_000
+        matched = await reconcile_supplier_balance(
+            sessions,
+            lehai,  # type: ignore[arg-type]
+            provider="lehai",
+            provider_label="Le Hai Premium",
+        )
+        assert matched.expected_purchase_debit == 15_000
+        assert matched.suspicious_amount == 0
+
+        lehai.balance = 60_000
+        suspicious = await reconcile_supplier_balance(
+            sessions,
+            lehai,  # type: ignore[arg-type]
+            provider="lehai",
+            provider_label="Le Hai Premium",
+        )
+        assert suspicious.suspicious_amount == -5_000
+
+        async with sessions() as session:
+            sumi_state = await session.get(SupplierBalanceState, "sumistore")
+            lehai_state = await session.get(SupplierBalanceState, "lehai")
+            transactions = list(
+                await session.scalars(
+                    select(SupplierBalanceTransaction).order_by(
+                        SupplierBalanceTransaction.id
+                    )
+                )
+            )
+            assert sumi_state is not None and sumi_state.last_balance == 100_000
+            assert lehai_state is not None and lehai_state.last_balance == 60_000
+            assert [transaction.provider for transaction in transactions] == [
+                "lehai",
+                "lehai",
+            ]
+            assert [transaction.kind for transaction in transactions] == [
+                "purchase",
+                "suspicious",
+            ]
+            assert transactions[-1].amount == -5_000
         await engine.dispose()
 
     asyncio.run(scenario())

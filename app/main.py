@@ -26,6 +26,7 @@ from app.payment_expiry import payment_expiry_worker
 from app.rate_limit import BotSpamProtectionMiddleware
 from app.supplier_audit import reconcile_supplier_balance
 from app.suppliers import (
+    ExternalSupplierClient,
     SumistoreClient,
     create_sumistore_client,
     ensure_sumistore_product,
@@ -407,20 +408,28 @@ async def lehai_sync_worker(
 
 async def supplier_audit_worker(
     session_factory,
-    client: SumistoreClient,
+    client: ExternalSupplierClient,
     bot: Bot,
     admin_ids: tuple[int, ...],
     interval_seconds: int,
+    *,
+    provider: str = "sumistore",
+    provider_label: str = "Sumi",
 ) -> None:
     while True:
         try:
-            result = await reconcile_supplier_balance(session_factory, client)
+            result = await reconcile_supplier_balance(
+                session_factory,
+                client,
+                provider=provider,
+                provider_label=provider_label,
+            )
             if result.suspicious_amount < 0:
                 message = (
-                    "🚨 <b>Phát hiện giao dịch Sumi đáng ngờ</b>\n"
+                    f"🚨 <b>Phát hiện giao dịch {provider_label} đáng ngờ</b>\n"
                     f"Số tiền không khớp: <b>-{format_vnd(abs(result.suspicious_amount))}</b>\n"
                     f"Số dư hiện tại: <b>{format_vnd(result.current_balance)}</b>\n\n"
-                    "Mở Admin → Giao dịch đáng ngờ để xem kỳ đối soát."
+                    f"Mở Admin → Giao dịch đáng ngờ → {provider_label} để xem kỳ đối soát."
                 )
                 for admin_id in admin_ids:
                     try:
@@ -458,6 +467,18 @@ async def main() -> None:
             await reconcile_supplier_balance(session_factory, supplier_client)
         except Exception:
             logging.getLogger(__name__).exception("Could not initialize supplier balance audit")
+    if lehai_client is not None:
+        try:
+            await reconcile_supplier_balance(
+                session_factory,
+                lehai_client,
+                provider="lehai",
+                provider_label="Lê Hải Premium",
+            )
+        except Exception:
+            logging.getLogger(__name__).exception(
+                "Could not initialize Le Hai Premium balance audit"
+            )
 
     cipher = SecretCipher(settings.inventory_encryption_key.get_secret_value())
     bot = Bot(
@@ -564,6 +585,21 @@ async def main() -> None:
         if lehai_client is not None
         else None
     )
+    lehai_audit_task = (
+        asyncio.create_task(
+            supplier_audit_worker(
+                session_factory,
+                lehai_client,
+                bot,
+                settings.admin_ids,
+                settings.lehai_audit_seconds,
+                provider="lehai",
+                provider_label="Lê Hải Premium",
+            )
+        )
+        if lehai_client is not None
+        else None
+    )
     try:
         await bot.delete_webhook(drop_pending_updates=False)
         await dispatcher.start_polling(bot)
@@ -583,6 +619,10 @@ async def main() -> None:
             lehai_task.cancel()
             with contextlib.suppress(asyncio.CancelledError):
                 await lehai_task
+        if lehai_audit_task is not None:
+            lehai_audit_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await lehai_audit_task
         server.should_exit = True
         await api_task
         await storage.close()

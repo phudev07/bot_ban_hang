@@ -70,6 +70,11 @@ class Product(Base):
         cascade="all, delete-orphan",
         passive_deletes=True,
     )
+    quantity_discounts: Mapped[list["QuantityDiscount"]] = relationship(
+        back_populates="product",
+        cascade="all, delete-orphan",
+        passive_deletes=True,
+    )
 
 
 class DiscountCode(Base):
@@ -90,6 +95,30 @@ class DiscountCode(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
     product: Mapped[Product] = relationship(back_populates="discount_codes")
+
+
+class QuantityDiscount(Base):
+    __tablename__ = "quantity_discounts"
+    __table_args__ = (
+        UniqueConstraint(
+            "product_id",
+            "min_quantity",
+            name="uq_quantity_discount_product_threshold",
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    product_id: Mapped[int] = mapped_column(
+        ForeignKey("products.id", ondelete="CASCADE"), index=True
+    )
+    min_quantity: Mapped[int]
+    discount_percent: Mapped[int]
+    active: Mapped[bool] = mapped_column(Boolean, default=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+
+    product: Mapped[Product] = relationship(back_populates="quantity_discounts")
 
 
 class InventoryItem(Base):

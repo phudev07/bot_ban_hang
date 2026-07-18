@@ -21,6 +21,7 @@ from app.models import (
     InventoryItem,
     Order,
     Product,
+    QuantityDiscount,
     User,
 )
 from app.utils import SecretCipher
@@ -192,6 +193,10 @@ def test_dashboard_login_catalog_inventory_and_balance(tmp_path) -> None:
         assert supplier_audit_page.status_code == 200
         assert "Giao dịch đáng ngờ" in supplier_audit_page.text
         assert 'action="/admin/supplier-audit/reconcile"' in supplier_audit_page.text
+        lehai_audit_page = client.get("/admin/supplier-audit?provider=lehai")
+        assert lehai_audit_page.status_code == 200
+        assert 'name="provider" value="lehai"' in lehai_audit_page.text
+        assert "/admin/supplier-audit?provider=lehai" in lehai_audit_page.text
 
         api_clients_page = client.get("/admin/api-clients")
         assert api_clients_page.status_code == 200
@@ -251,6 +256,36 @@ def test_dashboard_login_catalog_inventory_and_balance(tmp_path) -> None:
         assert created_discount.status_code == 303
         discounts_page = client.get("/admin/discounts")
         assert "TEST5K" in discounts_page.text
+        created_quantity_discount = client.post(
+            "/admin/quantity-discounts",
+            data={
+                "csrf": csrf,
+                "product_id": str(product_id),
+                "min_quantity": "10",
+                "discount_percent": "10",
+            },
+            follow_redirects=False,
+        )
+        assert created_quantity_discount.status_code == 303
+        discounts_page = client.get("/admin/discounts")
+        quantity_discount_id = int(
+            re.search(
+                r'action="/admin/quantity-discounts/(\d+)/toggle"',
+                discounts_page.text,
+            ).group(1)
+        )  # type: ignore[union-attr]
+        toggled_quantity_discount = client.post(
+            f"/admin/quantity-discounts/{quantity_discount_id}/toggle",
+            data={"csrf": csrf},
+            follow_redirects=False,
+        )
+        assert toggled_quantity_discount.status_code == 303
+        deleted_quantity_discount = client.post(
+            f"/admin/quantity-discounts/{quantity_discount_id}/delete",
+            data={"csrf": csrf},
+            follow_redirects=False,
+        )
+        assert deleted_quantity_discount.status_code == 303
         discount_id = int(
             re.search(
                 r'action="/admin/discounts/(\d+)/toggle"',
@@ -310,12 +345,16 @@ def test_dashboard_login_catalog_inventory_and_balance(tmp_path) -> None:
             user = await session.get(User, 6799701918)
             adjustment = await session.scalar(select(BalanceAdjustment))
             discount_count = int(await session.scalar(select(func.count(DiscountCode.id))) or 0)
+            quantity_discount_count = int(
+                await session.scalar(select(func.count(QuantityDiscount.id))) or 0
+            )
             assert category_count == 1
             assert product_count == 0
             assert stock_count == 0
             assert user is not None and user.balance == 60_000
             assert adjustment is not None and adjustment.amount == 10_000
             assert discount_count == 0
+            assert quantity_discount_count == 0
         await engine.dispose()
 
     asyncio.run(verify_database())
