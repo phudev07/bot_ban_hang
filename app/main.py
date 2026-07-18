@@ -489,13 +489,13 @@ async def rentsim_otp_worker(
                         f"• Order: <code>{escape(item.shop_order_code)}</code>\n"
                         f"• Refunded: <b>{format_vnd(item.sale_amount)}</b>\n"
                         f"• Wallet balance: <b>{format_vnd(item.balance)}</b>\n\n"
-                        "RentSim confirmed the timeout, so the rental was refunded in full."
+                        "No verification code was received, so the rental was refunded in full."
                         if item.language == "en"
                         else "↩️ <b>Không nhận được OTP</b>\n\n"
                         f"• Mã đơn: <code>{escape(item.shop_order_code)}</code>\n"
                         f"• Đã hoàn ví: <b>{format_vnd(item.sale_amount)}</b>\n"
                         f"• Số dư hiện tại: <b>{format_vnd(item.balance)}</b>\n\n"
-                        "RentSim đã xác nhận timeout nên tiền thuê được hoàn lại toàn bộ."
+                        "Không nhận được mã nên tiền thuê đã được hoàn lại toàn bộ."
                     )
                 markup = sms_waiting_menu(item.language, item.sale_amount)
                 try:

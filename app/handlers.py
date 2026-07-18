@@ -508,12 +508,12 @@ def create_router(
             return
         waiting_text = (
             "⏳ <b>Waiting for the ChatGPT OTP...</b>\n\n"
-            "The bot checks automatically. If RentSim confirms a timeout, the rental price "
+            "The bot checks automatically. If no verification code arrives, the rental price "
             "is returned to your wallet. You may rent another number after 60 seconds."
             if user.language == "en"
             else "⏳ <b>Đang chờ OTP ChatGPT...</b>\n\n"
-            "Bot đang tự kiểm tra OTP. Nếu RentSim xác nhận timeout, tiền thuê sẽ tự động "
-            "hoàn về ví. Bạn có thể thuê số khác sau 60 giây."
+            "Bot đang tự kiểm tra OTP. Nếu không nhận được mã, tiền thuê sẽ tự động hoàn "
+            "về ví. Bạn có thể thuê số khác sau 60 giây."
         )
         if callback.message:
             waiting_message = await callback.message.answer(
