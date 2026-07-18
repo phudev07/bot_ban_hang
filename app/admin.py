@@ -1,6 +1,7 @@
 from html import escape
 
 from aiogram import Bot, F, Router
+from aiogram.exceptions import TelegramBadRequest
 from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
 from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message
@@ -22,6 +23,24 @@ def create_admin_router(settings: Settings, cipher: SecretCipher) -> Router:
 
     def is_admin(message: Message) -> bool:
         return bool(message.from_user and is_admin_id(message.from_user.id))
+
+    def broadcast_confirmation_keyboard(recipient_count: int) -> InlineKeyboardMarkup:
+        return InlineKeyboardMarkup(
+            inline_keyboard=[
+                [
+                    InlineKeyboardButton(
+                        text=f"📤 Gửi tới {recipient_count} người",
+                        callback_data="broadcast:confirm",
+                    )
+                ],
+                [
+                    InlineKeyboardButton(
+                        text="❌ Hủy",
+                        callback_data="broadcast:cancel",
+                    )
+                ],
+            ]
+        )
 
     async def reject_if_not_admin(message: Message) -> bool:
         if is_admin(message):
@@ -73,6 +92,7 @@ def create_admin_router(settings: Settings, cipher: SecretCipher) -> Router:
     async def stage_broadcast(
         source: Message,
         admin_message: Message,
+        bot: Bot,
         session: AsyncSession,
         state: FSMContext,
     ) -> None:
@@ -92,33 +112,28 @@ def create_admin_router(settings: Settings, cipher: SecretCipher) -> Router:
             source_message_id=source.message_id,
             recipient_count=recipient_count,
         )
-        await admin_message.answer(
-            "📣 <b>Xác nhận gửi thông báo</b>\n\n"
-            f"• Người nhận dự kiến: <b>{recipient_count}</b>\n"
-            "• Nội dung sẽ được copy nguyên định dạng/media.\n"
-            "• Mỗi tin có thêm nút 🛒 Mua ngay.\n\n"
-            "Bấm Gửi để bắt đầu hoặc Hủy để bỏ.",
-            reply_markup=InlineKeyboardMarkup(
-                inline_keyboard=[
-                    [
-                        InlineKeyboardButton(
-                            text=f"📤 Gửi tới {recipient_count} người",
-                            callback_data="broadcast:confirm",
-                        )
-                    ],
-                    [
-                        InlineKeyboardButton(
-                            text="❌ Hủy",
-                            callback_data="broadcast:cancel",
-                        )
-                    ],
-                ]
-            ),
-        )
+        keyboard = broadcast_confirmation_keyboard(recipient_count)
+        try:
+            await bot.copy_message(
+                chat_id=admin_message.chat.id,
+                from_chat_id=source.chat.id,
+                message_id=source.message_id,
+                reply_markup=keyboard,
+            )
+        except TelegramBadRequest:
+            await admin_message.answer(
+                "📣 <b>Xác nhận gửi thông báo</b>\n\n"
+                f"• Người nhận dự kiến: <b>{recipient_count}</b>\n"
+                "• Nội dung sẽ được copy nguyên định dạng/media.\n"
+                "• Mỗi tin có thêm nút 🛒 Mua ngay.\n\n"
+                "Bấm Gửi để bắt đầu hoặc Hủy để bỏ.",
+                reply_markup=keyboard,
+            )
 
     @router.message(Command("thongbao"))
     async def begin_broadcast(
         message: Message,
+        bot: Bot,
         session: AsyncSession,
         state: FSMContext,
     ) -> None:
@@ -126,24 +141,25 @@ def create_admin_router(settings: Settings, cipher: SecretCipher) -> Router:
             return
         await state.clear()
         if message.reply_to_message is not None:
-            await stage_broadcast(message.reply_to_message, message, session, state)
+            await stage_broadcast(message.reply_to_message, message, bot, session, state)
             return
         await state.set_state(BroadcastStates.waiting_for_content)
         await message.answer(
             "📣 Gửi tin nhắn, ảnh, video hoặc file bạn muốn phát thông báo.\n\n"
-            "Bạn cũng có thể hủy bằng nút Hủy ở bước xác nhận."
+            "Bot sẽ tạo bản xem trước và đặt nút Gửi ngay bên dưới nội dung."
         )
 
     @router.message(BroadcastStates.waiting_for_content)
     async def receive_broadcast_content(
         message: Message,
+        bot: Bot,
         session: AsyncSession,
         state: FSMContext,
     ) -> None:
         if await reject_if_not_admin(message):
             await state.clear()
             return
-        await stage_broadcast(message, message, session, state)
+        await stage_broadcast(message, message, bot, session, state)
 
     @router.callback_query(
         BroadcastStates.waiting_for_confirmation,
@@ -155,7 +171,11 @@ def create_admin_router(settings: Settings, cipher: SecretCipher) -> Router:
             return
         await state.clear()
         if callback.message:
-            await callback.message.edit_text("Đã hủy thông báo.")
+            try:
+                await callback.message.edit_reply_markup(reply_markup=None)
+            except TelegramBadRequest:
+                pass
+            await callback.message.answer("Đã hủy thông báo.")
         await callback.answer()
 
     @router.callback_query(
@@ -182,8 +202,13 @@ def create_admin_router(settings: Settings, cipher: SecretCipher) -> Router:
 
         await state.clear()
         recipient_count = int(data.get("recipient_count", 0))
+        progress_message = None
         if callback.message:
-            await callback.message.edit_text(
+            try:
+                await callback.message.edit_reply_markup(reply_markup=None)
+            except TelegramBadRequest:
+                pass
+            progress_message = await callback.message.answer(
                 f"⏳ Đang gửi thông báo tới {recipient_count} người..."
             )
         await callback.answer("Đang gửi...")
@@ -195,13 +220,16 @@ def create_admin_router(settings: Settings, cipher: SecretCipher) -> Router:
             source_chat_id=source_chat_id,
             source_message_id=source_message_id,
         )
-        if callback.message:
-            await callback.message.edit_text(
-                "✅ <b>Đã gửi thông báo</b>\n\n"
-                f"• Thành công: <b>{result.delivered}</b>\n"
-                f"• Thất bại: <b>{result.failed}</b>\n"
-                f"• Tổng: <b>{result.total}</b>"
-            )
+        result_text = (
+            "✅ <b>Đã gửi thông báo</b>\n\n"
+            f"• Thành công: <b>{result.delivered}</b>\n"
+            f"• Thất bại: <b>{result.failed}</b>\n"
+            f"• Tổng: <b>{result.total}</b>"
+        )
+        if progress_message:
+            await progress_message.edit_text(result_text)
+        elif callback.message:
+            await callback.message.answer(result_text)
 
     @router.message(Command("products"))
     async def list_products(message: Message, session: AsyncSession) -> None:

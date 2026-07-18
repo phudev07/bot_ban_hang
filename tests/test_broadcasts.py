@@ -26,10 +26,12 @@ class FakeBot:
     def __init__(self, failing_user_id: int | None = None) -> None:
         self.failing_user_id = failing_user_id
         self.copy_calls: list[int] = []
+        self.copy_kwargs: list[dict[str, object]] = []
         self.copy_markups = []
 
     async def copy_message(self, *, chat_id: int, **kwargs) -> None:
         self.copy_calls.append(chat_id)
+        self.copy_kwargs.append(kwargs)
         self.copy_markups.append(kwargs.get("reply_markup"))
         if chat_id == self.failing_user_id:
             raise TelegramForbiddenError(
@@ -97,22 +99,67 @@ def test_broadcast_requires_confirmation_before_delivery() -> None:
 
             waiting_state = FakeState()
             waiting_message = FakeMessage(message_id=10)
-            await begin(waiting_message, session, waiting_state)
+            bot = FakeBot()
+            await begin(waiting_message, bot, session, waiting_state)
             assert waiting_state.current == BroadcastStates.waiting_for_content
             assert "Gửi tin nhắn" in waiting_message.answers[-1][0]
 
             source = FakeMessage(message_id=20)
             confirmation_state = FakeState()
             command = FakeMessage(message_id=21, reply_to_message=source)
-            await begin(command, session, confirmation_state)
+            await begin(command, bot, session, confirmation_state)
             assert confirmation_state.current == BroadcastStates.waiting_for_confirmation
             assert confirmation_state.data == {
                 "source_chat_id": 42,
                 "source_message_id": 20,
                 "recipient_count": 1,
             }
-            markup = command.answers[-1][1]["reply_markup"]
+            assert bot.copy_calls == [42]
+            assert bot.copy_kwargs[-1]["from_chat_id"] == 42
+            assert bot.copy_kwargs[-1]["message_id"] == 20
+            markup = bot.copy_markups[-1]
             assert markup.inline_keyboard[0][0].callback_data == "broadcast:confirm"
+        await engine.dispose()
+
+    asyncio.run(scenario())
+
+
+def test_broadcast_photo_gets_confirmation_button_on_preview() -> None:
+    async def scenario() -> None:
+        engine, sessions = await make_database()
+        async with sessions() as session:
+            session.add(User(telegram_id=1, full_name="Started", has_started=True))
+            await session.commit()
+
+            settings = Settings(
+                _env_file=None,
+                bot_token="123456:ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghi",
+                inventory_encryption_key=Fernet.generate_key().decode(),
+                sepay_enabled=False,
+                ADMIN_IDS="42",
+            )
+            router = create_admin_router(
+                settings,
+                SecretCipher(settings.inventory_encryption_key.get_secret_value()),
+            )
+            receive = next(
+                handler.callback
+                for handler in router.message.handlers
+                if handler.callback.__name__ == "receive_broadcast_content"
+            )
+            source = FakeMessage(message_id=31)
+            source.photo = [SimpleNamespace(file_id="photo-file")]
+            state = FakeState()
+            bot = FakeBot()
+
+            await receive(source, bot, session, state)
+
+            assert state.current == BroadcastStates.waiting_for_confirmation
+            assert state.data["source_message_id"] == 31
+            assert bot.copy_calls == [42]
+            markup = bot.copy_markups[0]
+            assert markup.inline_keyboard[0][0].callback_data == "broadcast:confirm"
+            assert "Gửi tới 1 người" in markup.inline_keyboard[0][0].text
         await engine.dispose()
 
     asyncio.run(scenario())
