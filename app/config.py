@@ -45,7 +45,7 @@ class Settings(BaseSettings):
     sumistore_api_id: SecretStr = SecretStr("")
     sumistore_product_id: str = "SP-GEF55PBV"
     sumistore_product_ids_text: str = Field(
-        default="",
+        default="SP-GEF55PBV,SP-JMYJL2PL",
         validation_alias="SUMISTORE_PRODUCT_IDS",
     )
     sumistore_markup: int = 5_000

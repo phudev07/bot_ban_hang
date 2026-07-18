@@ -208,7 +208,7 @@ def test_sumistore_recovers_one_recent_unrecorded_order() -> None:
     asyncio.run(scenario())
 
 
-def test_sumistore_catalog_seeds_multiple_products() -> None:
+def test_sumistore_catalog_only_seeds_supported_gpt_products() -> None:
     async def scenario() -> None:
         engine = create_async_engine("sqlite+aiosqlite:///:memory:")
         async with engine.begin() as connection:
@@ -231,11 +231,53 @@ def test_sumistore_catalog_seeds_multiple_products() -> None:
             assert [product.supplier_product_id for product in products] == [
                 "SP-GEF55PBV",
                 "SP-JMYJL2PL",
-                "SP-PAJWU273",
-                "SP-GBKYZH09",
             ]
-            assert [product.price for product in products] == [20_000, 6_000, 75_000, 85_000]
+            assert [product.price for product in products] == [20_000, 6_000]
             assert all(product.external_stock == 0 for product in products)
+        await engine.dispose()
+
+    asyncio.run(scenario())
+
+
+def test_sumistore_catalog_deactivates_products_outside_supported_list() -> None:
+    async def scenario() -> None:
+        engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+        async with engine.begin() as connection:
+            await connection.run_sync(Base.metadata.create_all)
+        sessions = async_sessionmaker(engine, expire_on_commit=False)
+        settings = Settings(
+            _env_file=None,
+            bot_token="123456:ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghi",
+            inventory_encryption_key=Fernet.generate_key().decode(),
+            sepay_enabled=False,
+        )
+
+        async with sessions() as session:
+            category = Category(name_vi="Đã ngừng bán", name_en="Discontinued")
+            session.add(category)
+            await session.flush()
+            session.add(
+                Product(
+                    category_id=category.id,
+                    name_vi="Gemini cũ",
+                    name_en="Old Gemini",
+                    price=75_000,
+                    fulfillment_source="sumistore",
+                    supplier_product_id="SP-PAJWU273",
+                    external_stock=9,
+                )
+            )
+            await session.commit()
+
+        await ensure_sumistore_product(sessions, settings)
+
+        async with sessions() as session:
+            discontinued = await session.scalar(
+                select(Product).where(Product.supplier_product_id == "SP-PAJWU273")
+            )
+            assert discontinued is not None
+            assert discontinued.active is False
+            assert discontinued.external_stock == 0
         await engine.dispose()
 
     asyncio.run(scenario())

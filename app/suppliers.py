@@ -36,20 +36,6 @@ SUMISTORE_PRODUCT_SEEDS: dict[str, dict[str, object]] = {
         "name_en": "New ChatGPT iCloud mail account",
         "fallback_price": 1_000,
     },
-    "SP-PAJWU273": {
-        "category_vi": "Gemini, Veo3, Antigravity",
-        "category_en": "Gemini, Veo3, Antigravity",
-        "name_vi": "Gemini, Veo3 Pro 1 năm 5TB",
-        "name_en": "Gemini and Veo3 Pro 1 year 5TB",
-        "fallback_price": 70_000,
-    },
-    "SP-GBKYZH09": {
-        "category_vi": "Gemini, Veo3, Antigravity",
-        "category_en": "Gemini, Veo3, Antigravity",
-        "name_vi": "Gemini, Veo3, Antigravity PRO 18 tháng",
-        "name_en": "Gemini, Veo3 and Antigravity Pro 18 months",
-        "fallback_price": 80_000,
-    },
 }
 
 
@@ -381,8 +367,24 @@ async def ensure_sumistore_product(
     settings: Settings,
 ) -> None:
     async with session_factory() as session:
+        product_ids = tuple(
+            supplier_product_id
+            for supplier_product_id in settings.sumistore_product_ids
+            if supplier_product_id in SUMISTORE_PRODUCT_SEEDS
+        )
+        configured_ids = set(product_ids)
+        existing_products = list(
+            await session.scalars(
+                select(Product).where(Product.fulfillment_source == "sumistore")
+            )
+        )
+        for product in existing_products:
+            if product.supplier_product_id not in configured_ids:
+                product.active = False
+                product.external_stock = 0
+
         for position, supplier_product_id in enumerate(
-            settings.sumistore_product_ids,
+            product_ids,
             start=1,
         ):
             product = await session.scalar(
@@ -485,7 +487,12 @@ async def sync_sumistore_products(
 ) -> None:
     async with session_factory() as session:
         products = list(
-            await session.scalars(select(Product).where(Product.fulfillment_source == "sumistore"))
+            await session.scalars(
+                select(Product).where(
+                    Product.fulfillment_source == "sumistore",
+                    Product.active.is_(True),
+                )
+            )
         )
         for product in products:
             await refresh_external_product(session, product, client)
