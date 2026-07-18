@@ -97,6 +97,12 @@ async def get_or_create_user(
     return user
 
 
+async def edit_or_send_text(message: Message, text: str, **kwargs) -> Message:
+    if message.text is None:
+        return await message.answer(text, **kwargs)
+    return await message.edit_text(text, **kwargs)
+
+
 def create_router(
     settings: Settings,
     cipher: SecretCipher,
@@ -294,7 +300,8 @@ def create_router(
         if not categories:
             text = "Kho chưa có danh mục." if user.language == "vi" else "No categories yet."
         if callback.message:
-            await callback.message.edit_text(
+            await edit_or_send_text(
+                callback.message,
                 text, reply_markup=categories_menu(categories, user.language)
             )
         await callback.answer()
