@@ -15,6 +15,12 @@ from app.api import create_api
 from app.config import get_settings
 from app.database import Base, DatabaseSessionMiddleware, create_database
 from app.handlers import create_router
+from app.lehai_suppliers import (
+    LeHaiPremiumClient,
+    create_lehai_client,
+    ensure_lehai_products,
+    sync_lehai_products,
+)
 from app.models import Category, Product
 from app.payment_expiry import payment_expiry_worker
 from app.rate_limit import BotSpamProtectionMiddleware
@@ -384,6 +390,21 @@ async def supplier_sync_worker(
         await asyncio.sleep(max(15, interval_seconds))
 
 
+async def lehai_sync_worker(
+    session_factory,
+    client: LeHaiPremiumClient,
+    interval_seconds: int,
+) -> None:
+    while True:
+        try:
+            await sync_lehai_products(session_factory, client)
+        except Exception:
+            logging.getLogger(__name__).exception(
+                "Could not synchronize Le Hai Premium products"
+            )
+        await asyncio.sleep(max(15, interval_seconds))
+
+
 async def supplier_audit_worker(
     session_factory,
     client: SumistoreClient,
@@ -429,6 +450,9 @@ async def main() -> None:
     await ensure_sumistore_product(session_factory, settings)
     supplier_client = create_sumistore_client(settings)
     await sync_sumistore_products(session_factory, supplier_client)
+    await ensure_lehai_products(session_factory, settings)
+    lehai_client = create_lehai_client(settings)
+    await sync_lehai_products(session_factory, lehai_client)
     if supplier_client is not None:
         try:
             await reconcile_supplier_balance(session_factory, supplier_client)
@@ -475,7 +499,9 @@ async def main() -> None:
     dispatcher.update.outer_middleware(BotSpamProtectionMiddleware(storage.redis, settings))
     dispatcher.update.outer_middleware(DatabaseSessionMiddleware(session_factory))
     dispatcher.include_router(create_admin_router(settings, cipher))
-    dispatcher.include_router(create_router(settings, cipher, supplier_client))
+    dispatcher.include_router(
+        create_router(settings, cipher, supplier_client, lehai_client)
+    )
 
     api = create_api(
         settings,
@@ -485,6 +511,7 @@ async def main() -> None:
         supplier_client,
         deposit_notification_bot,
         api_redis=storage.redis,
+        lehai_client=lehai_client,
     )
     server = uvicorn.Server(
         uvicorn.Config(
@@ -526,6 +553,17 @@ async def main() -> None:
         if supplier_client is not None
         else None
     )
+    lehai_task = (
+        asyncio.create_task(
+            lehai_sync_worker(
+                session_factory,
+                lehai_client,
+                settings.lehai_sync_seconds,
+            )
+        )
+        if lehai_client is not None
+        else None
+    )
     try:
         await bot.delete_webhook(drop_pending_updates=False)
         await dispatcher.start_polling(bot)
@@ -541,6 +579,10 @@ async def main() -> None:
             supplier_audit_task.cancel()
             with contextlib.suppress(asyncio.CancelledError):
                 await supplier_audit_task
+        if lehai_task is not None:
+            lehai_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await lehai_task
         server.should_exit = True
         await api_task
         await storage.close()

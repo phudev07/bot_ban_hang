@@ -68,7 +68,7 @@
   <section class="panel">
     <div class="panel-head"><div><span>PRODUCT PROFITABILITY</span><h2>Sản phẩm tạo doanh thu</h2></div><a href="/admin/products">Quản lý sản phẩm →</a></div>
     <div class="table-wrap"><table><thead><tr><th>Sản phẩm</th><th>Đơn hàng</th><th>Doanh thu</th><th>Giá vốn</th><th>Lợi nhuận</th></tr></thead><tbody>
-      {% for row in top_products %}<tr><td><strong>{{ row.product.name_vi }}</strong><small>{{ 'API động' if row.product.fulfillment_source == 'sumistore' else 'Kho bot' }} · giảm {{ row.discount|vnd }}</small></td><td>{{ row.orders }}</td><td>{{ row.revenue|vnd }}</td><td>{{ row.cost|vnd }}</td><td><strong class="profit-text {{ 'loss' if row.profit < 0 else '' }}">{{ row.profit|vnd }}</strong></td></tr>
+      {% for row in top_products %}<tr><td><strong>{{ row.product.name_vi }}</strong><small>{{ 'API động' if row.product.fulfillment_source != 'local' else 'Kho bot' }} · giảm {{ row.discount|vnd }}</small></td><td>{{ row.orders }}</td><td>{{ row.revenue|vnd }}</td><td>{{ row.cost|vnd }}</td><td><strong class="profit-text {{ 'loss' if row.profit < 0 else '' }}">{{ row.profit|vnd }}</strong></td></tr>
       {% else %}<tr><td colspan="5" class="empty">Chưa có dữ liệu bán hàng.</td></tr>{% endfor %}
     </tbody></table></div>
   </section>

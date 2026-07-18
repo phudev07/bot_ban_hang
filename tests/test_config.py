@@ -81,3 +81,16 @@ def test_sumistore_supports_multiple_product_ids() -> None:
         SUMISTORE_PRODUCT_IDS="SP-GEF55PBV, SP-JMYJL2PL,SP-GEF55PBV",
     )
     assert settings.sumistore_product_ids == ("SP-GEF55PBV", "SP-JMYJL2PL")
+
+
+def test_enabled_lehai_requires_buyer_key() -> None:
+    with pytest.raises(ValidationError):
+        base_settings(lehai_enabled=True)
+
+    settings = base_settings(
+        lehai_enabled=True,
+        lehai_api_key="tgb_test-only",
+        LEHAI_PRODUCT_IDS="cdk_pixel, cdk_ggpro_18m,cdk_pixel",
+    )
+    assert settings.lehai_product_ids == ("cdk_pixel", "cdk_ggpro_18m")
+    assert settings.lehai_markup == 5_000

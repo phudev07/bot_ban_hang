@@ -33,6 +33,7 @@ from app.keyboards import (
     warehouse_api_menu,
     warehouse_api_rotate_confirmation,
 )
+from app.lehai_suppliers import LeHaiPremiumClient
 from app.models import ApiClient, Product, User
 from app.partner_services import ensure_api_client, referral_stats, rotate_api_secret
 from app.payment_expiry import register_deposit_message
@@ -107,6 +108,7 @@ def create_router(
     settings: Settings,
     cipher: SecretCipher,
     supplier_client: SumistoreClient | None = None,
+    lehai_client: LeHaiPremiumClient | None = None,
 ) -> Router:
     router = Router(name="customer")
     warehouse_docs_url = (
@@ -350,6 +352,7 @@ def create_router(
             session,
             product.id,
             supplier_client,
+            lehai_client=lehai_client,
             refresh_external=True,
         )
         name = product.name_en if user.language == "en" else product.name_vi
@@ -380,6 +383,7 @@ def create_router(
         session: AsyncSession,
         session_factory: async_sessionmaker[AsyncSession],
         coupon_id: int | None = None,
+        supplier_request_key: str | None = None,
     ) -> str:
         fulfillment_message: Message | None = None
 
@@ -399,9 +403,11 @@ def create_router(
                 cipher,
                 quantity,
                 supplier_client,
+                lehai_client=lehai_client,
                 coupon_id=coupon_id,
                 referral_commission_percent=settings.referral_commission_percent,
                 on_fulfillment_started=show_fulfillment_started,
+                supplier_idempotency_key=supplier_request_key,
             )
         finally:
             if fulfillment_message is not None:
@@ -549,6 +555,7 @@ def create_router(
             session,
             product.id,
             supplier_client,
+            lehai_client=lehai_client,
             refresh_external=True,
         )
         pricing = await product_pricing(
@@ -611,6 +618,7 @@ def create_router(
             session,
             product.id,
             supplier_client,
+            lehai_client=lehai_client,
             refresh_external=True,
         )
         if stock <= 0:
@@ -656,6 +664,7 @@ def create_router(
             session,
             product.id,
             supplier_client,
+            lehai_client=lehai_client,
             refresh_external=True,
         )
         if stock <= 0:
@@ -701,6 +710,7 @@ def create_router(
             quantity,
             session,
             session_factory,
+            supplier_request_key=f"tg-message-{message.chat.id}-{message.message_id}",
         )
 
     @router.callback_query(F.data.startswith("customcouponqty:"))
@@ -723,6 +733,7 @@ def create_router(
             session,
             product.id,
             supplier_client,
+            lehai_client=lehai_client,
             refresh_external=True,
         )
         maximum = min(product.max_quantity, stock)
@@ -774,6 +785,7 @@ def create_router(
             session,
             session_factory,
             coupon_id,
+            supplier_request_key=f"tg-message-{message.chat.id}-{message.message_id}",
         )
 
     @router.callback_query(F.data.startswith("buy:"))
@@ -794,6 +806,7 @@ def create_router(
                 quantity,
                 session,
                 session_factory,
+                supplier_request_key=f"tg-callback-{callback.id}",
             )
         await callback.answer()
 
@@ -814,6 +827,7 @@ def create_router(
                 session,
                 session_factory,
                 int(coupon_id_text),
+                supplier_request_key=f"tg-callback-{callback.id}",
             )
         await callback.answer()
 
@@ -845,6 +859,7 @@ def create_router(
                 session,
                 product.id,
                 supplier_client,
+                lehai_client=lehai_client,
                 refresh_external=True,
             )
             < quantity

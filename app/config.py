@@ -54,6 +54,17 @@ class Settings(BaseSettings):
     sumistore_sync_seconds: int = 60
     sumistore_audit_seconds: int = 30
 
+    lehai_enabled: bool = False
+    lehai_base_url: str = "https://api.lehaipremium.me"
+    lehai_api_key: SecretStr = SecretStr("")
+    lehai_product_ids_text: str = Field(
+        default="cdk_pixel,cdk_ggpro_18m",
+        validation_alias="LEHAI_PRODUCT_IDS",
+    )
+    lehai_markup: int = 5_000
+    lehai_timeout_seconds: float = 15
+    lehai_sync_seconds: int = 60
+
     shop_api_enabled: bool = True
     shop_api_base_url: str = "https://token.vietshare.site/v1"
     shop_api_rate_limit_per_minute: int = 60
@@ -110,6 +121,12 @@ class Settings(BaseSettings):
             raise ValueError("Sumistore price configuration is invalid")
         if self.sumistore_audit_seconds < 10:
             raise ValueError("Sumistore audit interval must be at least 10 seconds")
+        if self.lehai_enabled and not self.lehai_api_key.get_secret_value():
+            raise ValueError("Le Hai Premium is enabled but buyer API key is missing")
+        if self.lehai_markup < 0 or self.lehai_timeout_seconds <= 0:
+            raise ValueError("Le Hai Premium price or timeout configuration is invalid")
+        if self.lehai_sync_seconds < 15:
+            raise ValueError("Le Hai Premium sync interval must be at least 15 seconds")
         if self.shop_api_rate_limit_per_minute < 1:
             raise ValueError("Shop API rate limit must be positive")
         if self.shop_api_signature_tolerance_seconds < 30:
@@ -157,6 +174,15 @@ class Settings(BaseSettings):
         ]
         values = configured or [self.sumistore_product_id]
         return tuple(dict.fromkeys(values))
+
+    @property
+    def lehai_product_ids(self) -> tuple[str, ...]:
+        configured = [
+            item.strip()
+            for item in self.lehai_product_ids_text.split(",")
+            if item.strip()
+        ]
+        return tuple(dict.fromkeys(configured))
 
 @lru_cache
 def get_settings() -> Settings:

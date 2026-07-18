@@ -31,7 +31,12 @@ from app.models import (
     User,
 )
 from app.supplier_audit import PROVIDER, reconcile_supplier_balance
-from app.suppliers import SumistoreClient, SupplierError
+from app.suppliers import (
+    EXTERNAL_FULFILLMENT_SOURCES,
+    SELLABLE_FULFILLMENT_SOURCES,
+    SumistoreClient,
+    SupplierError,
+)
 from app.utils import SecretCipher, format_vnd, parse_vnd
 from app.dashboard_security import new_csrf_token, verify_dashboard_password
 
@@ -167,7 +172,7 @@ async def financial_summary(
         func.coalesce(func.sum(Order.discount_amount), 0),
     ).join(Product, Product.id == Order.product_id).where(
         Order.status == "completed",
-        Product.fulfillment_source.in_(("local", "sumistore")),
+        Product.fulfillment_source.in_(SELLABLE_FULFILLMENT_SOURCES),
         Product.product_type == "account",
     )
     if start_at is not None:
@@ -225,7 +230,7 @@ async def financial_summaries(
         func.coalesce(func.sum(Order.discount_amount), 0).label("all_discount"),
     ).join(Product, Product.id == Order.product_id).where(
         Order.status == "completed",
-        Product.fulfillment_source.in_(("local", "sumistore")),
+        Product.fulfillment_source.in_(SELLABLE_FULFILLMENT_SOURCES),
         Product.product_type == "account",
     )
     values = (await session.execute(statement)).one()
@@ -331,7 +336,7 @@ def normalize_product_type(value: str) -> str | None:
 
 def normalize_fulfillment_source(value: str) -> str | None:
     normalized = value.strip().lower()
-    return normalized if normalized in {"local", "sumistore"} else None
+    return normalized if normalized in SELLABLE_FULFILLMENT_SOURCES else None
 
 
 def create_dashboard_router(
@@ -453,7 +458,7 @@ def create_dashboard_router(
             stock += int(
                 await session.scalar(
                     select(func.coalesce(func.sum(Product.external_stock), 0)).where(
-                        Product.fulfillment_source == "sumistore"
+                        Product.fulfillment_source.in_(EXTERNAL_FULFILLMENT_SOURCES)
                     )
                 )
                 or 0
@@ -489,7 +494,7 @@ def create_dashboard_router(
                     select(func.count(func.distinct(Order.user_id)))
                     .join(Product, Product.id == Order.product_id)
                     .where(
-                        Product.fulfillment_source.in_(("local", "sumistore")),
+                        Product.fulfillment_source.in_(SELLABLE_FULFILLMENT_SOURCES),
                         Product.product_type == "account",
                     )
                 )
@@ -500,7 +505,7 @@ def create_dashboard_router(
                 .join(Product, Product.id == Order.product_id)
                 .join(User, User.telegram_id == Order.user_id)
                 .where(
-                    Product.fulfillment_source.in_(("local", "sumistore")),
+                    Product.fulfillment_source.in_(SELLABLE_FULFILLMENT_SOURCES),
                     Product.product_type == "account",
                 )
                 .order_by(Order.id.desc())
@@ -521,7 +526,7 @@ def create_dashboard_router(
                 .join(Order, Order.product_id == Product.id)
                 .where(
                     Order.status == "completed",
-                    Product.fulfillment_source.in_(("local", "sumistore")),
+                    Product.fulfillment_source.in_(SELLABLE_FULFILLMENT_SOURCES),
                     Product.product_type == "account",
                 )
                 .group_by(Product.id)
@@ -545,7 +550,7 @@ def create_dashboard_router(
                 .where(
                     Order.created_at >= periods["fourteen_days"],
                     Order.status == "completed",
-                    Product.fulfillment_source.in_(("local", "sumistore")),
+                    Product.fulfillment_source.in_(SELLABLE_FULFILLMENT_SOURCES),
                     Product.product_type == "account",
                 )
             )
@@ -561,7 +566,7 @@ def create_dashboard_router(
                 .where(
                     Order.created_at >= periods["year"],
                     Order.status == "completed",
-                    Product.fulfillment_source.in_(("local", "sumistore")),
+                    Product.fulfillment_source.in_(SELLABLE_FULFILLMENT_SOURCES),
                     Product.product_type == "account",
                 )
             )
@@ -840,7 +845,7 @@ def create_dashboard_router(
             .outerjoin(stock_query, stock_query.c.product_id == Product.id)
             .outerjoin(coupon_query, coupon_query.c.product_id == Product.id)
             .where(
-                Product.fulfillment_source.in_(("local", "sumistore")),
+                Product.fulfillment_source.in_(SELLABLE_FULFILLMENT_SOURCES),
                 Product.product_type == "account",
             )
             .order_by(Product.id.desc())
@@ -851,18 +856,18 @@ def create_dashboard_router(
                 "category": category,
                 "stock": (
                     max(0, product.external_stock)
-                    if product.fulfillment_source == "sumistore"
+                    if product.fulfillment_source in EXTERNAL_FULFILLMENT_SOURCES
                     else int(stock)
                 ),
                 "coupon_count": int(coupon_count),
                 "unit_cost": (
                     int(product.supplier_price or 0)
-                    if product.fulfillment_source == "sumistore"
+                    if product.fulfillment_source in EXTERNAL_FULFILLMENT_SOURCES
                     else 0
                 ),
                 "unit_profit": (
                     product.price - int(product.supplier_price or 0)
-                    if product.fulfillment_source == "sumistore"
+                    if product.fulfillment_source in EXTERNAL_FULFILLMENT_SOURCES
                     else product.price
                 ),
             }
@@ -924,7 +929,10 @@ def create_dashboard_router(
             or parsed_price <= 0
             or normalized_type is None
             or normalized_source is None
-            or (normalized_source == "sumistore" and not normalized_supplier_id)
+            or (
+                normalized_source in EXTERNAL_FULFILLMENT_SOURCES
+                and not normalized_supplier_id
+            )
         ):
             flash(request, "Thông tin sản phẩm không hợp lệ.", "error")
             return RedirectResponse("/admin/products", status_code=303)
@@ -943,9 +951,15 @@ def create_dashboard_router(
                     product_type=normalized_type,
                     fulfillment_source=normalized_source,
                     supplier_product_id=(
-                        normalized_supplier_id if normalized_source == "sumistore" else None
+                        normalized_supplier_id
+                        if normalized_source in EXTERNAL_FULFILLMENT_SOURCES
+                        else None
                     ),
-                    supplier_markup=(parsed_markup if normalized_source == "sumistore" else 0),
+                    supplier_markup=(
+                        parsed_markup
+                        if normalized_source in EXTERNAL_FULFILLMENT_SOURCES
+                        else 0
+                    ),
                     supplier_price=None,
                     external_stock=0,
                     allow_quantity=allow_quantity is not None,
@@ -967,7 +981,7 @@ def create_dashboard_router(
             )
         if (
             product is None
-            or product.fulfillment_source not in {"local", "sumistore"}
+            or product.fulfillment_source not in SELLABLE_FULFILLMENT_SOURCES
             or product.product_type != "account"
         ):
             return RedirectResponse("/admin/products", status_code=303)
@@ -1022,7 +1036,10 @@ def create_dashboard_router(
                 or not parsed_price
                 or normalized_type is None
                 or normalized_source is None
-                or (normalized_source == "sumistore" and not normalized_supplier_id)
+                or (
+                    normalized_source in EXTERNAL_FULFILLMENT_SOURCES
+                    and not normalized_supplier_id
+                )
             ):
                 flash(request, "Không thể cập nhật sản phẩm.", "error")
                 return RedirectResponse("/admin/products", status_code=303)
@@ -1035,9 +1052,13 @@ def create_dashboard_router(
             product.product_type = normalized_type
             product.fulfillment_source = normalized_source
             product.supplier_product_id = (
-                normalized_supplier_id if normalized_source == "sumistore" else None
+                normalized_supplier_id
+                if normalized_source in EXTERNAL_FULFILLMENT_SOURCES
+                else None
             )
-            product.supplier_markup = parsed_markup if normalized_source == "sumistore" else 0
+            product.supplier_markup = (
+                parsed_markup if normalized_source in EXTERNAL_FULFILLMENT_SOURCES else 0
+            )
             if normalized_source == "local":
                 product.supplier_price = None
                 product.external_stock = 0
@@ -1102,7 +1123,7 @@ def create_dashboard_router(
                 await session.scalars(
                     select(Product)
                     .where(
-                        Product.fulfillment_source.in_(("local", "sumistore")),
+                        Product.fulfillment_source.in_(SELLABLE_FULFILLMENT_SOURCES),
                         Product.product_type == "account",
                     )
                     .order_by(Product.name_vi, Product.id)
@@ -1112,7 +1133,7 @@ def create_dashboard_router(
                 select(DiscountCode, Product)
                 .join(Product, Product.id == DiscountCode.product_id)
                 .where(
-                    Product.fulfillment_source.in_(("local", "sumistore")),
+                    Product.fulfillment_source.in_(SELLABLE_FULFILLMENT_SOURCES),
                     Product.product_type == "account",
                 )
                 .order_by(DiscountCode.id.desc())
@@ -1129,7 +1150,7 @@ def create_dashboard_router(
                     .join(Product, Product.id == DiscountCode.product_id)
                     .where(
                         DiscountCode.active.is_(True),
-                        Product.fulfillment_source.in_(("local", "sumistore")),
+                        Product.fulfillment_source.in_(SELLABLE_FULFILLMENT_SOURCES),
                         Product.product_type == "account",
                     )
                 )
@@ -1140,7 +1161,7 @@ def create_dashboard_router(
                     select(func.coalesce(func.sum(DiscountCode.used_count), 0))
                     .join(Product, Product.id == DiscountCode.product_id)
                     .where(
-                        Product.fulfillment_source.in_(("local", "sumistore")),
+                        Product.fulfillment_source.in_(SELLABLE_FULFILLMENT_SOURCES),
                         Product.product_type == "account",
                     )
                 )
@@ -1222,7 +1243,7 @@ def create_dashboard_router(
             )
             if (
                 product is None
-                or product.fulfillment_source not in {"local", "sumistore"}
+                or product.fulfillment_source not in SELLABLE_FULFILLMENT_SOURCES
                 or product.product_type != "account"
                 or duplicate is not None
             ):
@@ -1309,7 +1330,7 @@ def create_dashboard_router(
                 select(InventoryItem, Product)
                 .join(Product, Product.id == InventoryItem.product_id)
                 .where(
-                    Product.fulfillment_source.in_(("local", "sumistore")),
+                    Product.fulfillment_source.in_(SELLABLE_FULFILLMENT_SOURCES),
                     Product.product_type == "account",
                 )
                 .order_by(InventoryItem.id.desc())
@@ -1575,7 +1596,7 @@ def create_dashboard_router(
         if not is_admin(request):
             return redirect_to_login()
         conditions = [
-            Product.fulfillment_source.in_(("local", "sumistore")),
+            Product.fulfillment_source.in_(SELLABLE_FULFILLMENT_SOURCES),
             Product.product_type == "account",
         ]
         search_condition = None
@@ -1593,7 +1614,7 @@ def create_dashboard_router(
             )
         if status in {"completed", "pending", "failed"}:
             conditions.append(Order.status == status)
-        if source in {"local", "sumistore"}:
+        if source in SELLABLE_FULFILLMENT_SOURCES:
             conditions.append(Product.fulfillment_source == source)
         if channel in {"telegram", "api"}:
             conditions.append(Order.sales_channel == channel)
@@ -1708,7 +1729,7 @@ def create_dashboard_router(
                     .join(User, User.telegram_id == Order.user_id)
                     .where(
                         Order.id == order_id,
-                        Product.fulfillment_source.in_(("local", "sumistore")),
+                        Product.fulfillment_source.in_(SELLABLE_FULFILLMENT_SOURCES),
                         Product.product_type == "account",
                     )
                 )
@@ -1741,7 +1762,7 @@ def create_dashboard_router(
                     .join(Product, Product.id == Order.product_id)
                     .where(
                         Order.user_id == user.telegram_id,
-                        Product.fulfillment_source.in_(("local", "sumistore")),
+                        Product.fulfillment_source.in_(SELLABLE_FULFILLMENT_SOURCES),
                         Product.product_type == "account",
                     )
                 )
@@ -1753,7 +1774,7 @@ def create_dashboard_router(
                     .join(Product, Product.id == Order.product_id)
                     .where(
                         Order.user_id == user.telegram_id,
-                        Product.fulfillment_source.in_(("local", "sumistore")),
+                        Product.fulfillment_source.in_(SELLABLE_FULFILLMENT_SOURCES),
                         Product.product_type == "account",
                     )
                 )

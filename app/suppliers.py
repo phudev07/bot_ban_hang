@@ -9,6 +9,7 @@ from contextlib import asynccontextmanager
 from collections.abc import AsyncIterator
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
+from typing import Protocol
 
 import httpx
 from sqlalchemy import func, select
@@ -19,6 +20,9 @@ from app.models import Category, InventoryItem, Product
 
 
 logger = logging.getLogger(__name__)
+
+EXTERNAL_FULFILLMENT_SOURCES = ("sumistore", "lehai")
+SELLABLE_FULFILLMENT_SOURCES = ("local", *EXTERNAL_FULFILLMENT_SOURCES)
 
 
 SUMISTORE_PRODUCT_SEEDS: dict[str, dict[str, object]] = {
@@ -67,6 +71,7 @@ class SupplierPurchase:
     unit_price: int
     accounts: tuple[str, ...]
     product_id: str = ""
+    provider: str = "sumistore"
 
 
 @dataclass(frozen=True)
@@ -75,6 +80,23 @@ class SupplierOrderSummary:
     product_id: str
     quantity: int
     created_at: datetime
+
+
+class ExternalSupplierClient(Protocol):
+    provider: str
+    balance_lock: asyncio.Lock
+
+    async def fetch_snapshot(self, product_id: str) -> SupplierSnapshot: ...
+
+    async def fetch_balance(self) -> int: ...
+
+    async def buy(
+        self,
+        product_id: str,
+        quantity: int,
+        *,
+        idempotency_key: str | None = None,
+    ) -> SupplierPurchase: ...
 
 
 def _parse_supplier_datetime(value: object) -> datetime | None:
@@ -91,6 +113,8 @@ def _parse_supplier_datetime(value: object) -> datetime | None:
 
 
 class SumistoreClient:
+    provider = "sumistore"
+
     def __init__(
         self,
         base_url: str,
@@ -177,7 +201,13 @@ class SumistoreClient:
         except (TypeError, ValueError) as exc:
             raise SupplierError("SUPPLIER_INVALID_RESPONSE") from exc
 
-    async def buy(self, product_id: str, quantity: int) -> SupplierPurchase:
+    async def buy(
+        self,
+        product_id: str,
+        quantity: int,
+        *,
+        idempotency_key: str | None = None,
+    ) -> SupplierPurchase:
         body = json.dumps(
             {"id": product_id, "quantity": quantity},
             ensure_ascii=True,
@@ -227,6 +257,7 @@ class SumistoreClient:
             unit_price=unit_price,
             accounts=tuple(accounts),
             product_id=product_id,
+            provider=self.provider,
         )
 
     async def fetch_orders(self) -> tuple[SupplierOrderSummary, ...]:
@@ -287,6 +318,7 @@ class SumistoreClient:
             unit_price=max(0, unit_price),
             accounts=tuple(accounts),
             product_id=str(product_data.get("id") or order.get("product_id") or ""),
+            provider=self.provider,
         )
 
     async def recover_recent_purchase(
@@ -318,7 +350,7 @@ class SumistoreClient:
 
 
 @asynccontextmanager
-async def supplier_balance_guard(client: SumistoreClient) -> AsyncIterator[None]:
+async def supplier_balance_guard(client: ExternalSupplierClient) -> AsyncIterator[None]:
     lock = getattr(client, "balance_lock", None)
     if lock is None:
         yield

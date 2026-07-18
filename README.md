@@ -18,6 +18,8 @@ giao hang tu dong va menu tieng Viet/Anh.
 - Du lieu trong kho duoc ma hoa bang Fernet truoc khi ghi vao PostgreSQL.
 - Ho tro nguon hang Sumistore: gia dong bang gia nguon + markup, ton kho gioi han
   theo ca kho nguon va so du tai khoan nguon.
+- Ho tro Le Hai Premium cho CDK GG Pro Pixel 1Y va Link GG Pro Jio 18M trong
+  gian Gemini / Veo3 / Antigravity; gia von, ton kho va so du nguon dong.
 - Dashboard tach doanh thu, gia von API, giam gia va loi nhuan theo ngay, thang,
   nam va toan bo lich su; gia von thuc te duoc luu theo tung don.
 - Ma giam gia theo tung san pham, ho tro giam so tien hoac phan tram, thoi han va
@@ -47,8 +49,8 @@ https://token.vietshare.site/docs
 
 API nay danh cho shop doi tac dau noi kho tai khoan, khong phai API quan tri bot.
 Tien mua hang duoc tru truc tiep tu vi Telegram cua chu API client. Gia san pham
-Sumistore la gia dong: shop dong bo gia von, cong markup va luu gia von thuc te
-vao tung don khi giao hang.
+API la gia dong: shop dong bo gia von, cong markup va luu gia von thuc te vao
+tung don khi giao hang.
 
 Endpoint:
 
@@ -105,9 +107,9 @@ Body dat hang:
 ```
 
 He thong khoa dong vi, khoa ton kho local bang `FOR UPDATE SKIP LOCKED`, khoa
-luong mua Sumistore va co unique idempotency trong PostgreSQL. Vi vay nhieu doi
-tac dat hang hoac thanh toan cung luc khong duoc ban trung tai khoan hay tru tien
-lap.
+luong mua theo tung nha cung cap va co unique idempotency trong PostgreSQL.
+Le Hai Premium nhan them idempotency key rieng cho moi yeu cau mua. Vi vay nhieu
+doi tac dat hang hoac thanh toan cung luc khong duoc ban trung hay tru tien lap.
 
 ## Cai tren Ubuntu 22.04
 
@@ -143,6 +145,9 @@ Sua toi thieu cac bien:
 - `SUMISTORE_API_ID`: API ID rieng lay trong bot Sumistore; khong dua len dashboard/log.
 - `SUMISTORE_MARKUP=5000`: muc cong mac dinh khi tao san pham nguon lan dau;
   markup rieng da sua tren dashboard se duoc giu nguyen khi bot khoi dong lai.
+- `LEHAI_ENABLED=true` va `LEHAI_API_KEY`: bat nguon Le Hai Premium bang Buyer
+  API key dang `tgb_...`; key chi luu trong `.env`.
+- `LEHAI_MARKUP=5000`: muc cong mac dinh cho hai san pham Le Hai Premium.
 - Mat khau PostgreSQL trong ca `.env` va `docker-compose.yml` phai trung nhau.
 
 ### 3. Chay bot

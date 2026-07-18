@@ -20,7 +20,7 @@
   <section class="panel">
     <div class="panel-head"><div><span>STOCK LEVELS</span><h2>Tồn kho hiện tại</h2></div></div>
     <div class="stack-list">
-      {% for row in products %}<article><div><strong>{{ row.product.name_vi }}</strong><small>#{{ row.product.id }} · {{ row.product.product_type }} · {{ 'Sumistore' if row.product.fulfillment_source == 'sumistore' else 'Kho bot' }}</small></div><span class="big-number">{{ row.stock }}</span></article>{% else %}<p class="empty">Hãy tạo sản phẩm trước khi nhập kho.</p>{% endfor %}
+      {% for row in products %}<article><div><strong>{{ row.product.name_vi }}</strong><small>#{{ row.product.id }} · {{ row.product.product_type }} · {{ 'Kho bot' if row.product.fulfillment_source == 'local' else ('Sumistore' if row.product.fulfillment_source == 'sumistore' else 'Lê Hải') }}</small></div><span class="big-number">{{ row.stock }}</span></article>{% else %}<p class="empty">Hãy tạo sản phẩm trước khi nhập kho.</p>{% endfor %}
     </div>
   </section>
 </div>

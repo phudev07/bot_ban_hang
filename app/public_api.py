@@ -19,6 +19,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from sqlalchemy.orm import selectinload
 
 from app.config import Settings
+from app.lehai_suppliers import LeHaiPremiumClient
 from app.models import (
     ApiClient,
     ApiOrderRequest,
@@ -30,6 +31,7 @@ from app.models import (
 from app.partner_services import api_signature
 from app.services import active_products, available_stock, purchase_product
 from app.suppliers import SumistoreClient
+from app.suppliers import EXTERNAL_FULFILLMENT_SOURCES
 from app.utils import SecretCipher
 
 
@@ -178,6 +180,8 @@ def create_public_api_router(
     cipher: SecretCipher,
     supplier_client: SumistoreClient | None,
     redis_client: Redis,
+    *,
+    lehai_client: LeHaiPremiumClient | None = None,
 ) -> APIRouter:
     router = APIRouter(prefix="/v1", tags=["shop-api"])
 
@@ -329,7 +333,7 @@ def create_public_api_router(
                         "price": product.price,
                         "stock": (
                             max(0, product.external_stock)
-                            if product.fulfillment_source == "sumistore"
+                            if product.fulfillment_source in EXTERNAL_FULFILLMENT_SOURCES
                             else local_stock.get(product.id, 0)
                         ),
                         "allow_quantity": product.allow_quantity,
@@ -422,11 +426,15 @@ def create_public_api_router(
             cipher,
             body.quantity,
             supplier_client,
+            lehai_client=lehai_client,
             coupon_code=body.coupon_code,
             sales_channel="api",
             api_client_id=principal.client.id,
             api_order_request_id=order_request.id,
             referral_commission_percent=settings.referral_commission_percent,
+            supplier_idempotency_key=(
+                f"shop-api-{principal.client.id}-{order_request.id}"
+            ),
         )
         async with session_factory() as session:
             stored_request = await session.get(ApiOrderRequest, order_request.id)

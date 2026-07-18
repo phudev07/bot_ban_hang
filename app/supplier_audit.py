@@ -115,16 +115,18 @@ def record_supplier_purchase(
     shop_order_code: str,
     product_id: int,
     quantity: int,
+    provider: str = PROVIDER,
 ) -> SupplierBalanceTransaction:
+    provider_name = "Sumi" if provider == PROVIDER else "Lê Hải Premium"
     transaction = SupplierBalanceTransaction(
-        provider=PROVIDER,
+        provider=provider,
         kind="purchase",
         amount=-max(0, amount),
         supplier_order_code=supplier_order_code,
         shop_order_code=shop_order_code,
         product_id=product_id,
         quantity=quantity,
-        note="Chi phí mua hàng do shop tạo qua API Sumi.",
+        note=f"Chi phí mua hàng do shop tạo qua API {provider_name}.",
     )
     session.add(transaction)
     return transaction

@@ -9,6 +9,7 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from sqlalchemy.orm import selectinload
 
+from app.lehai_suppliers import LeHaiPremiumClient, refresh_lehai_product
 from app.models import (
     Category,
     Deposit,
@@ -23,6 +24,9 @@ from app.models import (
 from app.partner_services import award_referral_commission, ensure_referral_code
 from app.supplier_audit import record_supplier_purchase
 from app.suppliers import (
+    EXTERNAL_FULFILLMENT_SOURCES,
+    SELLABLE_FULFILLMENT_SOURCES,
+    ExternalSupplierClient,
     SumistoreClient,
     SupplierError,
     SupplierPurchase,
@@ -76,26 +80,45 @@ async def reserve_available_inventory(
 
 async def buy_supplier_product(
     session: AsyncSession,
-    client: SumistoreClient,
+    client: ExternalSupplierClient,
     product_id: str,
     quantity: int,
+    *,
+    idempotency_key: str | None = None,
 ) -> SupplierPurchase:
+    provider = getattr(client, "provider", "sumistore")
     known_order_codes = set(
         await session.scalars(
             select(SupplierBalanceTransaction.supplier_order_code).where(
-                SupplierBalanceTransaction.provider == "sumistore",
+                SupplierBalanceTransaction.provider == provider,
                 SupplierBalanceTransaction.supplier_order_code.is_not(None),
             )
         )
     )
     started_at = datetime.now(UTC)
     try:
-        return await client.buy(product_id, quantity)
+        if provider == "sumistore":
+            return await client.buy(product_id, quantity)
+        return await client.buy(product_id, quantity, idempotency_key=idempotency_key)
     except SupplierError as exc:
         if exc.code not in RECOVERABLE_SUPPLIER_ERRORS:
             raise
+        if provider != "sumistore":
+            if not idempotency_key:
+                raise
+            try:
+                return await client.buy(
+                    product_id,
+                    quantity,
+                    idempotency_key=idempotency_key,
+                )
+            except SupplierError:
+                raise exc
+        recover_recent_purchase = getattr(client, "recover_recent_purchase", None)
+        if recover_recent_purchase is None:
+            raise
         try:
-            recovered = await client.recover_recent_purchase(
+            recovered = await recover_recent_purchase(
                 product_id,
                 quantity,
                 started_at=started_at,
@@ -110,6 +133,31 @@ async def buy_supplier_product(
             recovered.order_code,
         )
         return recovered
+
+
+def supplier_client_for_source(
+    fulfillment_source: str,
+    sumistore_client: SumistoreClient | None,
+    lehai_client: LeHaiPremiumClient | None,
+) -> ExternalSupplierClient | None:
+    if fulfillment_source == "sumistore":
+        return sumistore_client
+    if fulfillment_source == "lehai":
+        return lehai_client
+    return None
+
+
+async def refresh_product_from_supplier(
+    session: AsyncSession,
+    product: Product,
+    sumistore_client: SumistoreClient | None,
+    lehai_client: LeHaiPremiumClient | None,
+) -> int:
+    if product.fulfillment_source == "sumistore":
+        return await refresh_external_product(session, product, sumistore_client)
+    if product.fulfillment_source == "lehai":
+        return await refresh_lehai_product(session, product, lehai_client)
+    return product.external_stock
 
 
 async def ensure_user(
@@ -145,14 +193,20 @@ async def available_stock(
     product_id: int,
     supplier_client: SumistoreClient | None = None,
     *,
+    lehai_client: LeHaiPremiumClient | None = None,
     refresh_external: bool = False,
 ) -> int:
     product = await session.get(Product, product_id)
     if product is None:
         return 0
-    if product.fulfillment_source == "sumistore":
+    if product.fulfillment_source in EXTERNAL_FULFILLMENT_SOURCES:
         if refresh_external:
-            await refresh_external_product(session, product, supplier_client)
+            await refresh_product_from_supplier(
+                session,
+                product,
+                supplier_client,
+                lehai_client,
+            )
             await session.commit()
         return max(0, product.external_stock)
     return int(
@@ -321,6 +375,7 @@ async def purchase_product(
     quantity: int = 1,
     supplier_client: SumistoreClient | None = None,
     *,
+    lehai_client: LeHaiPremiumClient | None = None,
     coupon_code: str | None = None,
     coupon_id: int | None = None,
     sales_channel: str = "telegram",
@@ -328,18 +383,19 @@ async def purchase_product(
     api_order_request_id: int | None = None,
     referral_commission_percent: int = 5,
     on_fulfillment_started: FulfillmentStartedCallback | None = None,
+    supplier_idempotency_key: str | None = None,
 ) -> PurchaseResult:
-    uses_supplier = False
-    if supplier_client is not None:
-        async with session_factory() as session:
-            uses_supplier = (
-                await session.scalar(
-                    select(Product.fulfillment_source).where(Product.id == product_id)
-                )
-                == "sumistore"
-            )
-    if uses_supplier and supplier_client is not None:
-        async with supplier_balance_guard(supplier_client):
+    async with session_factory() as session:
+        fulfillment_source = await session.scalar(
+            select(Product.fulfillment_source).where(Product.id == product_id)
+        )
+    external_client = supplier_client_for_source(
+        str(fulfillment_source or ""),
+        supplier_client,
+        lehai_client,
+    )
+    if external_client is not None:
+        async with supplier_balance_guard(external_client):
             return await _purchase_product(
                 session_factory,
                 telegram_id,
@@ -347,6 +403,7 @@ async def purchase_product(
                 cipher,
                 quantity,
                 supplier_client,
+                lehai_client,
                 coupon_code=coupon_code,
                 coupon_id=coupon_id,
                 sales_channel=sales_channel,
@@ -354,6 +411,7 @@ async def purchase_product(
                 api_order_request_id=api_order_request_id,
                 referral_commission_percent=referral_commission_percent,
                 on_fulfillment_started=on_fulfillment_started,
+                supplier_idempotency_key=supplier_idempotency_key,
             )
     return await _purchase_product(
         session_factory,
@@ -362,6 +420,7 @@ async def purchase_product(
         cipher,
         quantity,
         supplier_client,
+        lehai_client,
         coupon_code=coupon_code,
         coupon_id=coupon_id,
         sales_channel=sales_channel,
@@ -369,6 +428,7 @@ async def purchase_product(
         api_order_request_id=api_order_request_id,
         referral_commission_percent=referral_commission_percent,
         on_fulfillment_started=on_fulfillment_started,
+        supplier_idempotency_key=supplier_idempotency_key,
     )
 
 
@@ -379,6 +439,7 @@ async def _purchase_product(
     cipher: SecretCipher,
     quantity: int,
     supplier_client: SumistoreClient | None,
+    lehai_client: LeHaiPremiumClient | None,
     *,
     coupon_code: str | None,
     coupon_id: int | None,
@@ -387,6 +448,7 @@ async def _purchase_product(
     api_order_request_id: int | None,
     referral_commission_percent: int,
     on_fulfillment_started: FulfillmentStartedCallback | None,
+    supplier_idempotency_key: str | None,
 ) -> PurchaseResult:
     async with session_factory() as session:
         async with session.begin():
@@ -402,8 +464,13 @@ async def _purchase_product(
                 return PurchaseResult(False, "invalid_quantity")
             if quantity > 1 and not product.allow_quantity:
                 return PurchaseResult(False, "invalid_quantity")
+            external_client = supplier_client_for_source(
+                product.fulfillment_source,
+                supplier_client,
+                lehai_client,
+            )
             recovered_items: list[InventoryItem] = []
-            if product.fulfillment_source == "sumistore":
+            if product.fulfillment_source in EXTERNAL_FULFILLMENT_SOURCES:
                 recovered_items = await reserve_available_inventory(
                     session,
                     product.id,
@@ -412,10 +479,15 @@ async def _purchase_product(
                 if len(recovered_items) != quantity:
                     recovered_stock = len(recovered_items)
                     recovered_items = []
-                    await refresh_external_product(session, product, supplier_client)
+                    await refresh_product_from_supplier(
+                        session,
+                        product,
+                        supplier_client,
+                        lehai_client,
+                    )
                     supplier_stock = max(0, product.external_stock - recovered_stock)
                     if (
-                        supplier_client is None
+                        external_client is None
                         or not product.supplier_product_id
                         or supplier_stock < quantity
                     ):
@@ -440,7 +512,7 @@ async def _purchase_product(
                     coupon_code=pricing.coupon.code if pricing.coupon else None,
                 )
 
-            if product.fulfillment_source == "sumistore":
+            if product.fulfillment_source in EXTERNAL_FULFILLMENT_SOURCES:
                 sale_unit_price = pricing.final_unit_price
                 if recovered_items:
                     now = datetime.now(UTC)
@@ -502,9 +574,13 @@ async def _purchase_product(
                 try:
                     supplier_purchase = await buy_supplier_product(
                         session,
-                        supplier_client,
+                        external_client,
                         product.supplier_product_id,
                         quantity,
+                        idempotency_key=(
+                            supplier_idempotency_key
+                            or f"shop-{secrets.token_hex(16)}"
+                        ),
                     )
                 except SupplierError as exc:
                     product.external_stock = 0
@@ -514,7 +590,10 @@ async def _purchase_product(
 
                 now = datetime.now(UTC)
                 batch_code = f"B{secrets.token_hex(5).upper()}"
-                if supplier_purchase.unit_price > 0:
+                if (
+                    supplier_purchase.provider == "sumistore"
+                    and supplier_purchase.unit_price > 0
+                ):
                     product.supplier_price = supplier_purchase.unit_price
                     product.price = supplier_purchase.unit_price + product.supplier_markup
                 cost_unit_price = max(
@@ -567,6 +646,7 @@ async def _purchase_product(
                     shop_order_code=batch_code,
                     product_id=product.id,
                     quantity=quantity,
+                    provider=supplier_purchase.provider,
                 )
                 if pricing.coupon is not None:
                     pricing.coupon.used_count += 1
@@ -764,25 +844,31 @@ async def process_sepay_payment(
     supplier_client: SumistoreClient | None = None,
     referral_commission_percent: int = 5,
     on_fulfillment_started: FulfillmentStartedCallback | None = None,
+    lehai_client: LeHaiPremiumClient | None = None,
 ) -> PaymentResult:
-    if supplier_client is not None:
+    if supplier_client is not None or lehai_client is not None:
         payment_text = " ".join(
             str(payload.get(key) or "") for key in ("code", "content", "description")
         )
         deposit_code = find_deposit_code(payment_text, payment_prefix)
         if deposit_code is not None:
             async with session_factory() as session:
-                supplier_direct_payment = await session.scalar(
-                    select(Product.id)
+                supplier_source = await session.scalar(
+                    select(Product.fulfillment_source)
                     .join(Deposit, Deposit.product_id == Product.id)
                     .where(
                         Deposit.code == deposit_code,
                         Deposit.payment_kind == "direct_purchase",
-                        Product.fulfillment_source == "sumistore",
+                        Product.fulfillment_source.in_(EXTERNAL_FULFILLMENT_SOURCES),
                     )
                 )
-            if supplier_direct_payment is not None:
-                async with supplier_balance_guard(supplier_client):
+            external_client = supplier_client_for_source(
+                str(supplier_source or ""),
+                supplier_client,
+                lehai_client,
+            )
+            if external_client is not None:
+                async with supplier_balance_guard(external_client):
                     return await _process_sepay_payment(
                         session_factory,
                         payload,
@@ -791,6 +877,7 @@ async def process_sepay_payment(
                         supplier_client,
                         referral_commission_percent,
                         on_fulfillment_started,
+                        lehai_client,
                     )
     return await _process_sepay_payment(
         session_factory,
@@ -800,6 +887,7 @@ async def process_sepay_payment(
         supplier_client,
         referral_commission_percent,
         on_fulfillment_started,
+        lehai_client,
     )
 
 
@@ -811,6 +899,7 @@ async def _process_sepay_payment(
     supplier_client: SumistoreClient | None,
     referral_commission_percent: int,
     on_fulfillment_started: FulfillmentStartedCallback | None,
+    lehai_client: LeHaiPremiumClient | None,
 ) -> PaymentResult:
     transfer_type = str(payload.get("transferType") or payload.get("transfer_type") or "").lower()
     if transfer_type and transfer_type not in {"in", "credit", "incoming"}:
@@ -938,7 +1027,12 @@ async def _process_sepay_payment(
                 supplier_purchase_made = False
                 if product is not None and product.active:
                     if deposit.quantity == 1 or product.allow_quantity:
-                        if product.fulfillment_source == "sumistore":
+                        external_client = supplier_client_for_source(
+                            product.fulfillment_source,
+                            supplier_client,
+                            lehai_client,
+                        )
+                        if product.fulfillment_source in EXTERNAL_FULFILLMENT_SOURCES:
                             items = await reserve_available_inventory(
                                 session,
                                 product.id,
@@ -957,10 +1051,11 @@ async def _process_sepay_payment(
                                     user.telegram_id,
                                     user.language,
                                 )
-                                await refresh_external_product(
+                                await refresh_product_from_supplier(
                                     session,
                                     product,
                                     supplier_client,
+                                    lehai_client,
                                 )
                                 supplier_stock = max(
                                     0,
@@ -968,16 +1063,17 @@ async def _process_sepay_payment(
                                 )
                             if not items and (
                                 cipher is not None
-                                and supplier_client is not None
+                                and external_client is not None
                                 and product.supplier_product_id
                                 and supplier_stock >= deposit.quantity
                             ):
                                 try:
                                     supplier_purchase = await buy_supplier_product(
                                         session,
-                                        supplier_client,
+                                        external_client,
                                         product.supplier_product_id,
                                         deposit.quantity,
+                                        idempotency_key=f"qr-{deposit.code}",
                                     )
                                 except SupplierError:
                                     product.external_stock = recovered_stock
@@ -989,7 +1085,10 @@ async def _process_sepay_payment(
                                         or product.supplier_price
                                         or 0,
                                     )
-                                    if supplier_purchase.unit_price > 0:
+                                    if (
+                                        supplier_purchase.provider == "sumistore"
+                                        and supplier_purchase.unit_price > 0
+                                    ):
                                         product.supplier_price = supplier_purchase.unit_price
                                         product.price = (
                                             supplier_purchase.unit_price + product.supplier_markup
@@ -1053,7 +1152,10 @@ async def _process_sepay_payment(
                         )
                         session.add(order)
                         orders.append(order)
-                    if product.fulfillment_source == "sumistore" and supplier_purchase_made:
+                    if (
+                        product.fulfillment_source in EXTERNAL_FULFILLMENT_SOURCES
+                        and supplier_purchase_made
+                    ):
                         record_supplier_purchase(
                             session,
                             amount=sum(item.cost_amount for item in items),
@@ -1061,6 +1163,7 @@ async def _process_sepay_payment(
                             shop_order_code=batch_code,
                             product_id=product.id,
                             quantity=deposit.quantity,
+                            provider=supplier_purchase.provider,
                         )
                     if deposit.discount_code_id is not None:
                         coupon = await session.scalar(
@@ -1184,7 +1287,7 @@ async def active_categories(session: AsyncSession) -> list[Category]:
             Category.active.is_(True),
             Category.products.any(
                 Product.active.is_(True)
-                & Product.fulfillment_source.in_(("local", "sumistore"))
+                & Product.fulfillment_source.in_(SELLABLE_FULFILLMENT_SOURCES)
                 & (Product.product_type == "account")
             ),
         )
@@ -1198,7 +1301,7 @@ async def active_products(session: AsyncSession, category_id: int | None = None)
         select(Product)
         .where(
             Product.active.is_(True),
-            Product.fulfillment_source.in_(("local", "sumistore")),
+            Product.fulfillment_source.in_(SELLABLE_FULFILLMENT_SOURCES),
             Product.product_type == "account",
         )
         .order_by(Product.id)
