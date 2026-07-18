@@ -27,7 +27,9 @@ class RentSimSnapshot:
     def effective_stock(self) -> int:
         if self.unit_price <= 0:
             return 0
-        return max(0, min(self.source_stock, self.balance // self.unit_price))
+        # RentSim's catalog stock is stale (kh2 can rent while reporting zero),
+        # so wallet capacity is the only reliable pre-purchase estimate.
+        return max(0, self.balance // self.unit_price)
 
 
 @dataclass(frozen=True)

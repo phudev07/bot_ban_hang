@@ -4,13 +4,13 @@
   <div>
     <span>RENTSIM · KH2 · CHATGPT</span>
     <h2>Theo dõi từng số thuê, OTP và khoản hoàn ví.</h2>
-    <p>Giá bán bằng giá nguồn động cộng 1.000đ. Chỉ đơn nhận OTP thành công mới được tính doanh thu và lợi nhuận.</p>
+    <p>Giá bán bằng giá nguồn động cộng 1.000đ. Số có thể thuê được ước tính theo số dư key vì trường stock của RentSim cập nhật không chính xác.</p>
   </div>
   <div class="sms-live-card {{ 'connected' if availability.connected else 'offline' }}">
     <small>{{ 'ĐANG KẾT NỐI' if availability.connected else 'MẤT KẾT NỐI' }}</small>
     <strong>{{ availability.effective_stock }}</strong>
-    <span>số có thể thuê</span>
-    <dl><div><dt>Giá nguồn</dt><dd>{{ availability.unit_cost|vnd }}</dd></div><div><dt>Giá bán</dt><dd>{{ availability.sale_price|vnd }}</dd></div><div><dt>Số dư API</dt><dd>{{ availability.provider_balance|vnd }}</dd></div><div><dt>Tồn dịch vụ</dt><dd>{{ availability.source_stock }}</dd></div></dl>
+    <span>số có thể thuê theo số dư</span>
+    <dl><div><dt>Giá nguồn</dt><dd>{{ availability.unit_cost|vnd }}</dd></div><div><dt>Giá bán</dt><dd>{{ availability.sale_price|vnd }}</dd></div><div><dt>Số dư API</dt><dd>{{ availability.provider_balance|vnd }}</dd></div><div><dt>Stock API tham khảo</dt><dd>{{ availability.source_stock }}</dd></div></dl>
   </div>
 </section>
 

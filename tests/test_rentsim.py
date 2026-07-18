@@ -16,10 +16,10 @@ def services_payload(stock: int = 12) -> dict[str, object]:
     }
 
 
-def test_rentsim_snapshot_uses_only_kh2_chatgpt_and_limits_stock_by_balance() -> None:
+def test_rentsim_snapshot_uses_wallet_capacity_when_catalog_stock_is_stale() -> None:
     async def handler(request: httpx.Request) -> httpx.Response:
         if request.url.path == "/phone/services":
-            return httpx.Response(200, json=services_payload(stock=12))
+            return httpx.Response(200, json=services_payload(stock=0))
         assert request.url.path == "/getbalance/secret-test"
         return httpx.Response(200, json={"id": "123", "balance": "3500"})
 
@@ -34,7 +34,7 @@ def test_rentsim_snapshot_uses_only_kh2_chatgpt_and_limits_stock_by_balance() ->
         assert snapshot.server_id == "kh2"
         assert snapshot.service_id == "chatgpt"
         assert snapshot.unit_price == 1_000
-        assert snapshot.source_stock == 12
+        assert snapshot.source_stock == 0
         assert snapshot.balance == 3_500
         assert snapshot.effective_stock == 3
 
