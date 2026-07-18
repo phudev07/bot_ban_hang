@@ -342,6 +342,45 @@ async def attach_sms_waiting_message(
             return True
 
 
+async def refund_sms_rental(
+    session_factory: async_sessionmaker[AsyncSession],
+    rental_id: int,
+    *,
+    reason: str = "provider_order_refunded",
+) -> SmsPollNotification | None:
+    """Refund one provider order exactly once after its own status is verified."""
+    async with session_factory() as session:
+        async with session.begin():
+            rental = await session.scalar(
+                select(SmsRental).where(SmsRental.id == rental_id).with_for_update()
+            )
+            if rental is None or rental.status not in ACTIVE_SMS_STATUSES:
+                return None
+            user = await session.scalar(
+                select(User).where(User.telegram_id == rental.user_id).with_for_update()
+            )
+            if user is None:
+                return None
+            await _refund_sms_rental(
+                session,
+                rental,
+                user,
+                reason=reason,
+                now=datetime.now(UTC),
+            )
+            return SmsPollNotification(
+                rental_id=rental.id,
+                user_id=rental.user_id,
+                waiting_message_id=rental.waiting_message_id,
+                status=rental.status,
+                shop_order_code=rental.shop_order_code or f"SMS{rental.id}",
+                phone_number=rental.phone_number or "",
+                sale_amount=rental.sale_amount,
+                balance=user.balance,
+                language=user.language,
+            )
+
+
 async def recent_sms_rentals(
     session: AsyncSession,
     user_id: int,
@@ -436,7 +475,6 @@ async def poll_pending_sms_rentals(
                 .limit(limit)
             )
         )
-
     for rental_id in rental_ids:
         async with session_factory() as session:
             rental = await session.get(SmsRental, rental_id)
@@ -495,7 +533,7 @@ async def poll_pending_sms_rentals(
                         session,
                         rental,
                         user,
-                        reason="otp_timeout",
+                        reason="provider_failed" if otp.status == "failed" else "otp_timeout",
                         now=checked_at,
                     )
                 notifications.append(

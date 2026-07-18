@@ -7,7 +7,7 @@ from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 from app.database import Base
 from app.models import BalanceAdjustment, ReferralReward, SmsRental, User
 from app.rentsim import RentSimError, RentSimOtp, RentSimRental, RentSimSnapshot
-from app.sms_rentals import poll_pending_sms_rentals, rent_sms_number
+from app.sms_rentals import poll_pending_sms_rentals, refund_sms_rental, rent_sms_number
 
 
 class FakeRentSim:
@@ -168,6 +168,41 @@ def test_sms_timeout_refunds_wallet_exactly_once() -> None:
             assert user is not None and user.balance == 5_000
             assert rental is not None and rental.status == "refunded"
             assert rental.failure_reason == "otp_timeout"
+            assert adjustments == 1
+        await engine.dispose()
+
+    asyncio.run(scenario())
+
+
+def test_manual_provider_refund_is_idempotent() -> None:
+    async def scenario() -> None:
+        engine, sessions = await make_database()
+        async with sessions() as session:
+            session.add(
+                User(telegram_id=2051, full_name="Buyer", balance=3_000)
+            )
+            session.add(
+                SmsRental(
+                    user_id=2051,
+                    shop_order_code="SMS-MANUAL",
+                    provider_order_id="PROVIDER-REFUNDED",
+                    status="pending",
+                    sale_amount=2_000,
+                    cost_amount=1_000,
+                )
+            )
+            await session.commit()
+
+        first = await refund_sms_rental(sessions, 1, reason="provider_failed")
+        second = await refund_sms_rental(sessions, 1, reason="provider_failed")
+        assert first is not None and first.status == "refunded"
+        assert second is None
+        async with sessions() as session:
+            user = await session.get(User, 2051)
+            adjustments = int(
+                await session.scalar(select(func.count(BalanceAdjustment.id))) or 0
+            )
+            assert user is not None and user.balance == 5_000
             assert adjustments == 1
         await engine.dispose()
 

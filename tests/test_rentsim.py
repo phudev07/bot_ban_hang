@@ -99,3 +99,20 @@ def test_rentsim_timeout_is_a_terminal_otp_result() -> None:
         assert otp.status == "timeout"
 
     asyncio.run(scenario())
+
+
+def test_rentsim_failed_order_is_a_terminal_refund_result() -> None:
+    async def handler(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={"status": "Failed", "id": "ORDER-FAILED"})
+
+    async def scenario() -> None:
+        client = RentSimClient(
+            "http://supplier.test",
+            "secret-test",
+            transport=httpx.MockTransport(handler),
+        )
+        otp = await client.fetch_otp("ORDER-FAILED")
+        assert otp.status == "failed"
+        assert otp.order_id == "ORDER-FAILED"
+
+    asyncio.run(scenario())

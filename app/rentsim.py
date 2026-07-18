@@ -242,6 +242,16 @@ class RentSimClient:
                 code=str(payload.get("code") or ""),
                 content=str(payload.get("content") or ""),
             )
+        # RentSim reports refunded/failed orders with a terminal status rather
+        # than the documented Timeout error payload. Do not leave these orders
+        # pending or the user's wallet will remain charged indefinitely.
+        if status_text in {"failed", "cancelled", "canceled", "expired", "rejected"}:
+            self.invalidate_snapshot()
+            return RentSimOtp(
+                status="failed",
+                order_id=str(payload.get("id") or order_id),
+                service_name=str(payload.get("serviceName") or self.service_id),
+            )
         if "timeout" in message.lower():
             self.invalidate_snapshot()
             return RentSimOtp(status="timeout", order_id=order_id)
