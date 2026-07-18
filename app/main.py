@@ -499,7 +499,19 @@ async def rentsim_otp_worker(
                     )
                 markup = sms_waiting_menu(item.language, item.sale_amount)
                 try:
-                    if item.waiting_message_id is not None:
+                    if item.status == "refunded":
+                        # Keep the refund visible as a separate notification instead
+                        # of replacing the original waiting message.
+                        if item.waiting_message_id is not None:
+                            try:
+                                await bot.delete_message(
+                                    chat_id=item.user_id,
+                                    message_id=item.waiting_message_id,
+                                )
+                            except TelegramBadRequest:
+                                pass
+                        await bot.send_message(item.user_id, text, reply_markup=markup)
+                    elif item.waiting_message_id is not None:
                         await bot.edit_message_text(
                             text,
                             chat_id=item.user_id,
