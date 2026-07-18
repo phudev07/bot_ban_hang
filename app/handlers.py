@@ -369,12 +369,11 @@ def create_router(
             text = (
                 "📲 <b>Rent a ChatGPT SMS number</b>\n\n"
                 "• Country: <b>Cambodia</b>\n"
-                "• Server: <code>kh2</code>\n"
                 f"• Price: <b>{format_vnd(availability.sale_price)}</b>\n"
                 f"{connection_line}\n\n"
                 "Wallet balance only. A direct QR payment is not available for SMS rentals. "
-                "If the provider confirms an OTP timeout, the full rental price is returned "
-                "to your wallet automatically."
+                "If no OTP arrives, you can rent another number after 60 seconds.\n"
+                "Numbers that do not receive an OTP are refunded to your wallet."
             )
         else:
             connection_line = (
@@ -385,11 +384,11 @@ def create_router(
             text = (
                 "📲 <b>Thuê số nhận SMS ChatGPT</b>\n\n"
                 "• Quốc gia: <b>Cambodia</b>\n"
-                "• Server: <code>kh2</code>\n"
                 f"• Giá thuê: <b>{format_vnd(availability.sale_price)}</b>\n"
                 f"{connection_line}\n\n"
-                "Chỉ thanh toán bằng số dư ví, không có QR thanh toán trực tiếp. "
-                "Nếu API xác nhận không có OTP, toàn bộ tiền thuê sẽ tự động hoàn về ví."
+                "Chỉ thanh toán bằng số dư ví, không có QR thanh toán trực tiếp.\n\n"
+                "Nếu không có OTP có thể thuê số khác sau 60 giây.\n"
+                "Các số thuê không nhận được OTP sẽ được hoàn tiền về ví."
             )
         if callback.message:
             await edit_or_send_text(
