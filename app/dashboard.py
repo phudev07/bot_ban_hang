@@ -1238,48 +1238,76 @@ def create_dashboard_router(
         request: Request,
         csrf: str = Form(...),
         product_id: int = Form(...),
-        min_quantity: int = Form(...),
-        discount_percent: int = Form(...),
+        min_quantity: list[int] = Form(...),
+        discount_percent: list[int] = Form(...),
     ) -> RedirectResponse:
         if not is_admin(request):
             return redirect_to_login()
         if not valid_csrf(request, csrf):
             return RedirectResponse("/admin/discounts", status_code=303)
-        if min_quantity < 2 or min_quantity > 100 or not 1 <= discount_percent <= 99:
-            flash(request, "Mốc số lượng hoặc phần trăm giảm không hợp lệ.", "error")
+        if (
+            not min_quantity
+            or len(min_quantity) != len(discount_percent)
+            or len(min_quantity) > 20
+        ):
+            flash(request, "Danh sách mốc giảm giá không hợp lệ.", "error")
+            return RedirectResponse("/admin/discounts", status_code=303)
+        tiers = sorted(zip(min_quantity, discount_percent, strict=True))
+        thresholds = [threshold for threshold, _percent in tiers]
+        if len(set(thresholds)) != len(thresholds):
+            flash(request, "Không thể nhập hai mốc số lượng giống nhau.", "error")
             return RedirectResponse("/admin/discounts", status_code=303)
         async with session_factory() as session:
             product = await session.get(Product, product_id)
-            duplicate = await session.scalar(
-                select(QuantityDiscount.id).where(
-                    QuantityDiscount.product_id == product_id,
-                    QuantityDiscount.min_quantity == min_quantity,
-                )
-            )
             if (
                 product is None
                 or product.fulfillment_source not in SELLABLE_FULFILLMENT_SOURCES
                 or product.product_type != "account"
-                or min_quantity > product.max_quantity
-                or duplicate is not None
+            ):
+                flash(request, "Sản phẩm không hợp lệ.", "error")
+                return RedirectResponse("/admin/discounts", status_code=303)
+            if any(
+                threshold < 2
+                or threshold > product.max_quantity
+                or not 1 <= percent <= 99
+                for threshold, percent in tiers
             ):
                 flash(
                     request,
-                    "Sản phẩm không hợp lệ, mốc vượt giới hạn mua hoặc đã được tạo.",
+                    "Mốc số lượng vượt giới hạn mua hoặc phần trăm giảm không hợp lệ.",
                     "error",
                 )
                 return RedirectResponse("/admin/discounts", status_code=303)
-            session.add(
-                QuantityDiscount(
-                    product_id=product.id,
-                    min_quantity=min_quantity,
-                    discount_percent=discount_percent,
+            existing_thresholds = set(
+                await session.scalars(
+                    select(QuantityDiscount.min_quantity).where(
+                        QuantityDiscount.product_id == product.id,
+                        QuantityDiscount.min_quantity.in_(thresholds),
+                    )
                 )
+            )
+            if existing_thresholds:
+                duplicate_text = ", ".join(str(value) for value in sorted(existing_thresholds))
+                flash(
+                    request,
+                    f"Các mốc {duplicate_text} đã tồn tại cho sản phẩm này.",
+                    "error",
+                )
+                return RedirectResponse("/admin/discounts", status_code=303)
+            session.add_all(
+                [
+                    QuantityDiscount(
+                        product_id=product.id,
+                        min_quantity=threshold,
+                        discount_percent=percent,
+                    )
+                    for threshold, percent in tiers
+                ]
             )
             await session.commit()
         flash(
             request,
-            f"Đã tạo ưu đãi từ {min_quantity} sản phẩm giảm {discount_percent}%.",
+            f"Đã thêm {len(tiers)} mốc ưu đãi số lượng cho {product.name_vi}.",
         )
         return RedirectResponse("/admin/discounts", status_code=303)
 

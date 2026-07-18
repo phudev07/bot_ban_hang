@@ -228,7 +228,7 @@ def test_dashboard_login_catalog_inventory_and_balance(tmp_path) -> None:
                 "description_vi": "Giao tự động",
                 "product_type": "account",
                 "allow_quantity": "1",
-                "max_quantity": "10",
+                "max_quantity": "100",
             },
             follow_redirects=False,
         )
@@ -261,31 +261,35 @@ def test_dashboard_login_catalog_inventory_and_balance(tmp_path) -> None:
             data={
                 "csrf": csrf,
                 "product_id": str(product_id),
-                "min_quantity": "10",
-                "discount_percent": "10",
+                "min_quantity": ["10", "50"],
+                "discount_percent": ["10", "15"],
             },
             follow_redirects=False,
         )
         assert created_quantity_discount.status_code == 303
         discounts_page = client.get("/admin/discounts")
-        quantity_discount_id = int(
-            re.search(
+        assert "+ Thêm mốc" in discounts_page.text
+        quantity_discount_ids = [
+            int(value)
+            for value in re.findall(
                 r'action="/admin/quantity-discounts/(\d+)/toggle"',
                 discounts_page.text,
-            ).group(1)
-        )  # type: ignore[union-attr]
+            )
+        ]
+        assert len(quantity_discount_ids) == 2
         toggled_quantity_discount = client.post(
-            f"/admin/quantity-discounts/{quantity_discount_id}/toggle",
+            f"/admin/quantity-discounts/{quantity_discount_ids[0]}/toggle",
             data={"csrf": csrf},
             follow_redirects=False,
         )
         assert toggled_quantity_discount.status_code == 303
-        deleted_quantity_discount = client.post(
-            f"/admin/quantity-discounts/{quantity_discount_id}/delete",
-            data={"csrf": csrf},
-            follow_redirects=False,
-        )
-        assert deleted_quantity_discount.status_code == 303
+        for quantity_discount_id in quantity_discount_ids:
+            deleted_quantity_discount = client.post(
+                f"/admin/quantity-discounts/{quantity_discount_id}/delete",
+                data={"csrf": csrf},
+                follow_redirects=False,
+            )
+            assert deleted_quantity_discount.status_code == 303
         discount_id = int(
             re.search(
                 r'action="/admin/discounts/(\d+)/toggle"',

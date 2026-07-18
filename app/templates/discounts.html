@@ -7,14 +7,30 @@
 
 <section class="panel form-panel">
   <div class="panel-head"><div><span>QUANTITY DISCOUNT</span><h2>Giảm tự động khi mua số lượng lớn</h2></div><small>Mốc cao nhất phù hợp sẽ được dùng và cộng thêm với mã giảm giá nếu khách có nhập mã.</small></div>
-  <form method="post" action="/admin/quantity-discounts" class="form-grid cols-3">
+  <form method="post" action="/admin/quantity-discounts" class="quantity-tier-form">
     <input type="hidden" name="csrf" value="{{ csrf_token }}">
-    <label>Sản phẩm<select name="product_id" required>{% for product in products %}<option value="{{ product.id }}" {{ 'selected' if product.id == selected_product_id else '' }}>#{{ product.id }} · {{ product.name_vi }}</option>{% endfor %}</select></label>
-    <label>Mua tối thiểu<input type="number" name="min_quantity" value="10" min="2" max="100" required><small>Ví dụ nhập 10 để áp dụng từ 10 tài khoản.</small></label>
-    <label>Giảm phần trăm<input type="number" name="discount_percent" value="10" min="1" max="99" required><small>Ví dụ 10 tương ứng giảm 10%.</small></label>
-    <button class="button primary" type="submit">Tạo mốc ưu đãi</button>
+    <label class="quantity-tier-product">Sản phẩm<select name="product_id" required>{% for product in products %}<option value="{{ product.id }}" {{ 'selected' if product.id == selected_product_id else '' }}>#{{ product.id }} · {{ product.name_vi }} · tối đa {{ product.max_quantity }}</option>{% endfor %}</select><small>Mỗi lần lưu có thể tạo nhiều mốc cho cùng một sản phẩm.</small></label>
+    <div class="quantity-tier-builder">
+      <div class="quantity-tier-builder-head"><div><strong>Các mốc muốn thêm</strong><small>Ví dụ: 10 acc giảm 10%, 50 acc giảm 15%.</small></div><button class="button secondary compact" type="button" id="add-quantity-tier">+ Thêm mốc</button></div>
+      <div id="quantity-tier-rows" class="quantity-tier-rows">
+        <div class="quantity-tier-row">
+          <label>Mua từ<input type="number" name="min_quantity" value="10" min="2" max="100" required><small>tài khoản</small></label>
+          <label>Giảm<input type="number" name="discount_percent" value="10" min="1" max="99" required><small>phần trăm</small></label>
+          <button class="button compact danger remove-quantity-tier" type="button" aria-label="Xóa mốc này">Xóa</button>
+        </div>
+      </div>
+    </div>
+    <button class="button primary quantity-tier-submit" type="submit">Lưu tất cả mốc</button>
   </form>
 </section>
+
+<template id="quantity-tier-template">
+  <div class="quantity-tier-row">
+    <label>Mua từ<input type="number" name="min_quantity" min="2" max="100" placeholder="50" required><small>tài khoản</small></label>
+    <label>Giảm<input type="number" name="discount_percent" min="1" max="99" placeholder="15" required><small>phần trăm</small></label>
+    <button class="button compact danger remove-quantity-tier" type="button" aria-label="Xóa mốc này">Xóa</button>
+  </div>
+</template>
 
 <section class="panel">
   <div class="panel-head"><div><span>QUANTITY TIERS</span><h2>Các mốc đang cấu hình</h2></div><small>Cùng một sản phẩm không thể có hai mốc số lượng giống nhau.</small></div>
@@ -62,4 +78,23 @@
     {% else %}<tr><td colspan="7" class="empty">Chưa có mã giảm giá nào.</td></tr>{% endfor %}
   </tbody></table></div>
 </section>
+<script>
+  (() => {
+    const rows = document.getElementById('quantity-tier-rows');
+    const template = document.getElementById('quantity-tier-template');
+    const addButton = document.getElementById('add-quantity-tier');
+    if (!rows || !template || !addButton) return;
+    addButton.addEventListener('click', () => {
+      if (rows.children.length >= 20) return;
+      rows.appendChild(template.content.cloneNode(true));
+      rows.lastElementChild?.querySelector('input')?.focus();
+    });
+    rows.addEventListener('click', (event) => {
+      const removeButton = event.target.closest('.remove-quantity-tier');
+      if (!removeButton) return;
+      const row = removeButton.closest('.quantity-tier-row');
+      if (rows.children.length > 1) row?.remove();
+    });
+  })();
+</script>
 {% endblock %}

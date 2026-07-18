@@ -265,6 +265,17 @@ textarea { resize: vertical; }
 .profit-text { color: var(--green) !important; }
 .profit-text.loss { color: var(--red) !important; }
 .coupon-code { width: fit-content; padding: 6px 9px; border: 1px dashed #d36331; border-radius: 8px; color: #a64620; background: #fff2e9; letter-spacing: .08em; }
+.quantity-tier-form { padding: 18px; display: grid; grid-template-columns: minmax(240px, .6fr) minmax(420px, 1.4fr); gap: 16px; align-items: start; }
+.quantity-tier-form label { display: grid; gap: 6px; color: var(--muted); font-size: 11px; font-weight: 700; }
+.quantity-tier-form label small { font-size: 10px; font-weight: 500; line-height: 1.4; }
+.quantity-tier-product { grid-row: span 2; }
+.quantity-tier-builder { overflow: hidden; border: 1px solid var(--line); border-radius: 14px; background: #f8f7f1; }
+.quantity-tier-builder-head { padding: 12px 13px; display: flex; align-items: center; justify-content: space-between; gap: 12px; border-bottom: 1px solid var(--line); }
+.quantity-tier-builder-head strong, .quantity-tier-builder-head small { display: block; }
+.quantity-tier-builder-head small { margin-top: 3px; color: var(--muted); font-size: 10px; }
+.quantity-tier-rows { padding: 10px; display: grid; gap: 8px; }
+.quantity-tier-row { padding: 10px; display: grid; grid-template-columns: minmax(110px, 1fr) minmax(110px, 1fr) auto; gap: 9px; align-items: end; border: 1px solid #e4e2d8; border-radius: 11px; background: white; }
+.quantity-tier-submit { grid-column: 2; justify-self: end; }
 .row-actions { display: flex; align-items: center; gap: 6px; }
 .row-actions form { margin: 0; }
 .order-feed article > span { text-align: right; }
@@ -291,6 +302,12 @@ tbody tr:hover { background: rgba(217,244,124,.09); }
   .trend-chart.detailed { min-width: 650px; }
   .trend-panel { overflow-x: auto; }
   .row-actions { align-items: stretch; flex-direction: column; }
+  .quantity-tier-form { grid-template-columns: 1fr; padding: 14px; }
+  .quantity-tier-product, .quantity-tier-submit { grid-row: auto; grid-column: auto; }
+  .quantity-tier-submit { width: 100%; justify-self: stretch; }
+  .quantity-tier-builder-head { align-items: stretch; flex-direction: column; }
+  .quantity-tier-row { grid-template-columns: 1fr 1fr; }
+  .quantity-tier-row .remove-quantity-tier { grid-column: 1 / -1; width: 100%; }
 }
 
 /* Compact controls and a real mobile navigation drawer. */
