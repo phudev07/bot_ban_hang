@@ -20,7 +20,7 @@ def test_rentsim_snapshot_uses_only_kh2_chatgpt_and_limits_stock_by_balance() ->
     async def handler(request: httpx.Request) -> httpx.Response:
         if request.url.path == "/phone/services":
             return httpx.Response(200, json=services_payload(stock=12))
-        assert request.url.path == "/secret-test"
+        assert request.url.path == "/getbalance/secret-test"
         return httpx.Response(200, json={"id": "123", "balance": "3500"})
 
     async def scenario() -> None:

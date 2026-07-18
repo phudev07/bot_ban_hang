@@ -110,7 +110,12 @@ class RentSimClient:
         return RentSimError(fallback, message)
 
     async def fetch_balance(self) -> int:
-        payload = await self._get(self.api_key)
+        try:
+            payload = await self._get(f"getbalance/{self.api_key}")
+        except RentSimError as exc:
+            if exc.code != "PROVIDER_HTTP_404":
+                raise
+            payload = await self._get(self.api_key)
         if str(payload.get("status") or "").lower() == "error":
             raise self._error(payload, "BALANCE_ERROR")
         try:
