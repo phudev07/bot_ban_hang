@@ -1,3 +1,4 @@
+import logging
 import secrets
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
@@ -15,6 +16,7 @@ from app.models import (
     Order,
     PaymentTransaction,
     Product,
+    SupplierBalanceTransaction,
     User,
 )
 from app.partner_services import award_referral_commission, ensure_referral_code
@@ -22,10 +24,76 @@ from app.supplier_audit import record_supplier_purchase
 from app.suppliers import (
     SumistoreClient,
     SupplierError,
+    SupplierPurchase,
     refresh_external_product,
     supplier_balance_guard,
 )
 from app.utils import SecretCipher, find_deposit_code
+
+
+logger = logging.getLogger(__name__)
+RECOVERABLE_SUPPLIER_ERRORS = {
+    "SUPPLIER_UNAVAILABLE",
+    "SUPPLIER_INVALID_RESPONSE",
+    "SUPPLIER_DELIVERY_INCOMPLETE",
+}
+
+
+async def reserve_available_inventory(
+    session: AsyncSession,
+    product_id: int,
+    quantity: int,
+) -> list[InventoryItem]:
+    return list(
+        await session.scalars(
+            select(InventoryItem)
+            .where(
+                InventoryItem.product_id == product_id,
+                InventoryItem.status == "available",
+            )
+            .order_by(InventoryItem.id)
+            .with_for_update(skip_locked=True)
+            .limit(quantity)
+        )
+    )
+
+
+async def buy_supplier_product(
+    session: AsyncSession,
+    client: SumistoreClient,
+    product_id: str,
+    quantity: int,
+) -> SupplierPurchase:
+    known_order_codes = set(
+        await session.scalars(
+            select(SupplierBalanceTransaction.supplier_order_code).where(
+                SupplierBalanceTransaction.provider == "sumistore",
+                SupplierBalanceTransaction.supplier_order_code.is_not(None),
+            )
+        )
+    )
+    started_at = datetime.now(UTC)
+    try:
+        return await client.buy(product_id, quantity)
+    except SupplierError as exc:
+        if exc.code not in RECOVERABLE_SUPPLIER_ERRORS:
+            raise
+        try:
+            recovered = await client.recover_recent_purchase(
+                product_id,
+                quantity,
+                started_at=started_at,
+                known_order_codes={code for code in known_order_codes if code},
+            )
+        except SupplierError:
+            recovered = None
+        if recovered is None:
+            raise exc
+        logger.warning(
+            "Recovered completed Sumi order after supplier response failure: order=%s",
+            recovered.order_code,
+        )
+        return recovered
 
 
 async def ensure_user(
@@ -314,14 +382,24 @@ async def _purchase_product(
                 return PurchaseResult(False, "invalid_quantity")
             if quantity > 1 and not product.allow_quantity:
                 return PurchaseResult(False, "invalid_quantity")
+            recovered_items: list[InventoryItem] = []
             if product.fulfillment_source == "sumistore":
-                await refresh_external_product(session, product, supplier_client)
-                if (
-                    supplier_client is None
-                    or not product.supplier_product_id
-                    or product.external_stock < quantity
-                ):
-                    return PurchaseResult(False, "out_of_stock")
+                recovered_items = await reserve_available_inventory(
+                    session,
+                    product.id,
+                    quantity,
+                )
+                if len(recovered_items) != quantity:
+                    recovered_stock = len(recovered_items)
+                    recovered_items = []
+                    await refresh_external_product(session, product, supplier_client)
+                    supplier_stock = max(0, product.external_stock - recovered_stock)
+                    if (
+                        supplier_client is None
+                        or not product.supplier_product_id
+                        or supplier_stock < quantity
+                    ):
+                        return PurchaseResult(False, "out_of_stock")
             pricing = await product_pricing(
                 session,
                 product,
@@ -344,8 +422,62 @@ async def _purchase_product(
 
             if product.fulfillment_source == "sumistore":
                 sale_unit_price = pricing.final_unit_price
+                if recovered_items:
+                    now = datetime.now(UTC)
+                    batch_code = f"B{secrets.token_hex(5).upper()}"
+                    product.external_stock = max(0, product.external_stock - quantity)
+                    orders = []
+                    secret_values = []
+                    for item in recovered_items:
+                        item.status = "sold"
+                        item.sold_at = now
+                        order = Order(
+                            user_id=user.telegram_id,
+                            product_id=product.id,
+                            inventory_item_id=item.id,
+                            amount=sale_unit_price,
+                            cost_amount=item.cost_amount,
+                            discount_amount=pricing.discount_per_unit,
+                            discount_code_id=pricing.coupon.id if pricing.coupon else None,
+                            discount_code=pricing.coupon.code if pricing.coupon else None,
+                            batch_code=batch_code,
+                            supplier_order_code=item.supplier_order_code,
+                            sales_channel=sales_channel,
+                            api_client_id=api_client_id,
+                            api_order_request_id=api_order_request_id,
+                            status="completed",
+                            delivered_at=now,
+                            product=product,
+                            inventory_item=item,
+                        )
+                        session.add(order)
+                        orders.append(order)
+                        secret_values.append(cipher.decrypt(item.encrypted_secret))
+                    if pricing.coupon is not None:
+                        pricing.coupon.used_count += 1
+                    user.balance -= total_amount
+                    await award_referral_commission(
+                        session,
+                        user,
+                        shop_order_code=batch_code,
+                        order_amount=total_amount,
+                        sales_channel=sales_channel,
+                        commission_percent=referral_commission_percent,
+                    )
+                    await session.flush()
+                    return PurchaseResult(
+                        True,
+                        "completed",
+                        orders=orders,
+                        secrets=secret_values,
+                        total_amount=total_amount,
+                        discount_amount=total_discount,
+                        coupon_code=pricing.coupon.code if pricing.coupon else None,
+                    )
                 try:
-                    supplier_purchase = await supplier_client.buy(
+                    supplier_purchase = await buy_supplier_product(
+                        session,
+                        supplier_client,
                         product.supplier_product_id,
                         quantity,
                     )
@@ -369,10 +501,13 @@ async def _purchase_product(
                 product.external_stock = max(0, product.external_stock - quantity)
                 orders = []
                 secret_values = []
-                for secret_value in supplier_purchase.accounts:
+                for item_index, secret_value in enumerate(supplier_purchase.accounts):
                     item = InventoryItem(
                         product_id=product.id,
                         encrypted_secret=cipher.encrypt(secret_value),
+                        cost_amount=cost_unit_price,
+                        supplier_order_code=supplier_purchase.order_code or None,
+                        supplier_item_index=item_index,
                         status="sold",
                         sold_at=now,
                     )
@@ -458,7 +593,7 @@ async def _purchase_product(
                     product_id=product.id,
                     inventory_item_id=item.id,
                     amount=pricing.final_unit_price,
-                    cost_amount=0,
+                    cost_amount=item.cost_amount,
                     discount_amount=pricing.discount_per_unit,
                     discount_code_id=pricing.coupon.id if pricing.coupon else None,
                     discount_code=pricing.coupon.code if pricing.coupon else None,
@@ -771,28 +906,49 @@ async def _process_sepay_payment(
             if direct_purchase_ready:
                 product = await session.get(Product, deposit.product_id)
                 items: list[InventoryItem] = []
-                supplier_order_code: str | None = None
-                supplier_unit_cost = 0
+                supplier_purchase_made = False
                 if product is not None and product.active:
                     if deposit.quantity == 1 or product.allow_quantity:
                         if product.fulfillment_source == "sumistore":
-                            await refresh_external_product(session, product, supplier_client)
-                            if (
+                            items = await reserve_available_inventory(
+                                session,
+                                product.id,
+                                deposit.quantity,
+                            )
+                            if len(items) == deposit.quantity:
+                                product.external_stock = max(
+                                    0,
+                                    product.external_stock - deposit.quantity,
+                                )
+                            else:
+                                recovered_stock = len(items)
+                                items = []
+                                await refresh_external_product(
+                                    session,
+                                    product,
+                                    supplier_client,
+                                )
+                                supplier_stock = max(
+                                    0,
+                                    product.external_stock - recovered_stock,
+                                )
+                            if not items and (
                                 cipher is not None
                                 and supplier_client is not None
                                 and product.supplier_product_id
-                                and product.external_stock >= deposit.quantity
+                                and supplier_stock >= deposit.quantity
                             ):
                                 try:
-                                    supplier_purchase = await supplier_client.buy(
+                                    supplier_purchase = await buy_supplier_product(
+                                        session,
+                                        supplier_client,
                                         product.supplier_product_id,
                                         deposit.quantity,
                                     )
                                 except SupplierError:
-                                    product.external_stock = 0
+                                    product.external_stock = recovered_stock
                                 else:
                                     now = datetime.now(UTC)
-                                    supplier_order_code = supplier_purchase.order_code or None
                                     supplier_unit_cost = max(
                                         0,
                                         supplier_purchase.unit_price
@@ -812,11 +968,19 @@ async def _process_sepay_payment(
                                         InventoryItem(
                                             product_id=product.id,
                                             encrypted_secret=cipher.encrypt(secret_value),
+                                            cost_amount=supplier_unit_cost,
+                                            supplier_order_code=(
+                                                supplier_purchase.order_code or None
+                                            ),
+                                            supplier_item_index=item_index,
                                             status="sold",
                                             sold_at=now,
                                         )
-                                        for secret_value in supplier_purchase.accounts
+                                        for item_index, secret_value in enumerate(
+                                            supplier_purchase.accounts
+                                        )
                                     ]
+                                    supplier_purchase_made = True
                                     session.add_all(items)
                                     await session.flush()
                         else:
@@ -843,27 +1007,23 @@ async def _process_sepay_payment(
                             product_id=product.id,
                             inventory_item_id=item.id,
                             amount=deposit.requested_amount // deposit.quantity,
-                            cost_amount=(
-                                supplier_unit_cost
-                                if product.fulfillment_source == "sumistore"
-                                else 0
-                            ),
+                            cost_amount=item.cost_amount,
                             discount_amount=deposit.discount_amount // deposit.quantity,
                             discount_code_id=deposit.discount_code_id,
                             discount_code=deposit.discount_code,
                             batch_code=batch_code,
-                            supplier_order_code=supplier_order_code,
+                            supplier_order_code=item.supplier_order_code,
                             sales_channel="telegram",
                             status="completed",
                             delivered_at=now,
                         )
                         session.add(order)
                         orders.append(order)
-                    if product.fulfillment_source == "sumistore":
+                    if product.fulfillment_source == "sumistore" and supplier_purchase_made:
                         record_supplier_purchase(
                             session,
-                            amount=supplier_unit_cost * deposit.quantity,
-                            supplier_order_code=supplier_order_code,
+                            amount=sum(item.cost_amount for item in items),
+                            supplier_order_code=items[0].supplier_order_code,
                             shop_order_code=batch_code,
                             product_id=product.id,
                             quantity=deposit.quantity,

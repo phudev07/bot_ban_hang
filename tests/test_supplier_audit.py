@@ -8,12 +8,13 @@ from app.database import Base
 from app.models import (
     Category,
     Deposit,
+    InventoryItem,
     Product,
     SupplierBalanceTransaction,
     User,
 )
 from app.services import process_sepay_payment, purchase_product
-from app.supplier_audit import reconcile_supplier_balance
+from app.supplier_audit import recover_supplier_order, reconcile_supplier_balance
 from app.suppliers import SupplierPurchase, SupplierSnapshot
 from app.utils import SecretCipher
 
@@ -58,6 +59,16 @@ class ConcurrentSupplier:
             )
         finally:
             self.in_flight -= 1
+
+
+class RecoverySupplier:
+    async def fetch_order(self, order_code: str) -> SupplierPurchase:
+        return SupplierPurchase(
+            order_code=order_code,
+            unit_price=12_000,
+            accounts=("recovered1|password", "recovered2|password"),
+            product_id="SP-RECOVERY",
+        )
 
 
 async def make_database():
@@ -180,6 +191,71 @@ def test_simultaneous_wallet_and_qr_purchases_do_not_create_false_alerts() -> No
             ]
             assert sum(transaction.amount for transaction in transactions) == -30_000
             assert len({transaction.shop_order_code for transaction in transactions}) == 2
+        await engine.dispose()
+
+    asyncio.run(scenario())
+
+
+def test_suspicious_supplier_order_can_be_recovered_into_stock_once() -> None:
+    async def scenario() -> None:
+        engine, sessions = await make_database()
+        cipher = SecretCipher(Fernet.generate_key().decode())
+        async with sessions() as session:
+            category = Category(name_vi="ChatGPT", name_en="ChatGPT")
+            session.add(category)
+            await session.flush()
+            product = Product(
+                category_id=category.id,
+                name_vi="Recovered",
+                name_en="Recovered",
+                price=17_000,
+                fulfillment_source="sumistore",
+                supplier_product_id="SP-RECOVERY",
+            )
+            audit = SupplierBalanceTransaction(
+                provider="sumistore",
+                kind="suspicious",
+                amount=-24_000,
+                balance_before=64_000,
+                balance_after=40_000,
+            )
+            session.add_all([product, audit])
+            await session.commit()
+
+        async with sessions() as session:
+            async with session.begin():
+                first = await recover_supplier_order(
+                    session,
+                    RecoverySupplier(),  # type: ignore[arg-type]
+                    cipher,
+                    audit_transaction_id=audit.id,
+                    product_id=product.id,
+                    supplier_order_code="API-RECOVERED",
+                )
+        async with sessions() as session:
+            async with session.begin():
+                repeated = await recover_supplier_order(
+                    session,
+                    RecoverySupplier(),  # type: ignore[arg-type]
+                    cipher,
+                    audit_transaction_id=audit.id,
+                    product_id=product.id,
+                    supplier_order_code="API-RECOVERED",
+                )
+
+        assert first.inserted_count == 2
+        assert repeated.inserted_count == 0
+        async with sessions() as session:
+            items = list(await session.scalars(select(InventoryItem).order_by(InventoryItem.id)))
+            audit = await session.get(SupplierBalanceTransaction, audit.id)
+            assert len(items) == 2
+            assert [cipher.decrypt(item.encrypted_secret) for item in items] == [
+                "recovered1|password",
+                "recovered2|password",
+            ]
+            assert all(item.cost_amount == 12_000 for item in items)
+            assert audit is not None and audit.kind == "recovered"
+            assert audit.supplier_order_code == "API-RECOVERED"
         await engine.dispose()
 
     asyncio.run(scenario())

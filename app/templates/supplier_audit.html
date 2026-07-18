@@ -44,6 +44,7 @@
     <nav aria-label="Lọc giao dịch Sumi">
       <a class="{{ 'active' if selected_kind == 'all' else '' }}" href="/admin/supplier-audit">Tất cả</a>
       <a class="{{ 'active' if selected_kind == 'suspicious' else '' }}" href="/admin/supplier-audit?kind=suspicious">Đáng ngờ</a>
+      <a class="{{ 'active' if selected_kind == 'recovered' else '' }}" href="/admin/supplier-audit?kind=recovered">Đã thu hồi</a>
       <a class="{{ 'active' if selected_kind == 'purchase' else '' }}" href="/admin/supplier-audit?kind=purchase">Mua hợp lệ</a>
       <a class="{{ 'active' if selected_kind == 'credit' else '' }}" href="/admin/supplier-audit?kind=credit">Tiền tăng</a>
     </nav>
@@ -63,6 +64,7 @@
         <tr class="{{ 'audit-row-suspicious' if item.kind == 'suspicious' else '' }}">
           <td>
             {% if item.kind == 'suspicious' %}<span class="status off">Đáng ngờ</span>
+            {% elif item.kind == 'recovered' %}<span class="status wait">Đã thu hồi</span>
             {% elif item.kind == 'purchase' %}<span class="status on">Mua hợp lệ</span>
             {% else %}<span class="status wait">Tiền tăng</span>{% endif %}
             <small>Log #{{ item.id }}</small>

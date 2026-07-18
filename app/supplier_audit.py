@@ -5,8 +5,14 @@ from datetime import UTC, datetime
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from app.models import SupplierBalanceState, SupplierBalanceTransaction
+from app.models import (
+    InventoryItem,
+    Product,
+    SupplierBalanceState,
+    SupplierBalanceTransaction,
+)
 from app.suppliers import SumistoreClient, supplier_balance_guard
+from app.utils import SecretCipher
 
 
 logger = logging.getLogger(__name__)
@@ -25,6 +31,80 @@ class SupplierReconcileResult:
     @property
     def suspicious_amount(self) -> int:
         return min(0, self.unexplained_delta)
+
+
+@dataclass(frozen=True)
+class SupplierOrderRecoveryResult:
+    order_code: str
+    account_count: int
+    inserted_count: int
+    total_cost: int
+
+
+async def recover_supplier_order(
+    session: AsyncSession,
+    client: SumistoreClient,
+    cipher: SecretCipher,
+    *,
+    audit_transaction_id: int,
+    product_id: int,
+    supplier_order_code: str,
+) -> SupplierOrderRecoveryResult:
+    purchase = await client.fetch_order(supplier_order_code)
+    audit = await session.scalar(
+        select(SupplierBalanceTransaction)
+        .where(SupplierBalanceTransaction.id == audit_transaction_id)
+        .with_for_update()
+    )
+    product = await session.get(Product, product_id)
+    if audit is None or audit.kind not in {"suspicious", "recovered"}:
+        raise ValueError("Supplier audit transaction is not recoverable")
+    if product is None or product.fulfillment_source != "sumistore":
+        raise ValueError("Supplier product is not recoverable")
+    if purchase.product_id and purchase.product_id != product.supplier_product_id:
+        raise ValueError("Supplier order belongs to another product")
+
+    total_cost = purchase.unit_price * len(purchase.accounts)
+    if audit.amount >= 0 or abs(audit.amount) != total_cost:
+        raise ValueError("Supplier order cost does not match the suspicious debit")
+
+    inserted_count = 0
+    for item_index, account in enumerate(purchase.accounts):
+        existing = await session.scalar(
+            select(InventoryItem.id).where(
+                InventoryItem.supplier_order_code == purchase.order_code,
+                InventoryItem.supplier_item_index == item_index,
+            )
+        )
+        if existing is not None:
+            continue
+        session.add(
+            InventoryItem(
+                product_id=product.id,
+                encrypted_secret=cipher.encrypt(account),
+                cost_amount=purchase.unit_price,
+                supplier_order_code=purchase.order_code,
+                supplier_item_index=item_index,
+                status="available",
+            )
+        )
+        inserted_count += 1
+
+    audit.kind = "recovered"
+    audit.supplier_order_code = purchase.order_code
+    audit.product_id = product.id
+    audit.quantity = len(purchase.accounts)
+    audit.note = (
+        "Đã thu hồi tài khoản từ đơn Sumi hoàn tất sau khi shop bị timeout. "
+        "Hàng đã được mã hóa và nhập lại kho để bán tiếp."
+    )
+    await session.flush()
+    return SupplierOrderRecoveryResult(
+        order_code=purchase.order_code,
+        account_count=len(purchase.accounts),
+        inserted_count=inserted_count,
+        total_cost=total_cost,
+    )
 
 
 def record_supplier_purchase(

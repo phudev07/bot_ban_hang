@@ -94,10 +94,22 @@ class DiscountCode(Base):
 
 class InventoryItem(Base):
     __tablename__ = "inventory_items"
+    __table_args__ = (
+        UniqueConstraint(
+            "supplier_order_code",
+            "supplier_item_index",
+            name="uq_inventory_supplier_source",
+        ),
+    )
 
     id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
     product_id: Mapped[int] = mapped_column(ForeignKey("products.id", ondelete="CASCADE"))
     encrypted_secret: Mapped[str] = mapped_column(Text)
+    cost_amount: Mapped[int] = mapped_column(BigInteger, default=0)
+    supplier_order_code: Mapped[str | None] = mapped_column(
+        String(64), nullable=True, index=True
+    )
+    supplier_item_index: Mapped[int | None] = mapped_column(nullable=True)
     status: Mapped[str] = mapped_column(String(20), default="available", index=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     sold_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)

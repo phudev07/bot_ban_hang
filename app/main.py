@@ -207,6 +207,36 @@ async def initialize_database(engine, session_factory, seed_demo_data: bool) -> 
         )
         await connection.execute(
             text(
+                "ALTER TABLE inventory_items ADD COLUMN IF NOT EXISTS "
+                "cost_amount BIGINT NOT NULL DEFAULT 0"
+            )
+        )
+        await connection.execute(
+            text(
+                "ALTER TABLE inventory_items ADD COLUMN IF NOT EXISTS "
+                "supplier_order_code VARCHAR(64) NULL"
+            )
+        )
+        await connection.execute(
+            text(
+                "ALTER TABLE inventory_items ADD COLUMN IF NOT EXISTS "
+                "supplier_item_index INTEGER NULL"
+            )
+        )
+        await connection.execute(
+            text(
+                "CREATE INDEX IF NOT EXISTS ix_inventory_items_supplier_order_code "
+                "ON inventory_items (supplier_order_code)"
+            )
+        )
+        await connection.execute(
+            text(
+                "CREATE UNIQUE INDEX IF NOT EXISTS uq_inventory_supplier_source "
+                "ON inventory_items (supplier_order_code, supplier_item_index)"
+            )
+        )
+        await connection.execute(
+            text(
                 "CREATE INDEX IF NOT EXISTS ix_products_fulfillment_source "
                 "ON products (fulfillment_source)"
             )

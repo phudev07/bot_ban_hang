@@ -8,14 +8,14 @@ import time
 from contextlib import asynccontextmanager
 from collections.abc import AsyncIterator
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 import httpx
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.config import Settings
-from app.models import Category, Product
+from app.models import Category, InventoryItem, Product
 
 
 logger = logging.getLogger(__name__)
@@ -80,6 +80,28 @@ class SupplierPurchase:
     order_code: str
     unit_price: int
     accounts: tuple[str, ...]
+    product_id: str = ""
+
+
+@dataclass(frozen=True)
+class SupplierOrderSummary:
+    order_code: str
+    product_id: str
+    quantity: int
+    created_at: datetime
+
+
+def _parse_supplier_datetime(value: object) -> datetime | None:
+    normalized = str(value or "").strip().replace("Z", "+00:00")
+    if not normalized:
+        return None
+    try:
+        parsed = datetime.fromisoformat(normalized)
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        return parsed.replace(tzinfo=UTC)
+    return parsed.astimezone(UTC)
 
 
 class SumistoreClient:
@@ -218,7 +240,95 @@ class SumistoreClient:
             order_code=str(payload.get("order_code") or ""),
             unit_price=unit_price,
             accounts=tuple(accounts),
+            product_id=product_id,
         )
+
+    async def fetch_orders(self) -> tuple[SupplierOrderSummary, ...]:
+        payload = await self._get("tele-orders")
+        orders = payload.get("orders")
+        if not isinstance(orders, list):
+            raise SupplierError("SUPPLIER_INVALID_RESPONSE")
+        summaries: list[SupplierOrderSummary] = []
+        for raw_order in orders:
+            if not isinstance(raw_order, dict):
+                continue
+            product = raw_order.get("product")
+            product_data = product if isinstance(product, dict) else {}
+            created_at = _parse_supplier_datetime(raw_order.get("created_at"))
+            try:
+                quantity = int(raw_order.get("quantity") or 0)
+            except (TypeError, ValueError):
+                continue
+            order_code = str(raw_order.get("order_code") or "").strip()
+            product_id = str(
+                product_data.get("id") or raw_order.get("product_id") or ""
+            ).strip()
+            if order_code and product_id and quantity > 0 and created_at is not None:
+                summaries.append(
+                    SupplierOrderSummary(
+                        order_code=order_code,
+                        product_id=product_id,
+                        quantity=quantity,
+                        created_at=created_at,
+                    )
+                )
+        return tuple(summaries)
+
+    async def fetch_order(self, order_code: str) -> SupplierPurchase:
+        payload = await self._get(f"tele-orders/{order_code}")
+        raw_order = payload.get("order")
+        order = raw_order if isinstance(raw_order, dict) else payload
+        accounts = _extract_accounts(order)
+        try:
+            quantity = int(order.get("quantity") or len(accounts))
+        except (TypeError, ValueError) as exc:
+            raise SupplierError("SUPPLIER_INVALID_RESPONSE") from exc
+        if quantity < 1 or len(accounts) != quantity:
+            raise SupplierError("SUPPLIER_DELIVERY_INCOMPLETE")
+        pricing = order.get("pricing")
+        pricing_data = pricing if isinstance(pricing, dict) else {}
+        try:
+            total_amount = int(order.get("total_amount") or order.get("amount") or 0)
+            unit_price = int(pricing_data.get("unit_price") or 0)
+        except (TypeError, ValueError) as exc:
+            raise SupplierError("SUPPLIER_INVALID_RESPONSE") from exc
+        if unit_price <= 0 and total_amount > 0:
+            unit_price = total_amount // quantity
+        product = order.get("product")
+        product_data = product if isinstance(product, dict) else {}
+        return SupplierPurchase(
+            order_code=str(order.get("order_code") or order_code),
+            unit_price=max(0, unit_price),
+            accounts=tuple(accounts),
+            product_id=str(product_data.get("id") or order.get("product_id") or ""),
+        )
+
+    async def recover_recent_purchase(
+        self,
+        product_id: str,
+        quantity: int,
+        *,
+        started_at: datetime,
+        known_order_codes: set[str],
+    ) -> SupplierPurchase | None:
+        earliest = started_at.astimezone(UTC) - timedelta(seconds=3)
+        for attempt in range(3):
+            summaries = await self.fetch_orders()
+            candidates = [
+                order
+                for order in summaries
+                if order.order_code not in known_order_codes
+                and order.product_id == product_id
+                and order.quantity == quantity
+                and order.created_at >= earliest
+            ]
+            if len(candidates) == 1:
+                return await self.fetch_order(candidates[0].order_code)
+            if len(candidates) > 1:
+                return None
+            if attempt < 2:
+                await asyncio.sleep(0.5)
+        return None
 
 
 @asynccontextmanager
@@ -337,24 +447,33 @@ async def refresh_external_product(
 ) -> int:
     if product.fulfillment_source != "sumistore" or not product.supplier_product_id:
         return product.external_stock
+    recovered_stock = int(
+        await session.scalar(
+            select(func.count(InventoryItem.id)).where(
+                InventoryItem.product_id == product.id,
+                InventoryItem.status == "available",
+            )
+        )
+        or 0
+    )
     if client is None:
-        product.external_stock = 0
+        product.external_stock = recovered_stock
         await session.flush()
-        return 0
+        return product.external_stock
     try:
         snapshot = await client.fetch_snapshot(product.supplier_product_id)
     except SupplierError as exc:
-        product.external_stock = 0
+        product.external_stock = recovered_stock
         await session.flush()
         logger.warning(
             "Supplier sync failed for product %s: code=%s",
             product.supplier_product_id,
             exc.code,
         )
-        return 0
+        return product.external_stock
     product.supplier_price = snapshot.unit_price
     product.price = snapshot.unit_price + product.supplier_markup
-    product.external_stock = snapshot.effective_stock
+    product.external_stock = snapshot.effective_stock + recovered_stock
     product.supplier_synced_at = datetime.now(UTC)
     await session.flush()
     return product.external_stock

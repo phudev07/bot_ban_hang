@@ -21,7 +21,7 @@ from app.services import (
     recent_orders,
     user_activity_stats,
 )
-from app.suppliers import SupplierPurchase, SupplierSnapshot
+from app.suppliers import SupplierError, SupplierPurchase, SupplierSnapshot
 from app.utils import SecretCipher
 
 
@@ -54,6 +54,27 @@ class FakeSupplier:
             order_code="API-TELE-TEST123",
             unit_price=15_000,
             accounts=tuple(f"chatgpt{index}:password" for index in range(1, quantity + 1)),
+        )
+
+
+class TimeoutRecoveringSupplier(FakeSupplier):
+    async def buy(self, product_id: str, quantity: int) -> SupplierPurchase:
+        self.buy_calls += 1
+        raise SupplierError("SUPPLIER_UNAVAILABLE")
+
+    async def recover_recent_purchase(
+        self,
+        product_id: str,
+        quantity: int,
+        **_kwargs,
+    ) -> SupplierPurchase:
+        return SupplierPurchase(
+            order_code="API-TELE-RECOVERED",
+            unit_price=15_000,
+            accounts=tuple(
+                f"recovered{index}:password" for index in range(1, quantity + 1)
+            ),
+            product_id=product_id,
         )
 
 
@@ -513,6 +534,109 @@ def test_external_purchase_uses_dynamic_price_and_delivers_accounts() -> None:
     asyncio.run(scenario())
 
 
+def test_external_purchase_recovers_supplier_order_after_timeout() -> None:
+    async def scenario() -> None:
+        engine, sessions = await make_database()
+        cipher = SecretCipher(Fernet.generate_key().decode())
+        supplier = TimeoutRecoveringSupplier(balance=30_000, stock=100)
+        async with sessions() as session:
+            category = Category(name_vi="ChatGPT", name_en="ChatGPT")
+            session.add(category)
+            await session.flush()
+            product = Product(
+                category_id=category.id,
+                name_vi="ChatGPT Plus",
+                name_en="ChatGPT Plus",
+                price=20_000,
+                allow_quantity=True,
+                fulfillment_source="sumistore",
+                supplier_product_id="SP-GEF55PBV",
+                supplier_markup=5_000,
+            )
+            user = User(telegram_id=123456, full_name="Buyer", balance=50_000)
+            session.add_all([product, user])
+            await session.commit()
+
+        result = await purchase_product(
+            sessions,
+            user.telegram_id,
+            product.id,
+            cipher,
+            2,
+            supplier,  # type: ignore[arg-type]
+        )
+
+        assert result.ok is True
+        assert result.secrets == ["recovered1:password", "recovered2:password"]
+        async with sessions() as session:
+            orders = list(await session.scalars(select(Order).order_by(Order.id)))
+            assert len(orders) == 2
+            assert all(
+                order.supplier_order_code == "API-TELE-RECOVERED" for order in orders
+            )
+        await engine.dispose()
+
+    asyncio.run(scenario())
+
+
+def test_recovered_supplier_inventory_is_sold_before_buying_again() -> None:
+    async def scenario() -> None:
+        engine, sessions = await make_database()
+        cipher = SecretCipher(Fernet.generate_key().decode())
+        supplier = FakeSupplier(balance=0, stock=0)
+        async with sessions() as session:
+            category = Category(name_vi="ChatGPT", name_en="ChatGPT")
+            session.add(category)
+            await session.flush()
+            product = Product(
+                category_id=category.id,
+                name_vi="ChatGPT Plus",
+                name_en="ChatGPT Plus",
+                price=20_000,
+                allow_quantity=True,
+                fulfillment_source="sumistore",
+                supplier_product_id="SP-GEF55PBV",
+                supplier_markup=5_000,
+                external_stock=2,
+            )
+            user = User(telegram_id=123456, full_name="Buyer", balance=50_000)
+            session.add_all([product, user])
+            await session.flush()
+            session.add_all(
+                [
+                    InventoryItem(
+                        product_id=product.id,
+                        encrypted_secret=cipher.encrypt(f"orphan{index}:password"),
+                        cost_amount=15_000,
+                        supplier_order_code="API-TELE-ORPHAN",
+                        supplier_item_index=index,
+                    )
+                    for index in range(2)
+                ]
+            )
+            await session.commit()
+
+        result = await purchase_product(
+            sessions,
+            user.telegram_id,
+            product.id,
+            cipher,
+            2,
+            supplier,  # type: ignore[arg-type]
+        )
+
+        assert result.ok is True
+        assert supplier.buy_calls == 0
+        assert result.secrets == ["orphan0:password", "orphan1:password"]
+        async with sessions() as session:
+            orders = list(await session.scalars(select(Order).order_by(Order.id)))
+            assert all(order.cost_amount == 15_000 for order in orders)
+            assert all(order.supplier_order_code == "API-TELE-ORPHAN" for order in orders)
+        await engine.dispose()
+
+    asyncio.run(scenario())
+
+
 def test_external_stock_is_zero_when_supplier_balance_is_insufficient() -> None:
     async def scenario() -> None:
         engine, sessions = await make_database()
@@ -606,6 +730,74 @@ def test_external_direct_payment_delivers_supplier_account() -> None:
             assert order is not None and order.amount == 20_000
             assert order.cost_amount == 15_000
             assert order.supplier_order_code == "API-TELE-TEST123"
+        await engine.dispose()
+
+    asyncio.run(scenario())
+
+
+def test_external_direct_payment_uses_recovered_inventory_first() -> None:
+    async def scenario() -> None:
+        engine, sessions = await make_database()
+        cipher = SecretCipher(Fernet.generate_key().decode())
+        supplier = FakeSupplier(balance=0, stock=0)
+        async with sessions() as session:
+            category = Category(name_vi="ChatGPT", name_en="ChatGPT")
+            session.add(category)
+            await session.flush()
+            product = Product(
+                category_id=category.id,
+                name_vi="ChatGPT Plus",
+                name_en="ChatGPT Plus",
+                price=20_000,
+                fulfillment_source="sumistore",
+                supplier_product_id="SP-GEF55PBV",
+                supplier_markup=5_000,
+                external_stock=1,
+            )
+            user = User(telegram_id=123456, full_name="Buyer", balance=0)
+            session.add_all([product, user])
+            await session.flush()
+            session.add(
+                InventoryItem(
+                    product_id=product.id,
+                    encrypted_secret=cipher.encrypt("recovered|password"),
+                    cost_amount=12_000,
+                    supplier_order_code="API-TELE-ORPHAN",
+                    supplier_item_index=0,
+                )
+            )
+            session.add(
+                Deposit(
+                    user_id=user.telegram_id,
+                    code="NAP123456ABCD",
+                    requested_amount=20_000,
+                    payment_kind="direct_purchase",
+                    product_id=product.id,
+                )
+            )
+            await session.commit()
+
+        result = await process_sepay_payment(
+            sessions,
+            {
+                "id": 44444,
+                "transferType": "in",
+                "transferAmount": 20_000,
+                "content": "NAP123456ABCD",
+            },
+            cipher=cipher,
+            supplier_client=supplier,  # type: ignore[arg-type]
+        )
+
+        assert result.status == "direct_purchase_completed"
+        assert supplier.buy_calls == 0
+        assert [cipher.decrypt(value) for value in result.encrypted_secrets] == [
+            "recovered|password"
+        ]
+        async with sessions() as session:
+            order = await session.scalar(select(Order))
+            assert order is not None and order.cost_amount == 12_000
+            assert order.supplier_order_code == "API-TELE-ORPHAN"
         await engine.dispose()
 
     asyncio.run(scenario())

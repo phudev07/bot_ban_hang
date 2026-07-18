@@ -2232,7 +2232,11 @@ def create_dashboard_router(
     async def supplier_audit_page(request: Request, kind: str = "all") -> Response:
         if not is_admin(request):
             return redirect_to_login()
-        selected_kind = kind if kind in {"all", "suspicious", "purchase", "credit"} else "all"
+        selected_kind = (
+            kind
+            if kind in {"all", "suspicious", "recovered", "purchase", "credit"}
+            else "all"
+        )
         async with session_factory() as session:
             state = await session.get(SupplierBalanceState, PROVIDER)
             statement = (
