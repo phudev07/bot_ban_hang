@@ -369,6 +369,23 @@ tbody tr:hover { background: rgba(217,244,124,.09); }
 .audit-note { max-width: 330px; line-height: 1.5; }
 .api-intro { background: radial-gradient(circle at 88% 18%, rgba(217,244,124,.2), transparent 30%), linear-gradient(120deg, #15231e, #1d5744); }
 .referral-intro { background: radial-gradient(circle at 88% 18%, rgba(255,218,113,.25), transparent 30%), linear-gradient(120deg, #302116, #7a4a20); }
+.sms-intro { background: radial-gradient(circle at 82% 12%, rgba(89,221,190,.24), transparent 31%), linear-gradient(120deg, #10231f, #124d49); }
+.sms-live-card { min-width: 260px; padding: 17px; border: 1px solid rgba(255,255,255,.16); border-radius: 16px; background: rgba(4,21,18,.34); }
+.sms-live-card > small, .sms-live-card > strong, .sms-live-card > span { display: block; }
+.sms-live-card > small { color: #87e4c9; font-size: 9px; font-weight: 800; letter-spacing: .14em; }
+.sms-live-card.offline > small { color: #ff9b86; }
+.sms-live-card > strong { margin-top: 7px; color: white; font: 700 38px/1 "Fraunces", serif; }
+.sms-live-card > span { margin-top: 3px; color: #b8d3ca; font-size: 11px; }
+.sms-live-card dl { margin: 13px 0 0; padding-top: 10px; display: grid; grid-template-columns: 1fr 1fr; gap: 6px 14px; border-top: 1px solid rgba(255,255,255,.13); }
+.sms-live-card dl div { display: flex; justify-content: space-between; gap: 8px; }
+.sms-live-card dt, .sms-live-card dd { margin: 0; font-size: 9px; }
+.sms-live-card dt { color: #91aaa2; }
+.sms-live-card dd { color: #eef9f5; font-weight: 700; }
+.sms-metrics { grid-template-columns: repeat(6, minmax(0, 1fr)); }
+.sms-filter { padding: 15px 18px; display: grid; grid-template-columns: minmax(240px, 1fr) 190px auto auto; gap: 10px; align-items: end; }
+.sms-filter label { display: grid; gap: 5px; color: var(--muted); font-size: 10px; font-weight: 700; }
+.sms-rental-table { min-width: 1120px !important; }
+.sms-content { max-width: 250px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .api-client-list { padding: 16px; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
 .api-client-card { padding: 17px; border: 1px solid var(--line); border-radius: 15px; background: #faf7ef; }
 .api-client-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; }
@@ -392,6 +409,10 @@ tbody tr:hover { background: rgba(217,244,124,.09); }
   .api-client-list { grid-template-columns: 1fr; padding: 10px; }
   .api-client-form { grid-template-columns: 1fr; }
   .api-client-form .wide { grid-column: auto; }
+  .sms-live-card { width: 100%; min-width: 0; }
+  .sms-metrics { grid-template-columns: 1fr 1fr; }
+  .sms-filter { grid-template-columns: 1fr; }
+  .sms-filter .button { width: 100%; }
 }
 
 /* Admin control room refresh */

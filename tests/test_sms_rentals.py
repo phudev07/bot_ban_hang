@@ -1,0 +1,299 @@
+import asyncio
+from datetime import UTC, datetime, timedelta
+
+from sqlalchemy import func, select
+from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+
+from app.database import Base
+from app.models import BalanceAdjustment, ReferralReward, SmsRental, User
+from app.rentsim import RentSimError, RentSimOtp, RentSimRental, RentSimSnapshot
+from app.sms_rentals import poll_pending_sms_rentals, rent_sms_number
+
+
+class FakeRentSim:
+    def __init__(self) -> None:
+        self.balance_lock = asyncio.Lock()
+        self.rent_count = 0
+        self.otp_status = "pending"
+        self.rent_error: str | None = None
+
+    async def fetch_snapshot(self, *, force: bool = False) -> RentSimSnapshot:
+        assert force is True
+        return RentSimSnapshot(
+            service_id="chatgpt",
+            service_name="ChatGPT",
+            server_id="kh2",
+            unit_price=1_000,
+            source_stock=50,
+            balance=50_000,
+        )
+
+    async def rent(self) -> RentSimRental:
+        self.rent_count += 1
+        await asyncio.sleep(0.01)
+        if self.rent_error:
+            raise RentSimError(self.rent_error)
+        return RentSimRental(
+            order_id=f"ORDER-{self.rent_count}",
+            status="pending",
+            phone_number=f"+85500000{self.rent_count}",
+            phone_number_display=f"000 00{self.rent_count}",
+            country_code="+855",
+            service_name="ChatGPT",
+        )
+
+    async def fetch_otp(self, order_id: str) -> RentSimOtp:
+        if self.otp_status == "success":
+            return RentSimOtp(
+                status="success",
+                order_id=order_id,
+                service_name="ChatGPT",
+                code="654321",
+                content="654321 is your ChatGPT verification code.",
+            )
+        return RentSimOtp(status=self.otp_status, order_id=order_id)
+
+
+async def make_database():
+    engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+    async with engine.begin() as connection:
+        await connection.run_sync(Base.metadata.create_all)
+    return engine, async_sessionmaker(engine, expire_on_commit=False)
+
+
+def test_sms_rental_charges_wallet_enforces_cooldown_and_unlocks_after_otp() -> None:
+    async def scenario() -> None:
+        engine, sessions = await make_database()
+        client = FakeRentSim()
+        started = datetime.now(UTC)
+        async with sessions() as session:
+            referrer = User(telegram_id=1001, full_name="Referrer", balance=0)
+            buyer = User(
+                telegram_id=1002,
+                full_name="Buyer",
+                balance=10_000,
+                referred_by_id=referrer.telegram_id,
+            )
+            session.add_all([referrer, buyer])
+            await session.commit()
+
+        first, simultaneous = await asyncio.gather(
+            rent_sms_number(
+                sessions,
+                1002,
+                client,  # type: ignore[arg-type]
+                now=started,
+            ),
+            rent_sms_number(
+                sessions,
+                1002,
+                client,  # type: ignore[arg-type]
+                now=started,
+            ),
+        )
+        results = {first.message: first, simultaneous.message: simultaneous}
+        assert results["pending"].ok is True
+        assert results["cooldown"].retry_after >= 60
+        assert client.rent_count == 1
+
+        client.otp_status = "success"
+        notifications = await poll_pending_sms_rentals(
+            sessions,
+            client,  # type: ignore[arg-type]
+            now=started + timedelta(seconds=6),
+        )
+        assert len(notifications) == 1
+        assert notifications[0].status == "success"
+        assert notifications[0].otp_code == "654321"
+
+        next_rental = await rent_sms_number(
+            sessions,
+            1002,
+            client,  # type: ignore[arg-type]
+            now=started + timedelta(seconds=10),
+        )
+        assert next_rental.ok is True
+        assert client.rent_count == 2
+
+        async with sessions() as session:
+            buyer = await session.get(User, 1002)
+            referrer = await session.get(User, 1001)
+            reward = await session.scalar(select(ReferralReward))
+            rentals = list(await session.scalars(select(SmsRental).order_by(SmsRental.id)))
+            assert buyer is not None and buyer.balance == 6_000
+            assert referrer is not None and referrer.balance == 100
+            assert reward is not None and reward.shop_order_code == rentals[0].shop_order_code
+            assert [rental.status for rental in rentals] == ["success", "pending"]
+        await engine.dispose()
+
+    asyncio.run(scenario())
+
+
+def test_sms_timeout_refunds_wallet_exactly_once() -> None:
+    async def scenario() -> None:
+        engine, sessions = await make_database()
+        client = FakeRentSim()
+        started = datetime.now(UTC)
+        async with sessions() as session:
+            session.add(User(telegram_id=2001, full_name="Buyer", balance=5_000))
+            await session.commit()
+
+        rented = await rent_sms_number(
+            sessions,
+            2001,
+            client,  # type: ignore[arg-type]
+            now=started,
+        )
+        assert rented.ok is True
+        client.otp_status = "timeout"
+        first = await poll_pending_sms_rentals(
+            sessions,
+            client,  # type: ignore[arg-type]
+            now=started + timedelta(seconds=6),
+        )
+        second = await poll_pending_sms_rentals(
+            sessions,
+            client,  # type: ignore[arg-type]
+            now=started + timedelta(seconds=12),
+        )
+
+        assert len(first) == 1 and first[0].status == "refunded"
+        assert second == []
+        async with sessions() as session:
+            user = await session.get(User, 2001)
+            rental = await session.scalar(select(SmsRental))
+            adjustments = int(
+                await session.scalar(select(func.count(BalanceAdjustment.id))) or 0
+            )
+            assert user is not None and user.balance == 5_000
+            assert rental is not None and rental.status == "refunded"
+            assert rental.failure_reason == "otp_timeout"
+            assert adjustments == 1
+        await engine.dispose()
+
+    asyncio.run(scenario())
+
+
+def test_pending_rental_allows_another_number_after_sixty_seconds() -> None:
+    async def scenario() -> None:
+        engine, sessions = await make_database()
+        client = FakeRentSim()
+        started = datetime.now(UTC)
+        async with sessions() as session:
+            session.add(User(telegram_id=2101, full_name="Buyer", balance=10_000))
+            await session.commit()
+
+        first = await rent_sms_number(
+            sessions,
+            2101,
+            client,  # type: ignore[arg-type]
+            now=started,
+        )
+        second = await rent_sms_number(
+            sessions,
+            2101,
+            client,  # type: ignore[arg-type]
+            now=started + timedelta(seconds=61),
+        )
+
+        assert first.ok is True and first.status == "pending"
+        assert second.ok is True and second.status == "pending"
+        assert client.rent_count == 2
+        async with sessions() as session:
+            user = await session.get(User, 2101)
+            assert user is not None and user.balance == 6_000
+        await engine.dispose()
+
+    asyncio.run(scenario())
+
+
+def test_sms_provider_failure_refunds_reserved_wallet_balance() -> None:
+    async def scenario() -> None:
+        engine, sessions = await make_database()
+        client = FakeRentSim()
+        client.rent_error = "OUT_OF_STOCK"
+        async with sessions() as session:
+            session.add(User(telegram_id=3001, full_name="Buyer", balance=5_000))
+            await session.commit()
+
+        result = await rent_sms_number(
+            sessions,
+            3001,
+            client,  # type: ignore[arg-type]
+        )
+        assert result.ok is False
+        assert result.message == "out_of_stock"
+        assert result.status == "refunded"
+        async with sessions() as session:
+            user = await session.get(User, 3001)
+            rental = await session.scalar(select(SmsRental))
+            assert user is not None and user.balance == 5_000
+            assert rental is not None and rental.status == "refunded"
+        await engine.dispose()
+
+    asyncio.run(scenario())
+
+
+def test_sms_rental_requires_wallet_balance_before_calling_provider() -> None:
+    async def scenario() -> None:
+        engine, sessions = await make_database()
+        client = FakeRentSim()
+        async with sessions() as session:
+            session.add(User(telegram_id=3101, full_name="Buyer", balance=1_999))
+            await session.commit()
+
+        result = await rent_sms_number(
+            sessions,
+            3101,
+            client,  # type: ignore[arg-type]
+        )
+
+        assert result.ok is False
+        assert result.message == "insufficient"
+        assert result.sale_amount == 2_000
+        assert client.rent_count == 0
+        async with sessions() as session:
+            rental_count = int(await session.scalar(select(func.count(SmsRental.id))) or 0)
+            user = await session.get(User, 3101)
+            assert rental_count == 0
+            assert user is not None and user.balance == 1_999
+        await engine.dispose()
+
+    asyncio.run(scenario())
+
+
+def test_stale_request_is_recovered_after_process_interruption() -> None:
+    async def scenario() -> None:
+        engine, sessions = await make_database()
+        client = FakeRentSim()
+        now = datetime.now(UTC)
+        async with sessions() as session:
+            user = User(telegram_id=4001, full_name="Buyer", balance=3_000)
+            rental = SmsRental(
+                user_id=user.telegram_id,
+                shop_order_code="SMS-STALE",
+                status="requesting",
+                sale_amount=2_000,
+                cost_amount=1_000,
+                requested_at=now - timedelta(minutes=3),
+            )
+            session.add_all([user, rental])
+            await session.commit()
+
+        notifications = await poll_pending_sms_rentals(
+            sessions,
+            client,  # type: ignore[arg-type]
+            request_recovery_seconds=120,
+            now=now,
+        )
+
+        assert len(notifications) == 1
+        assert notifications[0].status == "refunded"
+        async with sessions() as session:
+            user = await session.get(User, 4001)
+            rental = await session.scalar(select(SmsRental))
+            assert user is not None and user.balance == 5_000
+            assert rental is not None and rental.failure_reason == "stale_request_recovery"
+        await engine.dispose()
+
+    asyncio.run(scenario())

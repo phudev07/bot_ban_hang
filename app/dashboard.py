@@ -28,10 +28,13 @@ from app.models import (
     Product,
     QuantityDiscount,
     ReferralReward,
+    SmsRental,
     SupplierBalanceState,
     SupplierBalanceTransaction,
     User,
 )
+from app.rentsim import RentSimClient
+from app.sms_rentals import sms_availability
 from app.supplier_audit import PROVIDER, reconcile_supplier_balance
 from app.suppliers import (
     EXTERNAL_FULFILLMENT_SOURCES,
@@ -180,8 +183,17 @@ async def financial_summary(
     if start_at is not None:
         statement = statement.where(Order.created_at >= start_at)
     order_count, revenue, cost, discount = (await session.execute(statement)).one()
-    revenue = int(revenue)
-    cost = int(cost)
+    sms_statement = select(
+        func.count(SmsRental.id),
+        func.coalesce(func.sum(SmsRental.sale_amount), 0),
+        func.coalesce(func.sum(SmsRental.cost_amount), 0),
+    ).where(SmsRental.status == "success")
+    if start_at is not None:
+        sms_statement = sms_statement.where(SmsRental.completed_at >= start_at)
+    sms_count, sms_revenue, sms_cost = (await session.execute(sms_statement)).one()
+    order_count = int(order_count) + int(sms_count)
+    revenue = int(revenue) + int(sms_revenue)
+    cost = int(cost) + int(sms_cost)
     reward_statement = select(
         func.coalesce(func.sum(ReferralReward.commission_amount), 0)
     )
@@ -191,7 +203,7 @@ async def financial_summary(
     gross_profit = revenue - cost
     profit = gross_profit - referral
     return {
-        "orders": int(order_count),
+        "orders": order_count,
         "revenue": revenue,
         "cost": cost,
         "gross_profit": gross_profit,
@@ -236,6 +248,83 @@ async def financial_summaries(
         Product.product_type == "account",
     )
     values = (await session.execute(statement)).one()
+    sms_values = (
+        await session.execute(
+            select(
+                func.count(SmsRental.id)
+                .filter(
+                    SmsRental.status == "success",
+                    SmsRental.completed_at >= periods["today"],
+                )
+                .label("today_orders"),
+                func.coalesce(
+                    func.sum(SmsRental.sale_amount).filter(
+                        SmsRental.status == "success",
+                        SmsRental.completed_at >= periods["today"],
+                    ),
+                    0,
+                ).label("today_revenue"),
+                func.coalesce(
+                    func.sum(SmsRental.cost_amount).filter(
+                        SmsRental.status == "success",
+                        SmsRental.completed_at >= periods["today"],
+                    ),
+                    0,
+                ).label("today_cost"),
+                func.count(SmsRental.id)
+                .filter(
+                    SmsRental.status == "success",
+                    SmsRental.completed_at >= periods["month"],
+                )
+                .label("month_orders"),
+                func.coalesce(
+                    func.sum(SmsRental.sale_amount).filter(
+                        SmsRental.status == "success",
+                        SmsRental.completed_at >= periods["month"],
+                    ),
+                    0,
+                ).label("month_revenue"),
+                func.coalesce(
+                    func.sum(SmsRental.cost_amount).filter(
+                        SmsRental.status == "success",
+                        SmsRental.completed_at >= periods["month"],
+                    ),
+                    0,
+                ).label("month_cost"),
+                func.count(SmsRental.id)
+                .filter(
+                    SmsRental.status == "success",
+                    SmsRental.completed_at >= periods["year"],
+                )
+                .label("year_orders"),
+                func.coalesce(
+                    func.sum(SmsRental.sale_amount).filter(
+                        SmsRental.status == "success",
+                        SmsRental.completed_at >= periods["year"],
+                    ),
+                    0,
+                ).label("year_revenue"),
+                func.coalesce(
+                    func.sum(SmsRental.cost_amount).filter(
+                        SmsRental.status == "success",
+                        SmsRental.completed_at >= periods["year"],
+                    ),
+                    0,
+                ).label("year_cost"),
+                func.count(SmsRental.id)
+                .filter(SmsRental.status == "success")
+                .label("all_orders"),
+                func.coalesce(
+                    func.sum(SmsRental.sale_amount).filter(SmsRental.status == "success"),
+                    0,
+                ).label("all_revenue"),
+                func.coalesce(
+                    func.sum(SmsRental.cost_amount).filter(SmsRental.status == "success"),
+                    0,
+                ).label("all_cost"),
+            )
+        )
+    ).one()
     reward_values = (
         await session.execute(
             select(
@@ -264,16 +353,17 @@ async def financial_summaries(
         )
     ).one()
     fields = values._mapping
+    sms_fields = sms_values._mapping
     reward_fields = reward_values._mapping
     result: dict[str, dict[str, int | float]] = {}
     for key in ("today", "month", "year", "all"):
-        revenue = int(fields[f"{key}_revenue"])
-        cost = int(fields[f"{key}_cost"])
+        revenue = int(fields[f"{key}_revenue"]) + int(sms_fields[f"{key}_revenue"])
+        cost = int(fields[f"{key}_cost"]) + int(sms_fields[f"{key}_cost"])
         referral = int(reward_fields[f"{key}_referral"])
         gross_profit = revenue - cost
         profit = gross_profit - referral
         result[key] = {
-            "orders": int(fields[f"{key}_orders"]),
+            "orders": int(fields[f"{key}_orders"]) + int(sms_fields[f"{key}_orders"]),
             "revenue": revenue,
             "cost": cost,
             "gross_profit": gross_profit,
@@ -347,6 +437,7 @@ def create_dashboard_router(
     cipher: SecretCipher,
     supplier_client: SumistoreClient | None = None,
     lehai_client: LeHaiPremiumClient | None = None,
+    rentsim_client: RentSimClient | None = None,
 ) -> APIRouter:
     router = APIRouter()
 
@@ -492,17 +583,25 @@ def create_dashboard_router(
             wallet_total = int(
                 await session.scalar(select(func.coalesce(func.sum(User.balance), 0))) or 0
             )
-            buying_users = int(
-                await session.scalar(
-                    select(func.count(func.distinct(Order.user_id)))
+            account_buyers = set(
+                await session.scalars(
+                    select(Order.user_id)
                     .join(Product, Product.id == Order.product_id)
                     .where(
                         Product.fulfillment_source.in_(SELLABLE_FULFILLMENT_SOURCES),
                         Product.product_type == "account",
                     )
+                    .distinct()
                 )
-                or 0
             )
+            sms_buyers = set(
+                await session.scalars(
+                    select(SmsRental.user_id)
+                    .where(SmsRental.status == "success")
+                    .distinct()
+                )
+            )
+            buying_users = len(account_buyers | sms_buyers)
             rows = await session.execute(
                 select(Order, Product, User)
                 .join(Product, Product.id == Order.product_id)
@@ -573,6 +672,27 @@ def create_dashboard_router(
                     Product.product_type == "account",
                 )
             )
+            sms_sales_rows = await session.execute(
+                select(
+                    SmsRental.completed_at,
+                    SmsRental.sale_amount,
+                    SmsRental.cost_amount,
+                ).where(
+                    SmsRental.status == "success",
+                    SmsRental.completed_at >= periods["fourteen_days"],
+                )
+            )
+            sms_year_sales_rows = await session.execute(
+                select(
+                    SmsRental.completed_at,
+                    SmsRental.sale_amount,
+                    SmsRental.cost_amount,
+                    SmsRental.shop_order_code,
+                ).where(
+                    SmsRental.status == "success",
+                    SmsRental.completed_at >= periods["year"],
+                )
+            )
             trend_reward_rows = await session.execute(
                 select(ReferralReward.created_at, ReferralReward.commission_amount).where(
                     ReferralReward.created_at >= periods["fourteen_days"]
@@ -590,6 +710,15 @@ def create_dashboard_router(
             for offset in range(13, -1, -1)
         }
         for created_at, amount, cost in sales_rows:
+            if created_at.tzinfo is None:
+                created_at = created_at.replace(tzinfo=UTC)
+            local_day = created_at.astimezone(LOCAL_TIMEZONE).date()
+            if local_day in sales_by_day:
+                sales_by_day[local_day]["revenue"] += int(amount)
+                sales_by_day[local_day]["profit"] += int(amount) - int(cost)
+        for created_at, amount, cost in sms_sales_rows:
+            if created_at is None:
+                continue
             if created_at.tzinfo is None:
                 created_at = created_at.replace(tzinfo=UTC)
             local_day = created_at.astimezone(LOCAL_TIMEZONE).date()
@@ -646,6 +775,17 @@ def create_dashboard_router(
                 monthly_values[month]["cost"] += int(cost)
                 monthly_values[month]["profit"] += int(amount) - int(cost)
                 monthly_values[month]["discount"] += int(discount)
+                monthly_order_keys[month].add(str(group_key))
+        for created_at, amount, cost, group_key in sms_year_sales_rows:
+            if created_at is None:
+                continue
+            if created_at.tzinfo is None:
+                created_at = created_at.replace(tzinfo=UTC)
+            month = created_at.astimezone(LOCAL_TIMEZONE).month
+            if month in monthly_values:
+                monthly_values[month]["revenue"] += int(amount)
+                monthly_values[month]["cost"] += int(cost)
+                monthly_values[month]["profit"] += int(amount) - int(cost)
                 monthly_order_keys[month].add(str(group_key))
         for created_at, commission in year_reward_rows:
             if created_at.tzinfo is None:
@@ -2400,6 +2540,131 @@ def create_dashboard_router(
                     "pending_amount": pending_amount,
                     "review_count": review_count,
                     "review_amount": review_amount,
+                },
+            ),
+        )
+
+    @router.get("/admin/sms-rentals", response_class=HTMLResponse)
+    async def sms_rentals_page(
+        request: Request,
+        status: str = "all",
+        q: str = "",
+    ) -> Response:
+        if not is_admin(request):
+            return redirect_to_login()
+        selected_status = (
+            status
+            if status in {"all", "pending", "success", "refunded"}
+            else "all"
+        )
+        search = q.strip()[:100]
+        async with session_factory() as session:
+            statement = (
+                select(SmsRental, User)
+                .join(User, User.telegram_id == SmsRental.user_id)
+                .order_by(SmsRental.id.desc())
+                .limit(300)
+            )
+            if selected_status == "pending":
+                statement = statement.where(
+                    SmsRental.status.in_(("requesting", "pending"))
+                )
+            elif selected_status != "all":
+                statement = statement.where(SmsRental.status == selected_status)
+            if search:
+                pattern = f"%{search}%"
+                statement = statement.where(
+                    or_(
+                        cast(SmsRental.id, String).ilike(pattern),
+                        cast(SmsRental.user_id, String).ilike(pattern),
+                        SmsRental.shop_order_code.ilike(pattern),
+                        SmsRental.provider_order_id.ilike(pattern),
+                        SmsRental.phone_number.ilike(pattern),
+                        SmsRental.otp_code.ilike(pattern),
+                        User.full_name.ilike(pattern),
+                        User.username.ilike(pattern),
+                    )
+                )
+            rentals = [
+                {"rental": rental, "user": user}
+                for rental, user in await session.execute(statement)
+            ]
+            metrics = (
+                await session.execute(
+                    select(
+                        func.count(SmsRental.id),
+                        func.count(SmsRental.id).filter(
+                            SmsRental.status.in_(("requesting", "pending"))
+                        ),
+                        func.count(SmsRental.id).filter(SmsRental.status == "success"),
+                        func.count(SmsRental.id).filter(SmsRental.status == "refunded"),
+                        func.count(func.distinct(SmsRental.user_id)),
+                        func.coalesce(
+                            func.sum(SmsRental.sale_amount).filter(
+                                SmsRental.status == "success"
+                            ),
+                            0,
+                        ),
+                        func.coalesce(
+                            func.sum(SmsRental.cost_amount).filter(
+                                SmsRental.status == "success"
+                            ),
+                            0,
+                        ),
+                        func.coalesce(
+                            func.sum(SmsRental.sale_amount).filter(
+                                SmsRental.status == "refunded"
+                            ),
+                            0,
+                        ),
+                    )
+                )
+            ).one()
+            referral = int(
+                await session.scalar(
+                    select(
+                        func.coalesce(func.sum(ReferralReward.commission_amount), 0)
+                    ).where(
+                        ReferralReward.shop_order_code.in_(
+                            select(SmsRental.shop_order_code).where(
+                                SmsRental.status == "success",
+                                SmsRental.shop_order_code.is_not(None),
+                            )
+                        )
+                    )
+                )
+                or 0
+            )
+        availability = await sms_availability(
+            rentsim_client,
+            settings.rentsim_markup,
+            fallback_unit_cost=settings.rentsim_fallback_price,
+        )
+        total, pending, success, refunded, users, revenue, cost, refund_total = (
+            int(value) for value in metrics
+        )
+        return templates.TemplateResponse(
+            request,
+            "sms_rentals.html",
+            page_context(
+                request,
+                "Thuê số SMS",
+                "sms-rentals",
+                rentals=rentals,
+                selected_status=selected_status,
+                search=search,
+                availability=availability,
+                stats={
+                    "total": total,
+                    "pending": pending,
+                    "success": success,
+                    "refunded": refunded,
+                    "users": users,
+                    "revenue": revenue,
+                    "cost": cost,
+                    "referral": referral,
+                    "profit": revenue - cost - referral,
+                    "refund_total": refund_total,
                 },
             ),
         )

@@ -33,6 +33,7 @@ def test_main_menu_exposes_warehouse_api_and_referrals() -> None:
 
     assert "menu:warehouse-api" in callbacks
     assert "menu:referral" in callbacks
+    assert "menu:sms" in callbacks
 
 
 def test_warehouse_api_guide_opens_public_documentation() -> None:

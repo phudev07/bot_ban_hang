@@ -23,6 +23,7 @@ from app.lehai_suppliers import LeHaiPremiumClient
 from app.models import ApiRequestAudit
 from app.public_api import client_ip, create_public_api_docs_router, create_public_api_router
 from app.rate_limit import FixedWindowRateLimiter, RateLimitDecision, RateLimitRule
+from app.rentsim import RentSimClient
 from app.services import process_sepay_payment
 from app.suppliers import SumistoreClient
 from app.utils import SecretCipher, format_vnd, verify_sepay_hmac
@@ -53,6 +54,7 @@ def create_api(
     deposit_notification_bot: Bot | None = None,
     api_redis: Redis | None = None,
     lehai_client: LeHaiPremiumClient | None = None,
+    rentsim_client: RentSimClient | None = None,
 ) -> FastAPI:
     owned_api_redis = api_redis is None
     api_redis_client = api_redis or Redis.from_url(settings.redis_url, decode_responses=True)
@@ -207,6 +209,7 @@ def create_api(
                 cipher,
                 supplier_client,
                 lehai_client,
+                rentsim_client,
             )
         )
 

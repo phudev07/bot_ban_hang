@@ -19,6 +19,7 @@ from app.models import (
     PaymentTransaction,
     Product,
     QuantityDiscount,
+    SmsRental,
     SupplierBalanceTransaction,
     User,
 )
@@ -392,6 +393,17 @@ async def user_activity_stats(session: AsyncSession, user_id: int) -> UserActivi
         )
         or 0
     )
+    sms_purchase_count, sms_spent = (
+        await session.execute(
+            select(
+                func.count(SmsRental.id),
+                func.coalesce(func.sum(SmsRental.sale_amount), 0),
+            ).where(
+                SmsRental.user_id == user_id,
+                SmsRental.status == "success",
+            )
+        )
+    ).one()
     deposit_count = int(
         await session.scalar(
             select(func.count(PaymentTransaction.id)).where(
@@ -411,10 +423,10 @@ async def user_activity_stats(session: AsyncSession, user_id: int) -> UserActivi
         or 0
     )
     return UserActivityStats(
-        purchase_count=batch_purchases + single_purchases,
-        purchased_items=purchased_items,
+        purchase_count=batch_purchases + single_purchases + int(sms_purchase_count),
+        purchased_items=purchased_items + int(sms_purchase_count),
         deposit_count=deposit_count,
-        total_spent=total_spent,
+        total_spent=total_spent + int(sms_spent),
         total_deposited=total_deposited,
     )
 

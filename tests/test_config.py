@@ -94,3 +94,19 @@ def test_enabled_lehai_requires_buyer_key() -> None:
     )
     assert settings.lehai_product_ids == ("cdk_pixel", "cdk_ggpro_18m")
     assert settings.lehai_markup == 5_000
+
+
+def test_enabled_rentsim_requires_key_and_uses_cambodia_chatgpt_defaults() -> None:
+    with pytest.raises(ValidationError):
+        base_settings(rentsim_enabled=True)
+
+    settings = base_settings(
+        rentsim_enabled=True,
+        rentsim_api_key="secret-test",
+    )
+    assert settings.rentsim_server_id == "kh2"
+    assert settings.rentsim_service_id == "chatgpt"
+    assert settings.rentsim_markup == 1_000
+    assert settings.rentsim_fallback_price == 1_000
+    assert settings.rentsim_cooldown_seconds == 60
+    assert settings.rentsim_request_recovery_seconds == 120

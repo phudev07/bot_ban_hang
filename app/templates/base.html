@@ -7,7 +7,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=Fraunces:opsz,wght@9..144,600;9..144,700&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="/admin-assets/admin.css?v=8">
+  <link rel="stylesheet" href="/admin-assets/admin.css?v=9">
 </head>
 <body>
   <div class="shell">
@@ -27,6 +27,7 @@
           <a class="{{ 'active' if section == 'dashboard' else '' }}" href="/admin" {{ 'aria-current=page' if section == 'dashboard' else '' }}><span class="nav-icon">TQ</span><b>Tổng quan</b></a>
           <a class="{{ 'active' if section == 'orders' else '' }}" href="/admin/orders" {{ 'aria-current=page' if section == 'orders' else '' }}><span class="nav-icon">ĐH</span><b>Đơn hàng</b></a>
           <a class="{{ 'active' if section == 'payments' else '' }}" href="/admin/payments" {{ 'aria-current=page' if section == 'payments' else '' }}><span class="nav-icon">DT</span><b>Dòng tiền</b></a>
+          <a class="{{ 'active' if section == 'sms-rentals' else '' }}" href="/admin/sms-rentals" {{ 'aria-current=page' if section == 'sms-rentals' else '' }}><span class="nav-icon">SMS</span><b>Thuê số SMS</b></a>
         </div>
         <div class="nav-group">
           <span class="nav-group-title">Kho hàng</span>

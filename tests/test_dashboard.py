@@ -22,6 +22,7 @@ from app.models import (
     Order,
     Product,
     QuantityDiscount,
+    SmsRental,
     User,
 )
 from app.utils import SecretCipher
@@ -56,6 +57,17 @@ def test_dashboard_login_catalog_inventory_and_balance(tmp_path) -> None:
                         total_recipients=10,
                         delivered_count=9,
                         failed_count=1,
+                    ),
+                    SmsRental(
+                        user_id=user.telegram_id,
+                        shop_order_code="SMS1",
+                        provider_order_id="RENTSIM-1",
+                        phone_number="+85512345678",
+                        status="success",
+                        sale_amount=2_000,
+                        cost_amount=1_000,
+                        otp_code="123456",
+                        completed_at=datetime.now(UTC),
                     ),
                 ]
             )
@@ -127,6 +139,7 @@ def test_dashboard_login_catalog_inventory_and_balance(tmp_path) -> None:
         assert "Lợi nhuận ròng" in home.text
         assert "Giá vốn API" in home.text
         assert "50.000đ" in home.text
+        assert "Thuê số SMS" in home.text
         token_match = re.search(r'name="csrf" value="([^"]+)"', home.text)
         assert token_match is not None
         csrf = token_match.group(1)
@@ -197,6 +210,12 @@ def test_dashboard_login_catalog_inventory_and_balance(tmp_path) -> None:
         assert lehai_audit_page.status_code == 200
         assert 'name="provider" value="lehai"' in lehai_audit_page.text
         assert "/admin/supplier-audit?provider=lehai" in lehai_audit_page.text
+
+        sms_page = client.get("/admin/sms-rentals")
+        assert sms_page.status_code == 200
+        assert "SMS1" in sms_page.text
+        assert "+85512345678" in sms_page.text
+        assert "123456" in sms_page.text
 
         api_clients_page = client.get("/admin/api-clients")
         assert api_clients_page.status_code == 200

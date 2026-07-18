@@ -17,6 +17,7 @@ def main_menu(language: str) -> InlineKeyboardMarkup:
         InlineKeyboardButton(text=tr(language, "codes"), callback_data="menu:codes"),
         InlineKeyboardButton(text=tr(language, "products"), callback_data="menu:products"),
     )
+    builder.row(InlineKeyboardButton(text=tr(language, "sms"), callback_data="menu:sms"))
     builder.row(
         InlineKeyboardButton(text=tr(language, "orders"), callback_data="menu:orders"),
         InlineKeyboardButton(text=tr(language, "profile"), callback_data="menu:profile"),
@@ -33,6 +34,53 @@ def main_menu(language: str) -> InlineKeyboardMarkup:
     )
     builder.row(InlineKeyboardButton(text=tr(language, "language"), callback_data="menu:language"))
     return builder.as_markup()
+
+
+def sms_rental_menu(
+    language: str,
+    price: int,
+    stock: int,
+    *,
+    connected: bool,
+) -> InlineKeyboardMarkup:
+    rows: list[list[InlineKeyboardButton]] = []
+    if connected and stock > 0:
+        rent_label = (
+            f"📲 Thuê số ngay · {format_vnd(price)}"
+            if language == "vi"
+            else f"📲 Rent now · {format_vnd(price)}"
+        )
+        rows.append([InlineKeyboardButton(text=rent_label, callback_data="sms:rent")])
+    rows.append(
+        [
+            InlineKeyboardButton(
+                text="🧾 Lịch sử thuê" if language == "vi" else "🧾 Rental history",
+                callback_data="sms:history",
+            )
+        ]
+    )
+    rows.append([InlineKeyboardButton(text=tr(language, "back"), callback_data="back:menu")])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+def sms_waiting_menu(language: str, price: int) -> InlineKeyboardMarkup:
+    rent_label = (
+        f"📲 Thuê số khác · {format_vnd(price)}"
+        if language == "vi"
+        else f"📲 Rent another · {format_vnd(price)}"
+    )
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [InlineKeyboardButton(text=rent_label, callback_data="sms:rent")],
+            [
+                InlineKeyboardButton(
+                    text="🧾 Lịch sử thuê" if language == "vi" else "🧾 Rental history",
+                    callback_data="sms:history",
+                )
+            ],
+            [InlineKeyboardButton(text=tr(language, "back"), callback_data="back:menu")],
+        ]
+    )
 
 
 def warehouse_api_menu(

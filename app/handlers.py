@@ -30,6 +30,8 @@ from app.keyboards import (
     purchase_payment_options,
     quantity_menu,
     referral_menu,
+    sms_rental_menu,
+    sms_waiting_menu,
     warehouse_api_menu,
     warehouse_api_rotate_confirmation,
 )
@@ -37,6 +39,7 @@ from app.lehai_suppliers import LeHaiPremiumClient
 from app.models import ApiClient, Product, User
 from app.partner_services import ensure_api_client, referral_stats, rotate_api_secret
 from app.payment_expiry import register_deposit_message
+from app.rentsim import RentSimClient
 from app.services import (
     active_categories,
     active_products,
@@ -50,6 +53,12 @@ from app.services import (
     purchase_product,
     recent_orders,
     user_activity_stats,
+)
+from app.sms_rentals import (
+    attach_sms_waiting_message,
+    recent_sms_rentals,
+    rent_sms_number,
+    sms_availability,
 )
 from app.states import DepositStates, PurchaseStates
 from app.suppliers import SumistoreClient
@@ -110,6 +119,7 @@ def create_router(
     cipher: SecretCipher,
     supplier_client: SumistoreClient | None = None,
     lehai_client: LeHaiPremiumClient | None = None,
+    rentsim_client: RentSimClient | None = None,
 ) -> Router:
     router = Router(name="customer")
     warehouse_docs_url = (
@@ -340,6 +350,240 @@ def create_router(
                 text, reply_markup=products_menu(products, user.language, "back:menu")
             )
         await callback.answer()
+
+    @router.callback_query(F.data == "menu:sms")
+    async def show_sms_rental(callback: CallbackQuery, session: AsyncSession) -> None:
+        await callback.answer()
+        user = await get_or_create_user(callback, session)
+        availability = await sms_availability(
+            rentsim_client,
+            settings.rentsim_markup,
+            fallback_unit_cost=settings.rentsim_fallback_price,
+        )
+        if user.language == "en":
+            connection_line = (
+                f"• Available now: <b>{availability.effective_stock}</b>"
+                if availability.connected
+                else "• Provider connection: <b>temporarily unavailable</b>"
+            )
+            text = (
+                "📲 <b>Rent a ChatGPT SMS number</b>\n\n"
+                "• Country: <b>Cambodia</b>\n"
+                "• Server: <code>kh2</code>\n"
+                f"• Price: <b>{format_vnd(availability.sale_price)}</b>\n"
+                f"{connection_line}\n\n"
+                "Wallet balance only. A direct QR payment is not available for SMS rentals. "
+                "If the provider confirms an OTP timeout, the full rental price is returned "
+                "to your wallet automatically."
+            )
+        else:
+            connection_line = (
+                f"• Có thể thuê ngay: <b>{availability.effective_stock}</b> số"
+                if availability.connected
+                else "• Kết nối nhà cung cấp: <b>đang tạm gián đoạn</b>"
+            )
+            text = (
+                "📲 <b>Thuê số nhận SMS ChatGPT</b>\n\n"
+                "• Quốc gia: <b>Cambodia</b>\n"
+                "• Server: <code>kh2</code>\n"
+                f"• Giá thuê: <b>{format_vnd(availability.sale_price)}</b>\n"
+                f"{connection_line}\n\n"
+                "Chỉ thanh toán bằng số dư ví, không có QR thanh toán trực tiếp. "
+                "Nếu API xác nhận không có OTP, toàn bộ tiền thuê sẽ tự động hoàn về ví."
+            )
+        if callback.message:
+            await edit_or_send_text(
+                callback.message,
+                text,
+                reply_markup=sms_rental_menu(
+                    user.language,
+                    availability.sale_price,
+                    availability.effective_stock,
+                    connected=availability.connected,
+                ),
+            )
+
+    @router.callback_query(F.data == "sms:rent")
+    async def rent_sms(
+        callback: CallbackQuery,
+        session: AsyncSession,
+        session_factory: async_sessionmaker[AsyncSession],
+    ) -> None:
+        await callback.answer()
+        user = await get_or_create_user(callback, session)
+        result = await rent_sms_number(
+            session_factory,
+            user.telegram_id,
+            rentsim_client,
+            markup=settings.rentsim_markup,
+            cooldown_seconds=settings.rentsim_cooldown_seconds,
+            referral_commission_percent=settings.referral_commission_percent,
+        )
+        if not result.ok:
+            if user.language == "en":
+                messages = {
+                    "disabled": "The SMS provider has not been configured yet.",
+                    "out_of_stock": (
+                        "ChatGPT Cambodia numbers are currently out of stock. Your wallet "
+                        "was not charged or has already been refunded."
+                    ),
+                    "insufficient": (
+                        f"Your wallet needs {format_vnd(result.sale_amount)}, but currently has "
+                        f"{format_vnd(result.balance)}. Please deposit into your wallet first."
+                    ),
+                    "cooldown": (
+                        f"Please wait another {result.retry_after} seconds before renting "
+                        "another number."
+                    ),
+                    "blocked": "Your account is blocked. Please contact support.",
+                    "invalid_key": "The SMS provider key is unavailable. Please try again later.",
+                    "provider_unavailable": "The SMS provider is temporarily unavailable.",
+                }
+                text = f"⚠️ {messages.get(result.message, 'Could not rent a number. Your wallet was not charged.')}"
+            else:
+                messages = {
+                    "disabled": "Nguồn thuê số chưa được cấu hình.",
+                    "out_of_stock": (
+                        "Số ChatGPT Cambodia hiện đang hết hàng. Ví không bị trừ hoặc tiền "
+                        "giữ đã được hoàn lại."
+                    ),
+                    "insufficient": (
+                        f"Ví cần {format_vnd(result.sale_amount)} nhưng hiện có "
+                        f"{format_vnd(result.balance)}. Hãy nạp vào ví trước."
+                    ),
+                    "cooldown": (
+                        f"Bạn cần chờ thêm {result.retry_after} giây mới được thuê số tiếp theo."
+                    ),
+                    "blocked": "Tài khoản đang bị khóa. Hãy liên hệ hỗ trợ.",
+                    "invalid_key": "Key nguồn thuê số đang lỗi. Hãy thử lại sau.",
+                    "provider_unavailable": "Nguồn thuê số đang tạm gián đoạn.",
+                }
+                default_message = (
+                    "Không thể thuê số. Nếu ví đã bị trừ thì hệ thống đã tự động hoàn lại."
+                    if result.status == "refunded"
+                    else "Không thể thuê số và ví không bị trừ tiền."
+                )
+                text = f"⚠️ {messages.get(result.message, default_message)}"
+            if callback.message:
+                await edit_or_send_text(
+                    callback.message,
+                    text,
+                    reply_markup=back_menu(user.language),
+                )
+            return
+
+        phone_text = (
+            "📲 <b>SMS number rented</b>\n\n"
+            f"• Order: <code>{escape(result.shop_order_code or '')}</code>\n"
+            "• Service: <b>ChatGPT</b>\n"
+            "• Country: <b>Cambodia</b>\n"
+            f"• Number: <code>{escape(result.phone_number)}</code>\n"
+            f"• Charged: <b>{format_vnd(result.sale_amount)}</b>\n"
+            f"• Wallet balance: <b>{format_vnd(result.balance)}</b>"
+            if user.language == "en"
+            else "📲 <b>Đã thuê số nhận SMS</b>\n\n"
+            f"• Mã đơn: <code>{escape(result.shop_order_code or '')}</code>\n"
+            "• Dịch vụ: <b>ChatGPT</b>\n"
+            "• Quốc gia: <b>Cambodia</b>\n"
+            f"• Số điện thoại: <code>{escape(result.phone_number)}</code>\n"
+            f"• Đã trừ: <b>{format_vnd(result.sale_amount)}</b>\n"
+            f"• Số dư ví: <b>{format_vnd(result.balance)}</b>"
+        )
+        if callback.message:
+            await edit_or_send_text(callback.message, phone_text)
+        if result.status == "success":
+            otp_text = (
+                "✅ <b>OTP received</b>\n\n"
+                f"• Code: <code>{escape(result.otp_code or '—')}</code>\n"
+                f"• Message: {escape(result.otp_content or '—')}"
+                if user.language == "en"
+                else "✅ <b>Đã nhận được OTP</b>\n\n"
+                f"• Mã OTP: <code>{escape(result.otp_code or '—')}</code>\n"
+                f"• Nội dung: {escape(result.otp_content or '—')}"
+            )
+            if callback.message:
+                await callback.message.answer(
+                    otp_text,
+                    reply_markup=sms_waiting_menu(user.language, result.sale_amount),
+                )
+            return
+        waiting_text = (
+            "⏳ <b>Waiting for the ChatGPT OTP...</b>\n\n"
+            "The bot checks automatically. If RentSim confirms a timeout, the rental price "
+            "is returned to your wallet. You may rent another number after 60 seconds."
+            if user.language == "en"
+            else "⏳ <b>Đang chờ OTP ChatGPT...</b>\n\n"
+            "Bot đang tự kiểm tra OTP. Nếu RentSim xác nhận timeout, tiền thuê sẽ tự động "
+            "hoàn về ví. Bạn có thể thuê số khác sau 60 giây."
+        )
+        if callback.message:
+            waiting_message = await callback.message.answer(
+                waiting_text,
+                reply_markup=sms_waiting_menu(user.language, result.sale_amount),
+            )
+            attached = await attach_sms_waiting_message(
+                session_factory,
+                result.rental_id or 0,
+                user.telegram_id,
+                waiting_message.message_id,
+            )
+            if not attached:
+                try:
+                    await waiting_message.delete()
+                except TelegramBadRequest:
+                    pass
+
+    @router.callback_query(F.data == "sms:history")
+    async def sms_history(callback: CallbackQuery, session: AsyncSession) -> None:
+        await callback.answer()
+        user = await get_or_create_user(callback, session)
+        rentals = await recent_sms_rentals(session, user.telegram_id, limit=10)
+        if not rentals:
+            text = (
+                "🧾 Bạn chưa thuê số SMS nào."
+                if user.language == "vi"
+                else "🧾 You have no SMS rentals yet."
+            )
+        else:
+            status_vi = {
+                "requesting": "đang lấy số",
+                "pending": "đang chờ OTP",
+                "success": "thành công",
+                "refunded": "đã hoàn ví",
+            }
+            lines = []
+            for rental in rentals:
+                status = status_vi.get(rental.status, rental.status)
+                if user.language == "en":
+                    status = {
+                        "requesting": "requesting",
+                        "pending": "waiting for OTP",
+                        "success": "success",
+                        "refunded": "refunded",
+                    }.get(rental.status, rental.status)
+                code = f" · OTP {escape(rental.otp_code)}" if rental.otp_code else ""
+                lines.append(
+                    f"• <code>{escape(rental.shop_order_code or f'SMS{rental.id}')}</code> · "
+                    f"<code>{escape(rental.phone_number or '—')}</code> · {status}{code}"
+                )
+            title = "🧾 <b>Lịch sử thuê số</b>" if user.language == "vi" else "🧾 <b>SMS rental history</b>"
+            text = f"{title}\n\n" + "\n".join(lines)
+        availability = await sms_availability(
+            rentsim_client,
+            settings.rentsim_markup,
+            fallback_unit_cost=settings.rentsim_fallback_price,
+        )
+        if callback.message:
+            await edit_or_send_text(
+                callback.message,
+                text,
+                reply_markup=sms_rental_menu(
+                    user.language,
+                    availability.sale_price,
+                    availability.effective_stock,
+                    connected=availability.connected,
+                ),
+            )
 
     @router.callback_query(F.data.startswith("prod:"))
     async def show_product_detail(callback: CallbackQuery, session: AsyncSession) -> None:

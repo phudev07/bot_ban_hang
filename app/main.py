@@ -1,11 +1,13 @@
 import asyncio
 import contextlib
 import logging
+from html import escape
 
 import uvicorn
 from aiogram import Bot, Dispatcher
 from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ParseMode
+from aiogram.exceptions import TelegramBadRequest
 from aiogram.fsm.storage.redis import RedisStorage
 from aiogram.types import BotCommand, BotCommandScopeChat
 from sqlalchemy import select, text
@@ -15,6 +17,7 @@ from app.api import create_api
 from app.config import get_settings
 from app.database import Base, DatabaseSessionMiddleware, create_database
 from app.handlers import create_router
+from app.keyboards import sms_waiting_menu
 from app.lehai_suppliers import (
     LeHaiPremiumClient,
     create_lehai_client,
@@ -24,6 +27,8 @@ from app.lehai_suppliers import (
 from app.models import Category, Product
 from app.payment_expiry import payment_expiry_worker
 from app.rate_limit import BotSpamProtectionMiddleware
+from app.rentsim import RentSimClient, create_rentsim_client
+from app.sms_rentals import poll_pending_sms_rentals
 from app.supplier_audit import reconcile_supplier_balance
 from app.suppliers import (
     ExternalSupplierClient,
@@ -444,6 +449,83 @@ async def supplier_audit_worker(
         await asyncio.sleep(max(10, interval_seconds))
 
 
+async def rentsim_otp_worker(
+    session_factory,
+    client: RentSimClient,
+    bot: Bot,
+    poll_seconds: int,
+    referral_commission_percent: int,
+    request_recovery_seconds: int,
+) -> None:
+    while True:
+        try:
+            notifications = await poll_pending_sms_rentals(
+                session_factory,
+                client,
+                poll_seconds=poll_seconds,
+                referral_commission_percent=referral_commission_percent,
+                request_recovery_seconds=request_recovery_seconds,
+            )
+            for item in notifications:
+                if item.status == "success":
+                    text = (
+                        "✅ <b>OTP received</b>\n\n"
+                        f"• Order: <code>{escape(item.shop_order_code)}</code>\n"
+                        f"• Number: <code>{escape(item.phone_number)}</code>\n"
+                        f"• OTP: <code>{escape(item.otp_code or '—')}</code>\n"
+                        f"• Message: {escape(item.otp_content or '—')}\n\n"
+                        "You can rent another number immediately."
+                        if item.language == "en"
+                        else "✅ <b>Đã nhận được OTP</b>\n\n"
+                        f"• Mã đơn: <code>{escape(item.shop_order_code)}</code>\n"
+                        f"• Số điện thoại: <code>{escape(item.phone_number)}</code>\n"
+                        f"• Mã OTP: <code>{escape(item.otp_code or '—')}</code>\n"
+                        f"• Nội dung: {escape(item.otp_content or '—')}\n\n"
+                        "Bạn có thể thuê số tiếp theo ngay."
+                    )
+                else:
+                    text = (
+                        "↩️ <b>No OTP received</b>\n\n"
+                        f"• Order: <code>{escape(item.shop_order_code)}</code>\n"
+                        f"• Refunded: <b>{format_vnd(item.sale_amount)}</b>\n"
+                        f"• Wallet balance: <b>{format_vnd(item.balance)}</b>\n\n"
+                        "RentSim confirmed the timeout, so the rental was refunded in full."
+                        if item.language == "en"
+                        else "↩️ <b>Không nhận được OTP</b>\n\n"
+                        f"• Mã đơn: <code>{escape(item.shop_order_code)}</code>\n"
+                        f"• Đã hoàn ví: <b>{format_vnd(item.sale_amount)}</b>\n"
+                        f"• Số dư hiện tại: <b>{format_vnd(item.balance)}</b>\n\n"
+                        "RentSim đã xác nhận timeout nên tiền thuê được hoàn lại toàn bộ."
+                    )
+                markup = sms_waiting_menu(item.language, item.sale_amount)
+                try:
+                    if item.waiting_message_id is not None:
+                        await bot.edit_message_text(
+                            text,
+                            chat_id=item.user_id,
+                            message_id=item.waiting_message_id,
+                            reply_markup=markup,
+                        )
+                    else:
+                        await bot.send_message(item.user_id, text, reply_markup=markup)
+                except TelegramBadRequest:
+                    try:
+                        await bot.send_message(item.user_id, text, reply_markup=markup)
+                    except Exception:
+                        logging.getLogger(__name__).exception(
+                            "Could not send fallback RentSim result for rental %s",
+                            item.rental_id,
+                        )
+                except Exception:
+                    logging.getLogger(__name__).exception(
+                        "Could not deliver RentSim OTP result for rental %s",
+                        item.rental_id,
+                    )
+        except Exception:
+            logging.getLogger(__name__).exception("Could not poll RentSim OTP orders")
+        await asyncio.sleep(max(2, poll_seconds))
+
+
 async def main() -> None:
     settings = get_settings()
     logging.basicConfig(
@@ -462,6 +544,7 @@ async def main() -> None:
     await ensure_lehai_products(session_factory, settings)
     lehai_client = create_lehai_client(settings)
     await sync_lehai_products(session_factory, lehai_client)
+    rentsim_client = create_rentsim_client(settings)
     if supplier_client is not None:
         try:
             await reconcile_supplier_balance(session_factory, supplier_client)
@@ -521,7 +604,7 @@ async def main() -> None:
     dispatcher.update.outer_middleware(DatabaseSessionMiddleware(session_factory))
     dispatcher.include_router(create_admin_router(settings, cipher))
     dispatcher.include_router(
-        create_router(settings, cipher, supplier_client, lehai_client)
+        create_router(settings, cipher, supplier_client, lehai_client, rentsim_client)
     )
 
     api = create_api(
@@ -533,6 +616,7 @@ async def main() -> None:
         deposit_notification_bot,
         api_redis=storage.redis,
         lehai_client=lehai_client,
+        rentsim_client=rentsim_client,
     )
     server = uvicorn.Server(
         uvicorn.Config(
@@ -600,6 +684,20 @@ async def main() -> None:
         if lehai_client is not None
         else None
     )
+    rentsim_task = (
+        asyncio.create_task(
+            rentsim_otp_worker(
+                session_factory,
+                rentsim_client,
+                bot,
+                settings.rentsim_poll_seconds,
+                settings.referral_commission_percent,
+                settings.rentsim_request_recovery_seconds,
+            )
+        )
+        if rentsim_client is not None
+        else None
+    )
     try:
         await bot.delete_webhook(drop_pending_updates=False)
         await dispatcher.start_polling(bot)
@@ -623,6 +721,10 @@ async def main() -> None:
             lehai_audit_task.cancel()
             with contextlib.suppress(asyncio.CancelledError):
                 await lehai_audit_task
+        if rentsim_task is not None:
+            rentsim_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await rentsim_task
         server.should_exit = True
         await api_task
         await storage.close()

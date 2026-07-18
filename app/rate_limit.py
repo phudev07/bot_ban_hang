@@ -93,7 +93,7 @@ def _update_action(subject: Message | CallbackQuery) -> str:
         data = subject.data or ""
         if data.startswith(("deposit:", "directpay:")):
             return "deposit"
-        if data.startswith(("buy:", "buycoupon:")):
+        if data.startswith(("buy:", "buycoupon:")) or data == "sms:rent":
             return "purchase"
         if data == "warehouse-api:rotate-confirm":
             return "rotate_secret"

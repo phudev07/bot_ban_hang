@@ -66,6 +66,19 @@ class Settings(BaseSettings):
     lehai_sync_seconds: int = 60
     lehai_audit_seconds: int = 30
 
+    rentsim_enabled: bool = False
+    rentsim_base_url: str = "http://rentsim.net:8080"
+    rentsim_api_key: SecretStr = SecretStr("")
+    rentsim_server_id: str = "kh2"
+    rentsim_service_id: str = "chatgpt"
+    rentsim_markup: int = 1_000
+    rentsim_fallback_price: int = 1_000
+    rentsim_timeout_seconds: float = 15
+    rentsim_poll_seconds: int = 5
+    rentsim_cooldown_seconds: int = 60
+    rentsim_snapshot_cache_seconds: int = 10
+    rentsim_request_recovery_seconds: int = 120
+
     shop_api_enabled: bool = True
     shop_api_base_url: str = "https://token.vietshare.site/v1"
     shop_api_rate_limit_per_minute: int = 60
@@ -130,6 +143,22 @@ class Settings(BaseSettings):
             raise ValueError("Le Hai Premium sync interval must be at least 15 seconds")
         if self.lehai_audit_seconds < 10:
             raise ValueError("Le Hai Premium audit interval must be at least 10 seconds")
+        if self.rentsim_enabled and not self.rentsim_api_key.get_secret_value():
+            raise ValueError("RentSim is enabled but API key is missing")
+        if (
+            self.rentsim_markup < 0
+            or self.rentsim_fallback_price <= 0
+            or self.rentsim_timeout_seconds <= 0
+        ):
+            raise ValueError("RentSim price or timeout configuration is invalid")
+        if not 2 <= self.rentsim_poll_seconds <= 60:
+            raise ValueError("RentSim polling interval must be between 2 and 60 seconds")
+        if not 10 <= self.rentsim_cooldown_seconds <= 600:
+            raise ValueError("RentSim cooldown must be between 10 and 600 seconds")
+        if not 1 <= self.rentsim_snapshot_cache_seconds <= 60:
+            raise ValueError("RentSim snapshot cache must be between 1 and 60 seconds")
+        if not 60 <= self.rentsim_request_recovery_seconds <= 600:
+            raise ValueError("RentSim request recovery must be between 60 and 600 seconds")
         if self.shop_api_rate_limit_per_minute < 1:
             raise ValueError("Shop API rate limit must be positive")
         if self.shop_api_signature_tolerance_seconds < 30:
