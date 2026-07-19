@@ -23,13 +23,11 @@ def delivery_text(
     paid_by_qr: bool = False,
 ) -> str:
     preview = secrets[:MAX_MESSAGE_PREVIEW]
-    items = "\n".join(
-        f"{index}. <tg-spoiler>{safe_html(secret)}</tg-spoiler>"
-        for index, secret in enumerate(preview, start=1)
-    )
+    items = "\n".join(safe_html(secret) for secret in preview)
+    account_block = f"<pre>{items}</pre>"
     remaining = len(secrets) - len(preview)
     if remaining > 0:
-        items += (
+        account_block += (
             f"\n… còn {remaining} tài khoản trong file TXT."
             if language == "vi"
             else f"\n… {remaining} more items are available in the TXT file."
@@ -43,7 +41,7 @@ def delivery_text(
             f"• Product: <b>{safe_html(product_name)}</b>\n"
             f"• Quantity: <b>{len(secrets)}</b>\n"
             f"• Total: <b>{format_vnd(total_amount)}</b>\n\n"
-            f"<b>Your accounts/codes</b>\n{items}\n\n"
+            f"<b>Your accounts/codes</b>\n{account_block}\n\n"
             "Use the copy buttons or download the TXT file. Keep this information private."
         )
 
@@ -54,7 +52,7 @@ def delivery_text(
         f"• Sản phẩm: <b>{safe_html(product_name)}</b>\n"
         f"• Số lượng: <b>{len(secrets)}</b>\n"
         f"• Tổng tiền: <b>{format_vnd(total_amount)}</b>\n\n"
-        f"<b>Tài khoản/code của bạn</b>\n{items}\n\n"
+        f"<b>Tài khoản/code của bạn</b>\n{account_block}\n\n"
         "Dùng nút sao chép hoặc tải file TXT. Không chia sẻ thông tin này cho người khác."
     )
 
@@ -67,13 +65,13 @@ def delivery_keyboard(
 ) -> InlineKeyboardMarkup:
     rows: list[list[InlineKeyboardButton]] = []
     copy_label = "Sao chép" if language == "vi" else "Copy"
-    for index, secret in enumerate(secrets[:MAX_COPY_BUTTONS], start=1):
+    for secret in secrets[:MAX_COPY_BUTTONS]:
         if len(secret) > MAX_COPY_TEXT_LENGTH:
             continue
         rows.append(
             [
                 InlineKeyboardButton(
-                    text=f"📋 {copy_label} #{index}",
+                    text=f"📋 {copy_label}",
                     copy_text=CopyTextButton(text=secret),
                 )
             ]
@@ -143,7 +141,7 @@ def delivery_file(
             "",
             "TÀI KHOẢN / CODE",
         ]
-    body = [f"{index}. {secret}" for index, secret in enumerate(secrets, start=1)]
+    body = list(secrets)
     content = "\n".join([*header, *body, "", "PHP Tool Shop"])
     safe_code = "".join(
         character for character in shop_order_code if character.isalnum() or character in "-_"
