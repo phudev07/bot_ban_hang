@@ -26,6 +26,7 @@ from app.models import (
     Order,
     PaymentTransaction,
     Product,
+    ProductPriceAlert,
     QuantityDiscount,
     ReferralReward,
     SmsRental,
@@ -1812,6 +1813,20 @@ def create_dashboard_router(
                     select(BroadcastLog).order_by(BroadcastLog.id.desc()).limit(100)
                 )
             )
+            sale_alert_count = int(
+                await session.scalar(select(func.count(ProductPriceAlert.id))) or 0
+            )
+            sale_alerts = [
+                {"alert": alert, "product": product}
+                for alert, product in (
+                    await session.execute(
+                        select(ProductPriceAlert, Product)
+                        .join(Product, Product.id == ProductPriceAlert.product_id)
+                        .order_by(ProductPriceAlert.id.desc())
+                        .limit(100)
+                    )
+                ).all()
+            ]
         return templates.TemplateResponse(
             request,
             "broadcasts.html",
@@ -1824,6 +1839,8 @@ def create_dashboard_router(
                 delivered_count=delivered_count,
                 failed_count=failed_count,
                 broadcasts=broadcasts,
+                sale_alert_count=sale_alert_count,
+                sale_alerts=sale_alerts,
             ),
         )
 

@@ -148,6 +148,7 @@ def test_dashboard_login_catalog_inventory_and_balance(tmp_path) -> None:
         assert broadcasts_page.status_code == 200
         assert "100 lần gửi gần nhất" in broadcasts_page.text
         assert "Message 123" in broadcasts_page.text
+        assert "Sale API tự động" in broadcasts_page.text
 
         invalid_csrf = client.post(
             "/admin/categories",

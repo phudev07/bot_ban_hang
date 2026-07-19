@@ -17,6 +17,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.config import Settings
 from app.models import Category, InventoryItem, Product
+from app.price_alerts import apply_supplier_price
 
 
 logger = logging.getLogger(__name__)
@@ -505,9 +506,8 @@ async def refresh_external_product(
             exc.code,
         )
         return product.external_stock
-    product.supplier_price = snapshot.unit_price
-    product.price = snapshot.unit_price + product.supplier_markup
     product.external_stock = snapshot.effective_stock + recovered_stock
+    await apply_supplier_price(session, product, snapshot.unit_price)
     product.supplier_synced_at = datetime.now(UTC)
     await session.flush()
     return product.external_stock

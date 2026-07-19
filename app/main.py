@@ -14,6 +14,7 @@ from sqlalchemy import select, text
 
 from app.admin import create_admin_router
 from app.api import create_api
+from app.broadcasts import sale_alert_worker
 from app.config import get_settings
 from app.database import Base, DatabaseSessionMiddleware, create_database
 from app.handlers import create_router
@@ -806,6 +807,11 @@ async def main() -> None:
         if rentsim_client is not None
         else None
     )
+    sale_alert_task = (
+        asyncio.create_task(sale_alert_worker(session_factory, bot))
+        if supplier_client is not None or lehai_client is not None
+        else None
+    )
     try:
         await bot.delete_webhook(drop_pending_updates=False)
         await dispatcher.start_polling(bot)
@@ -833,6 +839,10 @@ async def main() -> None:
             rentsim_task.cancel()
             with contextlib.suppress(asyncio.CancelledError):
                 await rentsim_task
+        if sale_alert_task is not None:
+            sale_alert_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await sale_alert_task
         server.should_exit = True
         await api_task
         await storage.close()

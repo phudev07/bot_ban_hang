@@ -77,6 +77,30 @@ class Product(Base):
     )
 
 
+class ProductPriceAlert(Base):
+    __tablename__ = "product_price_alerts"
+
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    product_id: Mapped[int] = mapped_column(
+        ForeignKey("products.id", ondelete="CASCADE"), index=True
+    )
+    provider: Mapped[str] = mapped_column(String(24), index=True)
+    supplier_price_before: Mapped[int] = mapped_column(BigInteger)
+    supplier_price_after: Mapped[int] = mapped_column(BigInteger)
+    sale_price_before: Mapped[int] = mapped_column(BigInteger)
+    sale_price_after: Mapped[int] = mapped_column(BigInteger)
+    status: Mapped[str] = mapped_column(String(20), default="pending", index=True)
+    total_recipients: Mapped[int] = mapped_column(default=0)
+    delivered_count: Mapped[int] = mapped_column(default=0)
+    failed_count: Mapped[int] = mapped_column(default=0)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), index=True
+    )
+    sent_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+    product: Mapped[Product] = relationship()
+
+
 class DiscountCode(Base):
     __tablename__ = "discount_codes"
 

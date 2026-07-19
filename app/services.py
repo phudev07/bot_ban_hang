@@ -23,6 +23,7 @@ from app.models import (
     SupplierBalanceTransaction,
     User,
 )
+from app.price_alerts import apply_supplier_price
 from app.partner_services import award_referral_commission, ensure_referral_code
 from app.supplier_audit import record_supplier_purchase
 from app.suppliers import (
@@ -661,8 +662,11 @@ async def _purchase_product(
                     supplier_purchase.provider == "sumistore"
                     and supplier_purchase.unit_price > 0
                 ):
-                    product.supplier_price = supplier_purchase.unit_price
-                    product.price = supplier_purchase.unit_price + product.supplier_markup
+                    await apply_supplier_price(
+                        session,
+                        product,
+                        supplier_purchase.unit_price,
+                    )
                 cost_unit_price = max(
                     0,
                     supplier_purchase.unit_price
@@ -1158,9 +1162,10 @@ async def _process_sepay_payment(
                                         supplier_purchase.provider == "sumistore"
                                         and supplier_purchase.unit_price > 0
                                     ):
-                                        product.supplier_price = supplier_purchase.unit_price
-                                        product.price = (
-                                            supplier_purchase.unit_price + product.supplier_markup
+                                        await apply_supplier_price(
+                                            session,
+                                            product,
+                                            supplier_purchase.unit_price,
                                         )
                                     product.external_stock = max(
                                         0,
