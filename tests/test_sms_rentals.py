@@ -353,6 +353,15 @@ def test_http_500_without_provider_order_refunds_and_allows_retry() -> None:
         assert failed.provider_balance_after is None
 
         client.rent_error = None
+        cooldown = await rent_sms_number(
+            sessions,
+            3061,
+            client,  # type: ignore[arg-type]
+            now=started + timedelta(seconds=1),
+        )
+        assert cooldown.ok is False and cooldown.message == "cooldown"
+        assert client.rent_count == 1
+
         retried = await rent_sms_number(
             sessions,
             3061,

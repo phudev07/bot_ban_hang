@@ -261,27 +261,11 @@ async def rent_sms_number(
                     )
                 if latest is not None and latest_at is not None:
                     available_at = latest_at + timedelta(seconds=cooldown_seconds)
-                    issued_number = bool(latest.provider_order_id or latest.phone_number)
-                    if latest.status == "requesting" or (
-                        issued_number and requested_at < available_at
-                    ):
+                    if requested_at < available_at:
                         retry_after = max(
                             1,
                             int((available_at - requested_at).total_seconds()) + 1,
                         )
-                        if latest.status == "requesting" and requested_at >= available_at:
-                            return SmsRentResult(
-                                False,
-                                "provider_result_unknown",
-                                rental_id=latest.id,
-                                shop_order_code=latest.shop_order_code,
-                                balance=user.balance,
-                                sale_amount=latest.sale_amount,
-                                cost_amount=latest.cost_amount,
-                                status=latest.status,
-                                provider_balance_before=latest.provider_balance_before,
-                                provider_balance_after=latest.provider_balance_after,
-                            )
                         return SmsRentResult(
                             False,
                             "cooldown",
@@ -289,6 +273,19 @@ async def rent_sms_number(
                             sale_amount=sale_amount,
                             cost_amount=snapshot.unit_price,
                             retry_after=retry_after,
+                        )
+                    if latest.status == "requesting":
+                        return SmsRentResult(
+                            False,
+                            "provider_result_unknown",
+                            rental_id=latest.id,
+                            shop_order_code=latest.shop_order_code,
+                            balance=user.balance,
+                            sale_amount=latest.sale_amount,
+                            cost_amount=latest.cost_amount,
+                            status=latest.status,
+                            provider_balance_before=latest.provider_balance_before,
+                            provider_balance_after=latest.provider_balance_after,
                         )
                 if user.balance < sale_amount:
                     return SmsRentResult(
