@@ -2,13 +2,14 @@ import hashlib
 import hmac
 import ipaddress
 import json
+import logging
 import time
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Request
-from fastapi.responses import HTMLResponse, RedirectResponse
+from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
 from pydantic import BaseModel, Field
 from redis.asyncio import Redis
@@ -36,6 +37,7 @@ from app.utils import SecretCipher
 
 
 templates = Jinja2Templates(directory=Path(__file__).parent / "templates")
+logger = logging.getLogger(__name__)
 
 
 CLOUDFLARE_NETWORKS = tuple(
@@ -392,7 +394,7 @@ def create_public_api_router(
                     select(ApiOrderRequest).where(
                         ApiOrderRequest.api_client_id == principal.client.id,
                         ApiOrderRequest.idempotency_key == normalized_key,
-                    )
+                    ).with_for_update()
                 )
                 if order_request is None:
                     raise api_error(409, "IDEMPOTENCY_CONFLICT", "Could not claim request")
@@ -409,38 +411,81 @@ def create_public_api_router(
                 )
                 if existing_orders:
                     return {"success": True, "order": order_payload(existing_orders, cipher)}
-                if order_request.status == "failed":
+                if order_request.status == "review":
+                    order_request.status = "processing"
+                    order_request.error_code = None
+                    await session.commit()
+                    claimed = True
+                elif order_request.status == "failed":
                     raise api_error(
                         409,
                         order_request.error_code or "PREVIOUS_REQUEST_FAILED",
                         "The original request failed",
                     )
-                raise api_error(409, "REQUEST_IN_PROGRESS", "The original request is processing")
+                else:
+                    raise api_error(409, "REQUEST_IN_PROGRESS", "The original request is processing")
 
         if not claimed:
             raise api_error(409, "REQUEST_IN_PROGRESS", "The original request is processing")
-        result = await purchase_product(
-            session_factory,
-            principal.user.telegram_id,
-            body.product_id,
-            cipher,
-            body.quantity,
-            supplier_client,
-            lehai_client=lehai_client,
-            coupon_code=body.coupon_code,
-            sales_channel="api",
-            api_client_id=principal.client.id,
-            api_order_request_id=order_request.id,
-            referral_commission_percent=settings.referral_commission_percent,
-            supplier_idempotency_key=(
-                f"shop-api-{principal.client.id}-{order_request.id}"
-            ),
-        )
+        try:
+            result = await purchase_product(
+                session_factory,
+                principal.user.telegram_id,
+                body.product_id,
+                cipher,
+                body.quantity,
+                supplier_client,
+                lehai_client=lehai_client,
+                coupon_code=body.coupon_code,
+                sales_channel="api",
+                api_client_id=principal.client.id,
+                api_order_request_id=order_request.id,
+                referral_commission_percent=settings.referral_commission_percent,
+                supplier_idempotency_key=(
+                    f"shop-api-{principal.client.id}-{order_request.id}"
+                ),
+            )
+        except Exception:
+            logger.exception("Shop API order %s needs supplier review after an exception", order_request.id)
+            async with session_factory() as session:
+                stored_request = await session.get(ApiOrderRequest, order_request.id)
+                if stored_request is not None:
+                    stored_request.status = "review"
+                    stored_request.error_code = "ORDER_STATE_REVIEW"
+                    await session.commit()
+            return JSONResponse(
+                status_code=202,
+                content={
+                    "success": False,
+                    "status": "review",
+                    "request_id": order_request.id,
+                    "message": (
+                        "The order needs supplier review. Retry the same request with the "
+                        "same Idempotency-Key; do not create a new key."
+                    ),
+                },
+            )
         async with session_factory() as session:
             stored_request = await session.get(ApiOrderRequest, order_request.id)
             if stored_request is None:
                 raise api_error(500, "ORDER_STATE_MISSING", "Order request state is missing")
             if not result.ok:
+                if result.message == "supplier_unavailable":
+                    stored_request.status = "review"
+                    stored_request.error_code = "SUPPLIER_REVIEW"
+                    await session.commit()
+                    return JSONResponse(
+                        status_code=202,
+                        content={
+                            "success": False,
+                            "status": "review",
+                            "request_id": order_request.id,
+                            "message": (
+                                "The supplier result is unclear. Retry the same request with "
+                                "the same Idempotency-Key; do not create a new key."
+                            ),
+                        },
+                    )
                 stored_request.status = "failed"
                 stored_request.error_code = result.message
                 await session.commit()

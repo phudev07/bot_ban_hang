@@ -405,7 +405,7 @@ signature = hmac_sha256(API_SECRET, canonical)</pre>
               <tr><td><code>max_quantity</code></td><td>integer</td><td>Số lượng tối đa trong một request.</td></tr>
             </tbody>
           </table>
-          <div class="note" style="margin-top:14px">Tồn kho có thể thay đổi giữa lúc đọc và lúc mua. Chỉ coi đơn thành công khi <code>POST /v1/orders</code> trả HTTP 200.</div>
+          <div class="note" style="margin-top:14px">Tồn kho có thể thay đổi giữa lúc đọc và lúc mua. Chỉ coi đơn thành công khi <code>POST /v1/orders</code> trả HTTP 200. HTTP 202 là đơn cần đối soát; hãy retry cùng payload và cùng <code>Idempotency-Key</code>, tuyệt đối không tạo key mới.</div>
         </section>
 
         <section class="section" id="don-hang">
@@ -444,7 +444,7 @@ Content-Type: application/json
   }
 }</pre></div>
           <div class="grid-2">
-            <div class="note good-note"><strong>Retry an toàn.</strong><br>Cùng Idempotency-Key và cùng payload sẽ trả lại đơn cũ, không trừ tiền hoặc lấy hàng lần hai.</div>
+          <div class="note good-note"><strong>Retry an toàn.</strong><br>Cùng Idempotency-Key và cùng payload sẽ trả lại đơn cũ, không trừ tiền hoặc lấy hàng lần hai. Nếu nhận HTTP 202, request đang được đối soát; hãy tiếp tục retry đúng key đó.</div>
             <div class="note danger-note"><strong>Không đổi payload.</strong><br>Dùng lại Idempotency-Key với payload khác sẽ nhận <code>409 IDEMPOTENCY_MISMATCH</code>.</div>
           </div>
         </section>
@@ -582,7 +582,7 @@ console.log(order);</pre></div>
             <article class="rule"><strong>Nonce mới mỗi request</strong><span>Không dùng lại nonce, kể cả khi retry cùng một Idempotency-Key.</span></article>
             <article class="rule"><strong>Lưu đơn của bạn</strong><span>Lưu Idempotency-Key và order_code để đối soát và lấy lại tài khoản khi mất kết nối.</span></article>
             <article class="rule"><strong>Bảo vệ dữ liệu giao hàng</strong><span>Response chứa tài khoản thật. Không log plaintext lâu dài và không gửi sang dịch vụ phân tích bên thứ ba.</span></article>
-            <article class="rule"><strong>Chỉ tin HTTP 200</strong><span>Khi timeout, gọi lại bằng cùng Idempotency-Key hoặc tra cứu order trước khi tạo đơn mới.</span></article>
+            <article class="rule"><strong>Chỉ tin HTTP 200</strong><span>Khi timeout hoặc nhận HTTP 202, gọi lại bằng cùng Idempotency-Key. Không tạo đơn mới bằng key khác.</span></article>
           </div>
           <div class="note good-note" style="margin-top:14px">Hệ thống khóa ví theo user, khóa tồn local bằng PostgreSQL, tuần tự hóa luồng mua nguồn và dùng unique idempotency. Nhiều đối tác mua đồng thời không được nhận trùng cùng tài khoản.</div>
         </section>

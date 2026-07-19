@@ -14,6 +14,7 @@ from app.config import Settings
 from app.database import Base
 from app.models import ApiOrderRequest, Category, InventoryItem, Order, Product, ReferralReward, User
 from app.partner_services import api_signature, ensure_api_client, rotate_api_secret
+from app.services import PurchaseResult
 from app.public_api import client_ip
 from app.utils import SecretCipher
 
@@ -273,6 +274,108 @@ def test_warehouse_api_purchases_from_shared_wallet_and_is_idempotent(tmp_path) 
             assert len(rewards) == 1 and rewards[0].commission_amount == 1_000
             assert len(requests) == 1 and requests[0].status == "completed"
             assert int(await session.scalar(select(func.count(InventoryItem.id))) or 0) == 2
+        await engine.dispose()
+
+    asyncio.run(verify_database())
+
+
+def test_public_api_keeps_supplier_failure_in_review_and_retries_same_key(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    async def setup_database():
+        database_path = (tmp_path / "api-review.db").as_posix()
+        engine = create_async_engine(f"sqlite+aiosqlite:///{database_path}")
+        async with engine.begin() as connection:
+            await connection.run_sync(Base.metadata.create_all)
+        sessions = async_sessionmaker(engine, expire_on_commit=False)
+        cipher = SecretCipher(Fernet.generate_key().decode())
+        async with sessions() as session:
+            user = User(telegram_id=31001, full_name="API review user", balance=50_000)
+            category = Category(name_vi="Accounts", name_en="Accounts")
+            session.add_all([user, category])
+            await session.flush()
+            product = Product(
+                category_id=category.id,
+                name_vi="Le Hai product",
+                name_en="Le Hai product",
+                price=32_000,
+                fulfillment_source="lehai",
+                supplier_product_id="cdk_ggpro_18m",
+                active=True,
+            )
+            session.add(product)
+            await session.flush()
+            api_client, api_secret = await ensure_api_client(
+                session,
+                user.telegram_id,
+                cipher,
+                60,
+            )
+            await session.commit()
+        return engine, sessions, cipher, product.id, api_client.api_id, api_secret
+
+    engine, sessions, cipher, product_id, api_id, api_secret = asyncio.run(setup_database())
+    calls: list[str | None] = []
+
+    async def fake_purchase(*_args, **kwargs):
+        calls.append(kwargs.get("supplier_idempotency_key"))
+        return PurchaseResult(False, "supplier_unavailable")
+
+    monkeypatch.setattr("app.public_api.purchase_product", fake_purchase)
+    settings = Settings(
+        _env_file=None,
+        bot_token="123456:ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghi",
+        inventory_encryption_key=Fernet.generate_key().decode(),
+        sepay_enabled=False,
+        shop_api_enabled=True,
+    )
+    app = create_api(
+        settings,
+        sessions,
+        FakeBot(),  # type: ignore[arg-type]
+        cipher,
+        api_redis=FakeRedis(),  # type: ignore[arg-type]
+    )
+    body = json.dumps({"product_id": product_id}, separators=(",", ":")).encode()
+    with TestClient(app, base_url="https://testserver") as client:
+        first = client.post(
+            "/v1/orders",
+            content=body,
+            headers=signed_headers(
+                api_id,
+                api_secret,
+                "POST",
+                "/v1/orders",
+                body,
+                idempotency_key="REVIEW-ORDER-001",
+            ),
+        )
+        assert first.status_code == 202
+        assert first.json()["status"] == "review"
+
+        second = client.post(
+            "/v1/orders",
+            content=body,
+            headers=signed_headers(
+                api_id,
+                api_secret,
+                "POST",
+                "/v1/orders",
+                body,
+                idempotency_key="REVIEW-ORDER-001",
+            ),
+        )
+        assert second.status_code == 202
+        assert second.json()["status"] == "review"
+
+    assert len(calls) == 2 and calls[0] == calls[1]
+    assert calls[0] is not None and calls[0].startswith("shop-api-")
+
+    async def verify_database() -> None:
+        async with sessions() as session:
+            request = await session.scalar(select(ApiOrderRequest))
+            assert request is not None and request.status == "review"
         await engine.dispose()
 
     asyncio.run(verify_database())
