@@ -487,15 +487,17 @@ async def rentsim_otp_worker(
                     text = (
                         "↩️ <b>No OTP received</b>\n\n"
                         f"• Order: <code>{escape(item.shop_order_code)}</code>\n"
+                        f"• Rented number: <code>{escape(item.phone_number or '—')}</code>\n"
                         f"• Refunded: <b>{format_vnd(item.sale_amount)}</b>\n"
                         f"• Wallet balance: <b>{format_vnd(item.balance)}</b>\n\n"
-                        "No verification code was received, so the rental was refunded in full."
+                        "This rented number did not receive an OTP, so the rental was refunded in full."
                         if item.language == "en"
                         else "↩️ <b>Không nhận được OTP</b>\n\n"
                         f"• Mã đơn: <code>{escape(item.shop_order_code)}</code>\n"
+                        f"• Số thuê: <code>{escape(item.phone_number or '—')}</code>\n"
                         f"• Đã hoàn ví: <b>{format_vnd(item.sale_amount)}</b>\n"
                         f"• Số dư hiện tại: <b>{format_vnd(item.balance)}</b>\n\n"
-                        "Không nhận được mã nên tiền thuê đã được hoàn lại toàn bộ."
+                        f"Số <code>{escape(item.phone_number or '—')}</code> không nhận được mã OTP nên tiền thuê đã được hoàn lại đầy đủ."
                     )
                 markup = sms_waiting_menu(item.language, item.sale_amount)
                 try:
