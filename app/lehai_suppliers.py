@@ -11,6 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from app.config import Settings
 from app.models import Category, InventoryItem, Product
 from app.price_alerts import apply_supplier_price
+from app.stock_alerts import apply_supplier_stock
 from app.suppliers import SupplierError, SupplierPurchase, SupplierSnapshot
 
 
@@ -353,6 +354,7 @@ async def refresh_lehai_product(
         return product.external_stock
     product.external_stock = snapshot.effective_stock + recovered_stock
     await apply_supplier_price(session, product, snapshot.unit_price)
+    await apply_supplier_stock(session, product, snapshot.effective_stock)
     product.supplier_synced_at = datetime.now(UTC)
     await session.flush()
     return product.external_stock

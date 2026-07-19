@@ -57,6 +57,8 @@ class Product(Base):
     supplier_markup: Mapped[int] = mapped_column(BigInteger, default=0)
     supplier_price: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
     external_stock: Mapped[int] = mapped_column(default=0)
+    supplier_available_stock: Mapped[int] = mapped_column(default=0)
+    supplier_available_stock_initialized: Mapped[bool] = mapped_column(Boolean, default=False)
     supplier_synced_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )
@@ -89,6 +91,29 @@ class ProductPriceAlert(Base):
     supplier_price_after: Mapped[int] = mapped_column(BigInteger)
     sale_price_before: Mapped[int] = mapped_column(BigInteger)
     sale_price_after: Mapped[int] = mapped_column(BigInteger)
+    status: Mapped[str] = mapped_column(String(20), default="pending", index=True)
+    total_recipients: Mapped[int] = mapped_column(default=0)
+    delivered_count: Mapped[int] = mapped_column(default=0)
+    failed_count: Mapped[int] = mapped_column(default=0)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), index=True
+    )
+    sent_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+    product: Mapped[Product] = relationship()
+
+
+class ProductStockAlert(Base):
+    __tablename__ = "product_stock_alerts"
+
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    product_id: Mapped[int] = mapped_column(
+        ForeignKey("products.id", ondelete="CASCADE"), index=True
+    )
+    provider: Mapped[str] = mapped_column(String(24), index=True)
+    stock_before: Mapped[int] = mapped_column(default=0)
+    stock_after: Mapped[int] = mapped_column(default=0)
+    sale_price: Mapped[int] = mapped_column(BigInteger)
     status: Mapped[str] = mapped_column(String(20), default="pending", index=True)
     total_recipients: Mapped[int] = mapped_column(default=0)
     delivered_count: Mapped[int] = mapped_column(default=0)

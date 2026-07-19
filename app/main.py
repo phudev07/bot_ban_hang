@@ -138,7 +138,29 @@ async def initialize_database(engine, session_factory, seed_demo_data: bool) -> 
         )
         await connection.execute(
             text(
+                "ALTER TABLE products ADD COLUMN IF NOT EXISTS "
+                "supplier_available_stock INTEGER NOT NULL DEFAULT 0"
+            )
+        )
+        await connection.execute(
+            text(
+                "ALTER TABLE products ADD COLUMN IF NOT EXISTS "
+                "supplier_available_stock_initialized BOOLEAN NOT NULL DEFAULT FALSE"
+            )
+        )
+        await connection.execute(
+            text(
                 "ALTER TABLE products ADD COLUMN IF NOT EXISTS supplier_synced_at TIMESTAMPTZ NULL"
+            )
+        )
+        await connection.execute(
+            text(
+                "UPDATE products SET "
+                "supplier_available_stock = GREATEST(external_stock, 0), "
+                "supplier_available_stock_initialized = TRUE "
+                "WHERE supplier_available_stock_initialized = FALSE "
+                "AND supplier_synced_at IS NOT NULL "
+                "AND fulfillment_source IN ('sumistore', 'lehai')"
             )
         )
         await connection.execute(

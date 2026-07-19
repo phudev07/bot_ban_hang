@@ -22,6 +22,7 @@ from app.models import (
     Order,
     Product,
     ProductPriceAlert,
+    ProductStockAlert,
     QuantityDiscount,
     SmsRental,
     User,
@@ -411,8 +412,9 @@ def test_dashboard_shows_sale_alert_history(tmp_path) -> None:
             )
             session.add(product)
             await session.flush()
-            session.add(
-                ProductPriceAlert(
+            session.add_all(
+                [
+                    ProductPriceAlert(
                     product_id=product.id,
                     provider="sumistore",
                     supplier_price_before=15_000,
@@ -424,7 +426,19 @@ def test_dashboard_shows_sale_alert_history(tmp_path) -> None:
                     delivered_count=9,
                     failed_count=1,
                     sent_at=datetime.now(UTC),
-                )
+                    ),
+                    ProductStockAlert(
+                        product_id=product.id,
+                        provider="sumistore",
+                        stock_before=0,
+                        stock_after=4,
+                        sale_price=14_000,
+                        status="sent",
+                        total_recipients=10,
+                        delivered_count=10,
+                        sent_at=datetime.now(UTC),
+                    ),
+                ]
             )
             await session.commit()
         return engine, sessions
@@ -456,6 +470,13 @@ def test_dashboard_shows_sale_alert_history(tmp_path) -> None:
         assert "GPT Plus sale" in home.text
         assert "SP-SALE-HISTORY" in home.text
         assert "Xem đầy đủ" in home.text
+        assert "BACK IN STOCK" in home.text
+        assert "10/10" in home.text
+        broadcasts = client.get("/admin/broadcasts")
+        assert broadcasts.status_code == 200
+        assert "BACK IN STOCK HISTORY" in broadcasts.text
+        assert "GPT Plus sale" in broadcasts.text
+        assert "10/10" in broadcasts.text
 
     asyncio.run(engine.dispose())
 
