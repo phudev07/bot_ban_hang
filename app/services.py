@@ -651,9 +651,19 @@ async def _purchase_product(
                         ),
                     )
                 except SupplierError as exc:
-                    product.external_stock = 0
-                    if exc.code in {"INSUFFICIENT_BALANCE", "INSUFFICIENT_STOCK"}:
+                    logger.warning(
+                        "Supplier purchase failed: provider=%s product=%s quantity=%s code=%s",
+                        product.fulfillment_source,
+                        product.supplier_product_id,
+                        quantity,
+                        exc.code,
+                    )
+                    if exc.code == "INSUFFICIENT_STOCK":
+                        product.external_stock = 0
                         return PurchaseResult(False, "out_of_stock")
+                    # A balance/provider failure is not proof that the catalog
+                    # item is sold out. Keep the last known stock for the next
+                    # sync and report a temporary supplier failure.
                     return PurchaseResult(False, "supplier_unavailable")
 
                 now = datetime.now(UTC)

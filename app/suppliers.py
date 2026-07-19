@@ -509,8 +509,12 @@ async def refresh_external_product(
     try:
         snapshot = await client.fetch_snapshot(product.supplier_product_id)
     except SupplierError as exc:
-        product.external_stock = recovered_stock
+        # Keep the last successful supplier stock during a transient outage.
+        # Clearing it here makes a healthy product look sold out and blocks a
+        # purchase before the provider can return its real result.
+        product.external_stock = max(0, product.external_stock, recovered_stock)
         if exc.code in DEFINITIVE_PRODUCT_UNAVAILABLE_CODES:
+            product.external_stock = recovered_stock
             await apply_supplier_stock(session, product, 0)
             product.supplier_synced_at = datetime.now(UTC)
         await session.flush()

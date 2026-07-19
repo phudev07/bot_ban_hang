@@ -349,8 +349,11 @@ async def refresh_lehai_product(
     try:
         snapshot = await client.fetch_snapshot(product.supplier_product_id)
     except SupplierError as exc:
-        product.external_stock = recovered_stock
+        # Do not turn a temporary API/network error into a false sold-out
+        # state. The purchase path will still ask the provider for the truth.
+        product.external_stock = max(0, product.external_stock, recovered_stock)
         if exc.code in DEFINITIVE_PRODUCT_UNAVAILABLE_CODES:
+            product.external_stock = recovered_stock
             await apply_supplier_stock(session, product, 0)
             product.supplier_synced_at = datetime.now(UTC)
         await session.flush()

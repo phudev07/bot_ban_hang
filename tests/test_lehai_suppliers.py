@@ -12,11 +12,12 @@ from app.lehai_suppliers import (
     CATEGORY_VI,
     LeHaiPremiumClient,
     ensure_lehai_products,
+    refresh_lehai_product,
     sync_lehai_products,
 )
 from app.models import Category, Deposit, Order, Product, SupplierBalanceTransaction, User
 from app.services import process_sepay_payment, purchase_product
-from app.suppliers import SupplierPurchase, SupplierSnapshot
+from app.suppliers import SupplierError, SupplierPurchase, SupplierSnapshot
 from app.utils import SecretCipher
 
 
@@ -62,6 +63,48 @@ def test_lehai_snapshot_limits_stock_by_wallet_balance() -> None:
         assert snapshot.source_stock == 203
         assert snapshot.owner_balance == 100_000
         assert snapshot.effective_stock == 4
+
+    asyncio.run(scenario())
+
+
+def test_lehai_temporary_refresh_failure_keeps_last_known_stock() -> None:
+    class UnavailableSupplier:
+        async def fetch_snapshot(self, product_id: str) -> SupplierSnapshot:
+            raise SupplierError("SUPPLIER_UNAVAILABLE")
+
+    async def scenario() -> None:
+        engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+        async with engine.begin() as connection:
+            await connection.run_sync(Base.metadata.create_all)
+        sessions = async_sessionmaker(engine, expire_on_commit=False)
+        async with sessions() as session:
+            category = Category(name_vi=CATEGORY_VI, name_en=CATEGORY_VI)
+            session.add(category)
+            await session.flush()
+            product = Product(
+                category_id=category.id,
+                name_vi="Link GG Pro Jio 18M",
+                name_en="Link GG Pro Jio 18M",
+                price=35_000,
+                fulfillment_source="lehai",
+                supplier_product_id="cdk_ggpro_18m",
+                external_stock=6,
+                supplier_available_stock=6,
+                supplier_available_stock_initialized=True,
+            )
+            session.add(product)
+            await session.flush()
+
+            stock = await refresh_lehai_product(
+                session,
+                product,
+                UnavailableSupplier(),  # type: ignore[arg-type]
+            )
+
+            assert stock == 6
+            assert product.external_stock == 6
+            assert product.supplier_available_stock == 6
+        await engine.dispose()
 
     asyncio.run(scenario())
 
