@@ -24,6 +24,8 @@ logger = logging.getLogger(__name__)
 
 EXTERNAL_FULFILLMENT_SOURCES = ("sumistore", "lehai")
 SELLABLE_FULFILLMENT_SOURCES = ("local", *EXTERNAL_FULFILLMENT_SOURCES)
+SUMISTORE_RECOVERY_ATTEMPTS = 8
+SUMISTORE_RECOVERY_DELAY_SECONDS = 2.0
 
 
 SUMISTORE_PRODUCT_SEEDS: dict[str, dict[str, object]] = {
@@ -331,7 +333,7 @@ class SumistoreClient:
         known_order_codes: set[str],
     ) -> SupplierPurchase | None:
         earliest = started_at.astimezone(UTC) - timedelta(seconds=3)
-        for attempt in range(3):
+        for attempt in range(SUMISTORE_RECOVERY_ATTEMPTS):
             summaries = await self.fetch_orders()
             candidates = [
                 order
@@ -345,8 +347,11 @@ class SumistoreClient:
                 return await self.fetch_order(candidates[0].order_code)
             if len(candidates) > 1:
                 return None
-            if attempt < 2:
-                await asyncio.sleep(0.5)
+            if attempt < SUMISTORE_RECOVERY_ATTEMPTS - 1:
+                # Sumi can debit the wallet before the completed order appears
+                # in tele-orders. Keep the supplier lock while waiting so a
+                # concurrent purchase cannot be mistaken for this recovery.
+                await asyncio.sleep(SUMISTORE_RECOVERY_DELAY_SECONDS)
         return None
 
 

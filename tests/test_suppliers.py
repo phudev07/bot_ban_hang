@@ -208,6 +208,69 @@ def test_sumistore_recovers_one_recent_unrecorded_order() -> None:
     asyncio.run(scenario())
 
 
+def test_sumistore_recovery_waits_for_eventual_order_visibility(monkeypatch) -> None:
+    started_at = datetime.now(UTC)
+    list_calls = 0
+    sleep_calls: list[float] = []
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal list_calls
+        if request.url.path.endswith("/tele-orders"):
+            list_calls += 1
+            orders = []
+            if list_calls >= 4:
+                orders.append(
+                    {
+                        "order_code": "API-DELAYED",
+                        "product": {"id": "SP-GEF55PBV"},
+                        "quantity": 2,
+                        "created_at": (started_at + timedelta(seconds=1)).isoformat(),
+                    }
+                )
+            return httpx.Response(200, json={"success": True, "orders": orders})
+        assert request.url.path.endswith("/tele-orders/API-DELAYED")
+        return httpx.Response(
+            200,
+            json={
+                "success": True,
+                "order": {
+                    "order_code": "API-DELAYED",
+                    "product": {"id": "SP-GEF55PBV"},
+                    "quantity": 2,
+                    "total_amount": 20_000,
+                    "raw_accounts": ["mail1|pass1", "mail2|pass2"],
+                },
+            },
+        )
+
+    async def fake_sleep(seconds: float) -> None:
+        sleep_calls.append(seconds)
+
+    monkeypatch.setattr("app.suppliers.asyncio.sleep", fake_sleep)
+
+    async def scenario() -> None:
+        client = SumistoreClient(
+            "https://supplier.test/api",
+            "TAPI-test",
+            transport=httpx.MockTransport(handler),
+        )
+        recovered = await client.recover_recent_purchase(
+            "SP-GEF55PBV",
+            2,
+            started_at=started_at,
+            known_order_codes=set(),
+        )
+
+        assert recovered is not None
+        assert recovered.order_code == "API-DELAYED"
+        assert recovered.unit_price == 10_000
+        assert recovered.accounts == ("mail1|pass1", "mail2|pass2")
+
+    asyncio.run(scenario())
+    assert list_calls == 4
+    assert sleep_calls == [2.0, 2.0, 2.0]
+
+
 def test_sumistore_catalog_only_seeds_supported_gpt_products() -> None:
     async def scenario() -> None:
         engine = create_async_engine("sqlite+aiosqlite:///:memory:")
