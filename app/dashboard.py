@@ -1674,9 +1674,7 @@ def create_dashboard_router(
                 "Nhập kho",
                 "inventory",
                 products=products,
-                import_products=[
-                    row for row in products if row["product"].fulfillment_source == "local"
-                ],
+                import_products=products,
                 recent_items=recent_items,
             ),
         )
@@ -1697,7 +1695,7 @@ def create_dashboard_router(
             product = await session.get(Product, product_id)
             if (
                 product is None
-                or product.fulfillment_source != "local"
+                or product.fulfillment_source not in SELLABLE_FULFILLMENT_SOURCES
                 or product.product_type != "account"
                 or not parsed_items
             ):
@@ -1708,6 +1706,11 @@ def create_dashboard_router(
                     InventoryItem(
                         product_id=product.id,
                         encrypted_secret=cipher.encrypt(item),
+                        cost_amount=(
+                            int(product.supplier_price or 0)
+                            if product.fulfillment_source in EXTERNAL_FULFILLMENT_SOURCES
+                            else 0
+                        ),
                     )
                     for item in parsed_items
                 ]

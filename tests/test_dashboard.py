@@ -481,6 +481,80 @@ def test_dashboard_shows_sale_alert_history(tmp_path) -> None:
     asyncio.run(engine.dispose())
 
 
+def test_admin_can_import_recovered_external_inventory(tmp_path) -> None:
+    async def setup_database():
+        database_path = (tmp_path / "dashboard-external-inventory.db").as_posix()
+        engine = create_async_engine(f"sqlite+aiosqlite:///{database_path}")
+        async with engine.begin() as connection:
+            await connection.run_sync(Base.metadata.create_all)
+        sessions = async_sessionmaker(engine, expire_on_commit=False)
+        async with sessions() as session:
+            category = Category(name_vi="ChatGPT", name_en="ChatGPT")
+            user = User(telegram_id=68002, full_name="External inventory admin")
+            session.add_all([category, user])
+            await session.flush()
+            product = Product(
+                category_id=category.id,
+                name_vi="GPT Plus external",
+                name_en="GPT Plus external",
+                price=15_000,
+                fulfillment_source="sumistore",
+                supplier_product_id="SP-GEF55PBV",
+                supplier_price=10_000,
+                supplier_markup=5_000,
+                active=True,
+            )
+            session.add(product)
+            await session.commit()
+        return engine, sessions, product.id
+
+    engine, sessions, product_id = asyncio.run(setup_database())
+    encryption_key = Fernet.generate_key().decode()
+    settings = Settings(
+        _env_file=None,
+        bot_token="123456:ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghi",
+        inventory_encryption_key=encryption_key,
+        sepay_enabled=False,
+        dashboard_enabled=True,
+        dashboard_username="admin",
+        dashboard_password_hash=hash_dashboard_password("dashboard-password"),
+        dashboard_session_secret="session-secret-long-enough-for-tests",
+    )
+    app = create_api(settings, sessions, FakeBot(), SecretCipher(encryption_key))  # type: ignore[arg-type]
+
+    with TestClient(app, base_url="https://testserver") as client:
+        login = client.post(
+            "/admin/login",
+            data={"username": "admin", "password": "dashboard-password"},
+            follow_redirects=False,
+        )
+        assert login.status_code == 303
+        inventory_page = client.get("/admin/inventory")
+        assert inventory_page.status_code == 200
+        assert f'<option value="{product_id}">' in inventory_page.text
+        csrf = re.search(r'name="csrf" value="([^"]+)"', inventory_page.text).group(1)
+        imported = client.post(
+            "/admin/inventory",
+            data={
+                "csrf": csrf,
+                "product_id": str(product_id),
+                "items": "mics.retry-6h+5frux@icloud.com|password|key",
+            },
+            follow_redirects=False,
+        )
+        assert imported.status_code == 303
+
+    async def verify_database() -> None:
+        async with sessions() as session:
+            item = await session.scalar(select(InventoryItem))
+            assert item is not None
+            assert item.product_id == product_id
+            assert item.cost_amount == 10_000
+        await engine.dispose()
+
+    asyncio.run(verify_database())
+
+
 def test_dashboard_groups_multi_item_purchase_as_one_order(tmp_path) -> None:
     async def setup_database():
         database_path = (tmp_path / "grouped-orders.db").as_posix()
