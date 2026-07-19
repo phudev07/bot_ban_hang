@@ -21,6 +21,7 @@ from app.models import (
     InventoryItem,
     Order,
     Product,
+    ProductPriceAlert,
     QuantityDiscount,
     SmsRental,
     User,
@@ -382,6 +383,81 @@ def test_dashboard_login_catalog_inventory_and_balance(tmp_path) -> None:
         await engine.dispose()
 
     asyncio.run(verify_database())
+
+
+def test_dashboard_shows_sale_alert_history(tmp_path) -> None:
+    async def setup_database():
+        database_path = (tmp_path / "dashboard-sale-history.db").as_posix()
+        engine = create_async_engine(f"sqlite+aiosqlite:///{database_path}")
+        async with engine.begin() as connection:
+            await connection.run_sync(Base.metadata.create_all)
+        sessions = async_sessionmaker(engine, expire_on_commit=False)
+        async with sessions() as session:
+            category = Category(name_vi="API", name_en="API")
+            user = User(telegram_id=68001, full_name="Sale history user", has_started=True)
+            session.add_all([category, user])
+            await session.flush()
+            product = Product(
+                category_id=category.id,
+                name_vi="GPT Plus sale",
+                name_en="GPT Plus sale",
+                price=14_000,
+                fulfillment_source="sumistore",
+                supplier_product_id="SP-SALE-HISTORY",
+                supplier_price=12_000,
+                supplier_markup=2_000,
+                external_stock=4,
+                supplier_synced_at=datetime.now(UTC),
+            )
+            session.add(product)
+            await session.flush()
+            session.add(
+                ProductPriceAlert(
+                    product_id=product.id,
+                    provider="sumistore",
+                    supplier_price_before=15_000,
+                    supplier_price_after=12_000,
+                    sale_price_before=17_000,
+                    sale_price_after=14_000,
+                    status="sent",
+                    total_recipients=10,
+                    delivered_count=9,
+                    failed_count=1,
+                    sent_at=datetime.now(UTC),
+                )
+            )
+            await session.commit()
+        return engine, sessions
+
+    engine, sessions = asyncio.run(setup_database())
+    encryption_key = Fernet.generate_key().decode()
+    settings = Settings(
+        _env_file=None,
+        bot_token="123456:ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghi",
+        inventory_encryption_key=encryption_key,
+        sepay_enabled=False,
+        dashboard_enabled=True,
+        dashboard_username="admin",
+        dashboard_password_hash=hash_dashboard_password("dashboard-password"),
+        dashboard_session_secret="session-secret-long-enough-for-tests",
+    )
+    app = create_api(settings, sessions, FakeBot(), SecretCipher(encryption_key))  # type: ignore[arg-type]
+
+    with TestClient(app, base_url="https://testserver") as client:
+        login = client.post(
+            "/admin/login",
+            data={"username": "admin", "password": "dashboard-password"},
+            follow_redirects=False,
+        )
+        assert login.status_code == 303
+        home = client.get("/admin")
+        assert home.status_code == 200
+        assert "SALE HISTORY" in home.text
+        assert "GPT Plus sale" in home.text
+        assert "SP-SALE-HISTORY" in home.text
+        assert "Xem đầy đủ" in home.text
+
+    asyncio.run(engine.dispose())
 
 
 def test_dashboard_groups_multi_item_purchase_as_one_order(tmp_path) -> None:

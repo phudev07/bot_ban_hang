@@ -618,6 +618,20 @@ def create_dashboard_router(
             recent_users = list(
                 await session.scalars(select(User).order_by(User.created_at.desc()).limit(6))
             )
+            sale_alert_count = int(
+                await session.scalar(select(func.count(ProductPriceAlert.id))) or 0
+            )
+            recent_sale_alerts = [
+                {"alert": alert, "product": product}
+                for alert, product in (
+                    await session.execute(
+                        select(ProductPriceAlert, Product)
+                        .join(Product, Product.id == ProductPriceAlert.product_id)
+                        .order_by(ProductPriceAlert.id.desc())
+                        .limit(8)
+                    )
+                ).all()
+            ]
             top_product_rows = await session.execute(
                 select(
                     Product,
@@ -834,6 +848,8 @@ def create_dashboard_router(
                 financials=financials,
                 recent_orders=recent_orders,
                 recent_users=recent_users,
+                sale_alert_count=sale_alert_count,
+                recent_sale_alerts=recent_sale_alerts,
                 top_products=top_products,
                 sales_trend=sales_trend,
                 monthly_performance=monthly_performance,
