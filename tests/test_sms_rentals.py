@@ -330,12 +330,11 @@ def test_ambiguous_provider_failure_holds_balance_for_review() -> None:
     asyncio.run(scenario())
 
 
-def test_http_500_with_unchanged_provider_balance_refunds_and_allows_retry() -> None:
+def test_http_500_without_provider_order_refunds_and_allows_retry() -> None:
     async def scenario() -> None:
         engine, sessions = await make_database()
         client = FakeRentSim()
         client.rent_error = "PROVIDER_HTTP_500"
-        client.balance_after = 50_000
         started = datetime.now(UTC)
         async with sessions() as session:
             session.add(User(telegram_id=3061, full_name="Buyer", balance=5_000))
@@ -351,7 +350,7 @@ def test_http_500_with_unchanged_provider_balance_refunds_and_allows_retry() -> 
         assert failed.message == "provider_error_refunded"
         assert failed.status == "refunded"
         assert failed.provider_balance_before == 50_000
-        assert failed.provider_balance_after == 50_000
+        assert failed.provider_balance_after is None
 
         client.rent_error = None
         retried = await rent_sms_number(
@@ -368,6 +367,42 @@ def test_http_500_with_unchanged_provider_balance_refunds_and_allows_retry() -> 
             rentals = list(await session.scalars(select(SmsRental).order_by(SmsRental.id)))
             assert user is not None and user.balance == 3_000
             assert [rental.status for rental in rentals] == ["refunded", "pending"]
+        await engine.dispose()
+
+    asyncio.run(scenario())
+
+
+def test_simultaneous_http_500_rentals_refund_each_user_once() -> None:
+    async def scenario() -> None:
+        engine, sessions = await make_database()
+        client = FakeRentSim()
+        client.rent_error = "PROVIDER_HTTP_500"
+        async with sessions() as session:
+            session.add_all(
+                [
+                    User(telegram_id=3062, full_name="Buyer 1", balance=5_000),
+                    User(telegram_id=3063, full_name="Buyer 2", balance=5_000),
+                ]
+            )
+            await session.commit()
+
+        first, second = await asyncio.gather(
+            rent_sms_number(sessions, 3062, client),  # type: ignore[arg-type]
+            rent_sms_number(sessions, 3063, client),  # type: ignore[arg-type]
+        )
+        assert first.status == "refunded" and second.status == "refunded"
+        assert first.message == "provider_error_refunded"
+        assert second.message == "provider_error_refunded"
+        assert client.rent_count == 2
+        async with sessions() as session:
+            users = list(await session.scalars(select(User).order_by(User.telegram_id)))
+            rentals = list(await session.scalars(select(SmsRental).order_by(SmsRental.id)))
+            adjustments = int(
+                await session.scalar(select(func.count(BalanceAdjustment.id))) or 0
+            )
+            assert [user.balance for user in users] == [5_000, 5_000]
+            assert [rental.status for rental in rentals] == ["refunded", "refunded"]
+            assert adjustments == 2
         await engine.dispose()
 
     asyncio.run(scenario())
