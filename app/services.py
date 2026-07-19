@@ -1,3 +1,4 @@
+import asyncio
 import logging
 import secrets
 from collections.abc import Awaitable, Callable
@@ -104,6 +105,40 @@ async def buy_supplier_product(
             return await client.buy(product_id, quantity)
         return await client.buy(product_id, quantity, idempotency_key=idempotency_key)
     except SupplierError as exc:
+        if (
+            provider == "lehai"
+            and exc.code == "INSUFFICIENT_BALANCE"
+            and idempotency_key
+        ):
+            try:
+                snapshot = await client.fetch_snapshot(product_id)
+            except SupplierError:
+                snapshot = None
+            if snapshot is not None and snapshot.effective_stock >= quantity:
+                logger.warning(
+                    "Le Hai purchase balance mismatch; retrying safely: "
+                    "product=%s quantity=%s balance=%s unit_price=%s",
+                    product_id,
+                    quantity,
+                    snapshot.owner_balance,
+                    snapshot.unit_price,
+                )
+                await asyncio.sleep(0.5)
+                try:
+                    return await client.buy(
+                        product_id,
+                        quantity,
+                        idempotency_key=idempotency_key,
+                    )
+                except SupplierError as retry_exc:
+                    logger.warning(
+                        "Le Hai safe retry failed: product=%s quantity=%s code=%s detail=%s",
+                        product_id,
+                        quantity,
+                        retry_exc.code,
+                        str(retry_exc),
+                    )
+                    raise retry_exc
         if exc.code not in RECOVERABLE_SUPPLIER_ERRORS:
             raise
         if provider != "sumistore":
@@ -652,11 +687,13 @@ async def _purchase_product(
                     )
                 except SupplierError as exc:
                     logger.warning(
-                        "Supplier purchase failed: provider=%s product=%s quantity=%s code=%s",
+                        "Supplier purchase failed: provider=%s product=%s quantity=%s "
+                        "code=%s detail=%s",
                         product.fulfillment_source,
                         product.supplier_product_id,
                         quantity,
                         exc.code,
+                        str(exc),
                     )
                     if exc.code == "INSUFFICIENT_STOCK":
                         product.external_stock = 0

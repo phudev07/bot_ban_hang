@@ -16,7 +16,7 @@ from app.lehai_suppliers import (
     sync_lehai_products,
 )
 from app.models import Category, Deposit, Order, Product, SupplierBalanceTransaction, User
-from app.services import process_sepay_payment, purchase_product
+from app.services import buy_supplier_product, process_sepay_payment, purchase_product
 from app.suppliers import SupplierError, SupplierPurchase, SupplierSnapshot
 from app.utils import SecretCipher
 
@@ -150,6 +150,62 @@ def test_lehai_purchase_uses_idempotency_and_extracts_delivered_items() -> None:
             "https://offer.test/two",
         )
         assert purchase.provider == "lehai"
+
+    asyncio.run(scenario())
+
+
+def test_lehai_balance_mismatch_retries_with_same_idempotency_key() -> None:
+    class BalanceMismatchSupplier:
+        provider = "lehai"
+
+        def __init__(self) -> None:
+            self.calls: list[str | None] = []
+
+        async def fetch_snapshot(self, product_id: str) -> SupplierSnapshot:
+            return SupplierSnapshot(
+                product_id=product_id,
+                name="Link GG Pro Jio 18M",
+                description="Jio family link",
+                unit_price=27_000,
+                source_stock=100,
+                owner_balance=173_000,
+            )
+
+        async def buy(
+            self,
+            product_id: str,
+            quantity: int,
+            *,
+            idempotency_key: str | None = None,
+        ) -> SupplierPurchase:
+            self.calls.append(idempotency_key)
+            if len(self.calls) == 1:
+                raise SupplierError("INSUFFICIENT_BALANCE", "stale provider balance")
+            return SupplierPurchase(
+                order_code="LHP-RETRY-OK",
+                unit_price=27_000,
+                accounts=("https://offer.test/retried",),
+                product_id=product_id,
+                provider=self.provider,
+            )
+
+    async def scenario() -> None:
+        engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+        async with engine.begin() as connection:
+            await connection.run_sync(Base.metadata.create_all)
+        sessions = async_sessionmaker(engine, expire_on_commit=False)
+        supplier = BalanceMismatchSupplier()
+        async with sessions() as session:
+            purchase = await buy_supplier_product(
+                session,
+                supplier,  # type: ignore[arg-type]
+                "cdk_ggpro_18m",
+                1,
+                idempotency_key="tg-callback-retry",
+            )
+            assert purchase.accounts == ("https://offer.test/retried",)
+            assert supplier.calls == ["tg-callback-retry", "tg-callback-retry"]
+        await engine.dispose()
 
     asyncio.run(scenario())
 
