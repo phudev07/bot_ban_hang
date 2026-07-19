@@ -142,3 +142,35 @@ def test_temporary_supplier_error_does_not_create_a_false_stock_alert() -> None:
         await engine.dispose()
 
     asyncio.run(scenario())
+
+
+def test_stock_increase_while_available_is_queued() -> None:
+    async def scenario() -> None:
+        engine, sessions = await make_database()
+        async with sessions() as session:
+            category = Category(name_vi="API", name_en="API")
+            session.add(category)
+            await session.flush()
+            product = Product(
+                category_id=category.id,
+                name_vi="Stock increase",
+                name_en="Stock increase",
+                price=20_000,
+                fulfillment_source="sumistore",
+                supplier_available_stock=8,
+                supplier_available_stock_initialized=True,
+                external_stock=8,
+            )
+            session.add(product)
+            await session.commit()
+
+            assert await apply_supplier_stock(session, product, 12) is True
+            product.external_stock = 12
+            await session.commit()
+            alert = await session.scalar(select(ProductStockAlert))
+            assert alert is not None
+            assert alert.stock_before == 8
+            assert alert.stock_after == 12
+        await engine.dispose()
+
+    asyncio.run(scenario())

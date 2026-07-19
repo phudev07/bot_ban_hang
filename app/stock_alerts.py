@@ -9,7 +9,7 @@ async def apply_supplier_stock(
     product: Product,
     supplier_available_stock: int,
 ) -> bool:
-    """Store successful supplier stock and queue one alert for a 0-to-positive change."""
+    """Store successful supplier stock and queue one alert whenever stock increases."""
     if product.id is None:
         return False
 
@@ -46,7 +46,7 @@ async def apply_supplier_stock(
             pending.status = "superseded"
         return False
 
-    if not was_initialized or previous_stock > 0 or new_stock <= 0:
+    if not was_initialized or new_stock <= previous_stock:
         return False
 
     session.add(
