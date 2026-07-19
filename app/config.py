@@ -78,7 +78,7 @@ class Settings(BaseSettings):
     rentsim_cooldown_seconds: int = 60
     rentsim_snapshot_cache_seconds: int = 10
     rentsim_request_recovery_seconds: int = 120
-    rentsim_pending_alert_seconds: int = 300
+    rentsim_pending_alert_seconds: int = 900
 
     shop_api_enabled: bool = True
     shop_api_base_url: str = "https://token.vietshare.site/v1"

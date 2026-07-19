@@ -138,12 +138,12 @@ def test_rentsim_success_without_an_otp_stays_pending() -> None:
     asyncio.run(scenario())
 
 
-def test_rentsim_extracts_otp_from_success_message() -> None:
+def test_rentsim_accepts_otp_while_provider_status_is_pending() -> None:
     async def handler(_request: httpx.Request) -> httpx.Response:
         return httpx.Response(
             200,
             json={
-                "status": "Successed",
+                "status": "Pending",
                 "id": "ORDER-CONTENT",
                 "content": "Your ChatGPT verification code is 123456.",
             },

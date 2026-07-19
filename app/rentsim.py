@@ -245,6 +245,17 @@ class RentSimClient:
         payload = await self._get(f"api/order/{order_id}/{self.api_key}")
         status_text = str(payload.get("status") or "").lower()
         message = str(payload.get("message") or "")
+        code, content = self._otp_fields(payload)
+        # RentSim can populate code/content several minutes before changing
+        # Pending to Successed. A real OTP is the authoritative success signal.
+        if code:
+            return RentSimOtp(
+                status="success",
+                order_id=str(payload.get("id") or order_id),
+                service_name=str(payload.get("serviceName") or self.service_id),
+                code=code,
+                content=content,
+            )
         if status_text == "error":
             error = self._error(payload, "OTP_ERROR")
             if error.code == "TIMEOUT":
@@ -252,19 +263,10 @@ class RentSimClient:
                 return RentSimOtp(status="timeout", order_id=order_id)
             raise error
         if status_text in {"success", "successed", "completed"}:
-            code, content = self._otp_fields(payload)
-            if not code:
-                return RentSimOtp(
-                    status="pending",
-                    order_id=str(payload.get("id") or order_id),
-                    service_name=str(payload.get("serviceName") or self.service_id),
-                )
             return RentSimOtp(
-                status="success",
+                status="pending",
                 order_id=str(payload.get("id") or order_id),
                 service_name=str(payload.get("serviceName") or self.service_id),
-                code=code,
-                content=content,
             )
         # RentSim reports refunded/failed orders with a terminal status rather
         # than the documented Timeout error payload. Do not leave these orders

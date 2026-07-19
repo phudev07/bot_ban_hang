@@ -503,7 +503,7 @@ async def recent_sms_rentals(
 async def pending_sms_review_alerts(
     session_factory: async_sessionmaker[AsyncSession],
     *,
-    pending_alert_seconds: int = 300,
+    pending_alert_seconds: int = 900,
     limit: int = 50,
     now: datetime | None = None,
 ) -> list[SmsReviewAlert]:
