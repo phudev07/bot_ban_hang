@@ -436,6 +436,8 @@ def test_dashboard_shows_sale_alert_history(tmp_path) -> None:
                         status="sent",
                         total_recipients=10,
                         delivered_count=10,
+                        message_vi="📦 HÀNG MỚI VỀ\n\nSản phẩm: GPT Plus sale",
+                        message_en="📦 PRODUCT BACK IN STOCK\n\nProduct: GPT Plus sale",
                         sent_at=datetime.now(UTC),
                     ),
                 ]
@@ -477,6 +479,8 @@ def test_dashboard_shows_sale_alert_history(tmp_path) -> None:
         assert "BACK IN STOCK HISTORY" in broadcasts.text
         assert "GPT Plus sale" in broadcasts.text
         assert "10/10" in broadcasts.text
+        assert "Xem nội dung" in broadcasts.text
+        assert "HÀNG MỚI VỀ" in broadcasts.text
 
     asyncio.run(engine.dispose())
 

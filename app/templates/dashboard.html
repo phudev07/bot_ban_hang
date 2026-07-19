@@ -75,9 +75,19 @@
 
 <section class="panel">
   <div class="panel-head"><div><span>BACK IN STOCK</span><h2>Lịch sử hàng mới về</h2></div><div><strong>{{ stock_alert_count }} lần phát hiện</strong> <a href="/admin/broadcasts">Xem đầy đủ &rarr;</a></div></div>
-  <div class="table-wrap"><table><thead><tr><th>Lần nhập</th><th>Sản phẩm</th><th>Tồn mới</th><th>Giá shop</th><th>Trạng thái</th><th>Đã gửi</th><th>Thời gian</th></tr></thead><tbody>
-    {% for row in recent_stock_alerts %}<tr><td><code>#{{ row.alert.id }}</code><small>{{ row.alert.provider }}</small></td><td><strong>{{ row.product.name_vi }}</strong><small><code>{{ row.product.supplier_product_id }}</code></small></td><td><strong>{{ row.alert.stock_after }}</strong><small>trước đó {{ row.alert.stock_before }}</small></td><td>{{ row.alert.sale_price|vnd }}</td><td><span class="status {{ 'on' if row.alert.status == 'sent' else ('wait' if row.alert.status in ('pending', 'sending') else 'off') }}">{{ row.alert.status }}</span></td><td>{{ row.alert.delivered_count }}/{{ row.alert.total_recipients }}</td><td>{{ (row.alert.sent_at or row.alert.created_at)|localtime }}</td></tr>
-    {% else %}<tr><td colspan="7" class="empty">Chưa có lịch sử hàng API về lại.</td></tr>{% endfor %}
+  <div class="table-wrap"><table><thead><tr><th>Lần nhập</th><th>Sản phẩm</th><th>Tồn mới</th><th>Giá shop</th><th>Trạng thái</th><th>Đã gửi</th><th>Nội dung</th><th>Thời gian</th></tr></thead><tbody>
+    {% for row in recent_stock_alerts %}
+    <tr>
+      <td><code>#{{ row.alert.id }}</code><small>{{ row.alert.provider }}</small></td>
+      <td><strong>{{ row.product.name_vi }}</strong><small><code>{{ row.product.supplier_product_id }}</code></small></td>
+      <td><strong>{{ row.alert.stock_after }}</strong><small>trước đó {{ row.alert.stock_before }}</small></td>
+      <td>{{ row.alert.sale_price|vnd }}</td>
+      <td><span class="status {{ 'on' if row.alert.status == 'sent' else ('wait' if row.alert.status in ('pending', 'sending') else 'off') }}">{{ row.alert.status }}</span></td>
+      <td>{{ row.alert.delivered_count }}/{{ row.alert.total_recipients }}</td>
+      <td><details class="notification-preview"><summary>Xem nội dung</summary><pre>{{ row.alert.message_vi or 'Chưa lưu nội dung.' }}</pre></details></td>
+      <td>{{ (row.alert.sent_at or row.alert.created_at)|localtime }}</td>
+    </tr>
+    {% else %}<tr><td colspan="8" class="empty">Chưa có lịch sử hàng API về lại.</td></tr>{% endfor %}
   </tbody></table></div>
 </section>
 

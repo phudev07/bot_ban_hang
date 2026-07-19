@@ -67,7 +67,7 @@
   <div class="panel-head"><div><span>BACK IN STOCK HISTORY</span><h2>Hàng mới về tự động</h2></div><strong>{{ stock_alert_count }} lần phát hiện</strong></div>
   <div class="table-wrap">
     <table>
-      <thead><tr><th>Lần nhập</th><th>Sản phẩm</th><th>Tồn mới</th><th>Giá shop</th><th>Trạng thái</th><th>Đã giao</th><th>Thời gian</th></tr></thead>
+      <thead><tr><th>Lần nhập</th><th>Sản phẩm</th><th>Tồn mới</th><th>Giá shop</th><th>Trạng thái</th><th>Đã giao</th><th>Nội dung gửi</th><th>Thời gian</th></tr></thead>
       <tbody>
         {% for row in stock_alerts %}
         <tr>
@@ -77,10 +77,18 @@
           <td>{{ row.alert.sale_price|vnd }}</td>
           <td><span class="status {{ 'on' if row.alert.status == 'sent' else ('wait' if row.alert.status in ('pending', 'sending') else 'off') }}">{{ row.alert.status }}</span></td>
           <td><strong>{{ row.alert.delivered_count }}/{{ row.alert.total_recipients }}</strong><small>Lỗi {{ row.alert.failed_count }}</small></td>
+          <td>
+            <details class="notification-preview">
+              <summary>Xem nội dung</summary>
+              <strong>Tiếng Việt</strong>
+              <pre>{{ row.alert.message_vi or 'Chưa lưu nội dung.' }}</pre>
+              {% if row.alert.message_en %}<strong>English</strong><pre>{{ row.alert.message_en }}</pre>{% endif %}
+            </details>
+          </td>
           <td>{{ (row.alert.sent_at or row.alert.created_at)|localtime }}</td>
         </tr>
         {% else %}
-        <tr><td colspan="7" class="empty">Chưa phát hiện lần hàng API về lại nào.</td></tr>
+        <tr><td colspan="8" class="empty">Chưa phát hiện lần hàng API về lại nào.</td></tr>
         {% endfor %}
       </tbody>
     </table>

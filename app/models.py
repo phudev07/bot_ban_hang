@@ -118,6 +118,9 @@ class ProductStockAlert(Base):
     total_recipients: Mapped[int] = mapped_column(default=0)
     delivered_count: Mapped[int] = mapped_column(default=0)
     failed_count: Mapped[int] = mapped_column(default=0)
+    # Keep the exact localized templates that were sent for audit/history.
+    message_vi: Mapped[str | None] = mapped_column(Text, nullable=True)
+    message_en: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), index=True
     )

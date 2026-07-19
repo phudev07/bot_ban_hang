@@ -104,6 +104,8 @@ def test_stock_return_is_queued_once_and_sent_to_started_users() -> None:
             assert alerts[0].total_recipients == 3
             assert alerts[0].delivered_count == 2
             assert alerts[0].failed_count == 1
+            assert alerts[0].message_vi == bot.calls[0][1]
+            assert alerts[0].message_en == bot.calls[1][1]
             assert blocked is not None and blocked.has_started is False
         await engine.dispose()
 

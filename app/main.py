@@ -14,7 +14,7 @@ from sqlalchemy import select, text
 
 from app.admin import create_admin_router
 from app.api import create_api
-from app.broadcasts import sale_alert_worker
+from app.broadcasts import backfill_stock_alert_messages, sale_alert_worker
 from app.config import get_settings
 from app.database import Base, DatabaseSessionMiddleware, create_database
 from app.handlers import create_router
@@ -146,6 +146,18 @@ async def initialize_database(engine, session_factory, seed_demo_data: bool) -> 
             text(
                 "ALTER TABLE products ADD COLUMN IF NOT EXISTS "
                 "supplier_available_stock_initialized BOOLEAN NOT NULL DEFAULT FALSE"
+            )
+        )
+        await connection.execute(
+            text(
+                "ALTER TABLE product_stock_alerts ADD COLUMN IF NOT EXISTS "
+                "message_vi TEXT NULL"
+            )
+        )
+        await connection.execute(
+            text(
+                "ALTER TABLE product_stock_alerts ADD COLUMN IF NOT EXISTS "
+                "message_en TEXT NULL"
             )
         )
         await connection.execute(
@@ -693,6 +705,7 @@ async def main() -> None:
     await ensure_lehai_products(session_factory, settings)
     lehai_client = create_lehai_client(settings)
     await sync_lehai_products(session_factory, lehai_client)
+    await backfill_stock_alert_messages(session_factory)
     rentsim_client = create_rentsim_client(settings)
     if supplier_client is not None:
         try:

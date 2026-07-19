@@ -415,11 +415,52 @@ async def _claim_stock_alert(
                 stock=product.external_stock,
                 recipients=recipients,
             )
+            # Snapshot the outgoing content so the admin history remains an
+            # accurate audit trail even after the product name or price changes.
+            alert.message_vi = stock_alert_text(payload, "vi")
+            alert.message_en = stock_alert_text(payload, "en")
             await session.commit()
             return payload
 
         await session.commit()
     return None
+
+
+async def backfill_stock_alert_messages(
+    session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    """Populate message snapshots for alerts created before history support."""
+    async with session_factory() as session:
+        rows = list(
+            (
+                await session.execute(
+                    select(ProductStockAlert, Product)
+                    .join(Product, Product.id == ProductStockAlert.product_id)
+                    .where(
+                        or_(
+                            ProductStockAlert.message_vi.is_(None),
+                            ProductStockAlert.message_en.is_(None),
+                        )
+                    )
+                )
+            ).all()
+        )
+        for alert, product in rows:
+            payload = StockAlertPayload(
+                alert_id=alert.id,
+                product_id=product.id,
+                name_vi=product.name_vi,
+                name_en=product.name_en,
+                price=alert.sale_price,
+                stock=alert.stock_after,
+                recipients=(),
+            )
+            if alert.message_vi is None:
+                alert.message_vi = stock_alert_text(payload, "vi")
+            if alert.message_en is None:
+                alert.message_en = stock_alert_text(payload, "en")
+        if rows:
+            await session.commit()
 
 
 async def _send_stock_alert(
