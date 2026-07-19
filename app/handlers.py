@@ -374,7 +374,9 @@ def create_router(
                 f"{connection_line}\n\n"
                 "Wallet balance only. A direct QR payment is not available for SMS rentals. "
                 "If no OTP arrives, you can rent another number after 60 seconds.\n"
-                "Numbers that do not receive an OTP are refunded to your wallet."
+                "Numbers that do not receive an OTP are refunded to your wallet.\n\n"
+                "An OTP may arrive after 8-10 minutes. If you rent a new number and the old "
+                "number later receives an OTP, both rentals are charged."
             )
         else:
             connection_line = (
@@ -389,7 +391,9 @@ def create_router(
                 f"{connection_line}\n\n"
                 "Chỉ thanh toán bằng số dư ví, không có QR thanh toán trực tiếp.\n\n"
                 "Nếu không có OTP có thể thuê số khác sau 60 giây.\n"
-                "Các số thuê không nhận được OTP sẽ được hoàn tiền về ví."
+                "Các số thuê không nhận được OTP sẽ được hoàn tiền về ví.\n\n"
+                "OTP có thể về sau 8-10 phút. Nếu bạn thuê số mới và số cũ sau đó vẫn nhận "
+                "được mã, cả hai lượt thuê đều được tính phí."
             )
         if callback.message:
             await edit_or_send_text(
@@ -529,11 +533,15 @@ def create_router(
         waiting_text = (
             "⏳ <b>Waiting for the ChatGPT OTP...</b>\n\n"
             "The bot checks automatically. If no verification code arrives, the rental price "
-            "is returned to your wallet. You may rent another number after 60 seconds."
+            "is returned to your wallet. You may rent another number after 60 seconds.\n\n"
+            "An OTP may arrive after 8-10 minutes. If you rent a new number and the old "
+            "number later receives an OTP, both rentals are charged."
             if user.language == "en"
             else "⏳ <b>Đang chờ OTP ChatGPT...</b>\n\n"
             "Bot đang tự kiểm tra OTP. Nếu không nhận được mã, tiền thuê sẽ tự động hoàn "
-            "về ví. Bạn có thể thuê số khác sau 60 giây."
+            "về ví. Bạn có thể thuê số khác sau 60 giây.\n\n"
+            "OTP có thể về sau 8-10 phút. Nếu bạn thuê số mới và số cũ sau đó vẫn nhận "
+            "được mã, cả hai lượt thuê đều được tính phí."
         )
         if callback.message:
             waiting_message = await callback.message.answer(
