@@ -12,6 +12,7 @@ from app.broadcasts import deliver_broadcast
 from app.config import Settings
 from app.models import Category, InventoryItem, Order, Product, User
 from app.states import BroadcastStates
+from app.suppliers import EXTERNAL_FULFILLMENT_SOURCES
 from app.utils import SecretCipher, format_vnd
 
 
@@ -241,7 +242,7 @@ def create_admin_router(settings: Settings, cipher: SecretCipher) -> Router:
             return
         lines = ["📦 <b>Danh sách sản phẩm</b>"]
         for product in products:
-            if product.fulfillment_source == "sumistore":
+            if product.fulfillment_source in EXTERNAL_FULFILLMENT_SOURCES:
                 stock = max(0, product.external_stock)
             else:
                 stock = int(

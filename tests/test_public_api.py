@@ -1,7 +1,9 @@
 import asyncio
+import hashlib
 import json
 import secrets
 import time
+from datetime import UTC, datetime, timedelta
 
 from cryptography.fernet import Fernet
 from fastapi.testclient import TestClient
@@ -89,8 +91,9 @@ def signed_headers(
     body: bytes = b"",
     *,
     idempotency_key: str | None = None,
+    timestamp_value: int | None = None,
 ) -> dict[str, str]:
-    timestamp = str(int(time.time()))
+    timestamp = str(timestamp_value if timestamp_value is not None else int(time.time()))
     nonce = secrets.token_hex(12)
     headers = {
         "X-Shop-API-ID": api_id,
@@ -424,4 +427,160 @@ def test_rotated_secret_immediately_invalidates_old_secret(tmp_path) -> None:
         )
         assert rejected.status_code == 401
         assert accepted.status_code == 200
+    asyncio.run(engine.dispose())
+
+
+def test_public_api_rate_limit_uses_server_time_bucket(tmp_path) -> None:
+    async def setup_database():
+        database_path = (tmp_path / "api-rate-limit.db").as_posix()
+        engine = create_async_engine(f"sqlite+aiosqlite:///{database_path}")
+        async with engine.begin() as connection:
+            await connection.run_sync(Base.metadata.create_all)
+        sessions = async_sessionmaker(engine, expire_on_commit=False)
+        cipher = SecretCipher(Fernet.generate_key().decode())
+        async with sessions() as session:
+            user = User(telegram_id=41001, full_name="Rate limited partner")
+            session.add(user)
+            await session.flush()
+            api_client, api_secret = await ensure_api_client(
+                session,
+                user.telegram_id,
+                cipher,
+                1,
+            )
+            await session.commit()
+        return engine, sessions, cipher, api_client.api_id, api_secret
+
+    engine, sessions, cipher, api_id, api_secret = asyncio.run(setup_database())
+    assert api_secret is not None
+    settings = Settings(
+        _env_file=None,
+        bot_token="123456:ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghi",
+        inventory_encryption_key=Fernet.generate_key().decode(),
+        sepay_enabled=False,
+        shop_api_enabled=True,
+    )
+    app = create_api(
+        settings,
+        sessions,
+        FakeBot(),  # type: ignore[arg-type]
+        cipher,
+        api_redis=FakeRedis(),  # type: ignore[arg-type]
+    )
+    current = int(time.time())
+    with TestClient(app, base_url="https://testserver") as client:
+        first = client.get(
+            "/v1/account",
+            headers=signed_headers(
+                api_id,
+                api_secret,
+                "GET",
+                "/v1/account",
+                timestamp_value=current,
+            ),
+        )
+        second = client.get(
+            "/v1/account",
+            headers=signed_headers(
+                api_id,
+                api_secret,
+                "GET",
+                "/v1/account",
+                timestamp_value=current - 60,
+            ),
+        )
+        assert first.status_code == 200
+        assert second.status_code == 429
+        assert second.json()["detail"]["code"] == "RATE_LIMITED"
+    asyncio.run(engine.dispose())
+
+
+def test_stale_processing_idempotency_request_can_be_retried(tmp_path) -> None:
+    async def setup_database():
+        database_path = (tmp_path / "api-stale-request.db").as_posix()
+        engine = create_async_engine(f"sqlite+aiosqlite:///{database_path}")
+        async with engine.begin() as connection:
+            await connection.run_sync(Base.metadata.create_all)
+        sessions = async_sessionmaker(engine, expire_on_commit=False)
+        cipher = SecretCipher(Fernet.generate_key().decode())
+        async with sessions() as session:
+            user = User(telegram_id=42001, full_name="Stale request buyer", balance=20_000)
+            category = Category(name_vi="API", name_en="API")
+            session.add_all([user, category])
+            await session.flush()
+            product = Product(
+                category_id=category.id,
+                name_vi="Stale request product",
+                name_en="Stale request product",
+                price=10_000,
+                allow_quantity=True,
+                max_quantity=10,
+            )
+            session.add(product)
+            await session.flush()
+            session.add(
+                InventoryItem(
+                    product_id=product.id,
+                    encrypted_secret=cipher.encrypt("stale-account|password"),
+                )
+            )
+            api_client, api_secret = await ensure_api_client(
+                session,
+                user.telegram_id,
+                cipher,
+                60,
+            )
+            request_hash = hashlib.sha256(
+                json.dumps(
+                    {"coupon_code": None, "product_id": product.id, "quantity": 1},
+                    sort_keys=True,
+                    separators=(",", ":"),
+                ).encode()
+            ).hexdigest()
+            old = datetime.now(UTC) - timedelta(hours=1)
+            session.add(
+                ApiOrderRequest(
+                    api_client_id=api_client.id,
+                    idempotency_key="STALE-REQ-001",
+                    request_hash=request_hash,
+                    status="processing",
+                    created_at=old,
+                    updated_at=old,
+                )
+            )
+            await session.commit()
+        return engine, sessions, cipher, product.id, api_client.api_id, api_secret
+
+    engine, sessions, cipher, product_id, api_id, api_secret = asyncio.run(setup_database())
+    assert api_secret is not None
+    settings = Settings(
+        _env_file=None,
+        bot_token="123456:ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghi",
+        inventory_encryption_key=Fernet.generate_key().decode(),
+        sepay_enabled=False,
+        shop_api_enabled=True,
+    )
+    app = create_api(
+        settings,
+        sessions,
+        FakeBot(),  # type: ignore[arg-type]
+        cipher,
+        api_redis=FakeRedis(),  # type: ignore[arg-type]
+    )
+    body = json.dumps({"product_id": product_id, "quantity": 1}, separators=(",", ":")).encode()
+    with TestClient(app, base_url="https://testserver") as client:
+        response = client.post(
+            "/v1/orders",
+            content=body,
+            headers=signed_headers(
+                api_id,
+                api_secret,
+                "POST",
+                "/v1/orders",
+                body,
+                idempotency_key="STALE-REQ-001",
+            ),
+        )
+        assert response.status_code == 200
+        assert response.json()["order"]["accounts"] == ["stale-account|password"]
     asyncio.run(engine.dispose())

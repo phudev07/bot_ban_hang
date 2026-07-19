@@ -38,6 +38,7 @@ from app.utils import SecretCipher
 
 templates = Jinja2Templates(directory=Path(__file__).parent / "templates")
 logger = logging.getLogger(__name__)
+API_PROCESSING_RECOVERY_AFTER = timedelta(minutes=15)
 
 
 CLOUDFLARE_NETWORKS = tuple(
@@ -198,11 +199,12 @@ def create_public_api_router(
             raise api_error(503, "API_DISABLED", "Shop API is disabled")
         if not all((x_shop_api_id, x_timestamp, x_nonce, x_signature)):
             raise api_error(401, "AUTH_REQUIRED", "Missing API authentication headers")
+        current_timestamp = int(time.time())
         try:
             timestamp = int(x_timestamp)
         except ValueError as exc:
             raise api_error(401, "INVALID_TIMESTAMP", "Invalid timestamp") from exc
-        if abs(int(time.time()) - timestamp) > settings.shop_api_signature_tolerance_seconds:
+        if abs(current_timestamp - timestamp) > settings.shop_api_signature_tolerance_seconds:
             raise api_error(401, "EXPIRED_REQUEST", "Request timestamp is outside the allowed window")
         if len(x_nonce) < 12 or len(x_nonce) > 128:
             raise api_error(401, "INVALID_NONCE", "Nonce must contain 12-128 characters")
@@ -248,7 +250,9 @@ def create_public_api_router(
                 )
                 if not nonce_added:
                     raise api_error(409, "REPLAYED_REQUEST", "Nonce has already been used")
-                minute = timestamp // 60
+                # Use server time so clients cannot spread requests over
+                # multiple buckets with different valid request timestamps.
+                minute = current_timestamp // 60
                 rate_key = f"shop-api:rate:{api_client.id}:{minute}"
                 current_rate = await redis_client.incr(rate_key)
                 if current_rate == 1:
@@ -416,6 +420,25 @@ def create_public_api_router(
                     order_request.error_code = None
                     await session.commit()
                     claimed = True
+                elif order_request.status == "processing":
+                    updated_at = order_request.updated_at or order_request.created_at
+                    if updated_at is None:
+                        updated_at = datetime.min.replace(tzinfo=UTC)
+                    elif updated_at.tzinfo is None:
+                        updated_at = updated_at.replace(tzinfo=UTC)
+                    if updated_at <= datetime.now(UTC) - API_PROCESSING_RECOVERY_AFTER:
+                        # A worker can die after claiming the key but before
+                        # creating orders. Let the partner safely retry the
+                        # same idempotency key after the recovery window.
+                        order_request.error_code = "STALE_REQUEST_RECOVERED"
+                        await session.commit()
+                        claimed = True
+                    else:
+                        raise api_error(
+                            409,
+                            "REQUEST_IN_PROGRESS",
+                            "The original request is processing",
+                        )
                 elif order_request.status == "failed":
                     raise api_error(
                         409,
