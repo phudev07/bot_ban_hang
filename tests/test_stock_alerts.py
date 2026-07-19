@@ -45,7 +45,7 @@ def test_stock_return_is_queued_once_and_sent_to_started_users() -> None:
                 name_en="GPT Plus",
                 price=11_000,
                 fulfillment_source="sumistore",
-                supplier_product_id="SP-GPT",
+                supplier_product_id="SP-GEF55PBV",
                 external_stock=0,
                 supplier_synced_at=datetime.now(UTC),
             )
@@ -125,6 +125,7 @@ def test_temporary_supplier_error_does_not_create_a_false_stock_alert() -> None:
                 name_en="Stable stock",
                 price=20_000,
                 fulfillment_source="sumistore",
+                supplier_product_id="SP-GEF55PBV",
                 external_stock=8,
                 supplier_available_stock=8,
                 supplier_available_stock_initialized=True,
@@ -159,6 +160,7 @@ def test_stock_increase_while_available_is_queued() -> None:
                 name_en="Stock increase",
                 price=20_000,
                 fulfillment_source="sumistore",
+                supplier_product_id="SP-GEF55PBV",
                 supplier_available_stock=8,
                 supplier_available_stock_initialized=True,
                 external_stock=8,
@@ -173,6 +175,36 @@ def test_stock_increase_while_available_is_queued() -> None:
             assert alert is not None
             assert alert.stock_before == 8
             assert alert.stock_after == 12
+        await engine.dispose()
+
+    asyncio.run(scenario())
+
+
+def test_non_alert_product_updates_stock_without_queueing_notification() -> None:
+    async def scenario() -> None:
+        engine, sessions = await make_database()
+        async with sessions() as session:
+            category = Category(name_vi="ChatGPT", name_en="ChatGPT")
+            session.add(category)
+            await session.flush()
+            product = Product(
+                category_id=category.id,
+                name_vi="GPT trắng",
+                name_en="ChatGPT white",
+                price=2_500,
+                fulfillment_source="sumistore",
+                supplier_product_id="SP-JMYJL2PL",
+                external_stock=0,
+            )
+            session.add(product)
+            await session.flush()
+
+            assert await apply_supplier_stock(session, product, 100) is False
+            product.external_stock = 100
+            await session.commit()
+
+            assert product.supplier_available_stock == 100
+            assert await session.scalar(select(ProductStockAlert.id)) is None
         await engine.dispose()
 
     asyncio.run(scenario())

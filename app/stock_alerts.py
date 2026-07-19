@@ -1,7 +1,22 @@
-from sqlalchemy import select
+from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models import Product, ProductStockAlert
+
+
+# Only these three shop products are advertised as automatic "back in stock"
+# notifications. Other products remain sellable but stay quiet in Telegram.
+STOCK_ALERT_PRODUCT_IDS = frozenset(
+    {
+        "SP-GEF55PBV",  # GPT Plus
+        "cdk_pixel",  # CDK GG Pixel 1Y
+        "cdk_ggpro_18m",  # Link GG Pro Jio 18M
+    }
+)
+
+
+def stock_alert_enabled(product: Product) -> bool:
+    return product.supplier_product_id in STOCK_ALERT_PRODUCT_IDS
 
 
 async def apply_supplier_stock(
@@ -27,6 +42,17 @@ async def apply_supplier_stock(
     was_initialized = locked_product.supplier_available_stock_initialized
     locked_product.supplier_available_stock = new_stock
     locked_product.supplier_available_stock_initialized = True
+
+    if not stock_alert_enabled(locked_product):
+        await session.execute(
+            update(ProductStockAlert)
+            .where(
+                ProductStockAlert.product_id == locked_product.id,
+                ProductStockAlert.status == "pending",
+            )
+            .values(status="superseded")
+        )
+        return False
 
     pending = await session.scalar(
         select(ProductStockAlert)

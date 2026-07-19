@@ -10,6 +10,7 @@ from sqlalchemy import or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.models import BroadcastLog, Product, ProductPriceAlert, ProductStockAlert, User
+from app.stock_alerts import stock_alert_enabled
 from app.utils import format_vnd, safe_html
 
 
@@ -389,6 +390,7 @@ async def _claim_stock_alert(
                 not product.active
                 or product.fulfillment_source != alert.provider
                 or product.external_stock <= 0
+                or not stock_alert_enabled(product)
             ):
                 alert.status = "superseded"
                 continue
