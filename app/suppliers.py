@@ -25,6 +25,11 @@ logger = logging.getLogger(__name__)
 
 EXTERNAL_FULFILLMENT_SOURCES = ("sumistore", "lehai")
 SELLABLE_FULFILLMENT_SOURCES = ("local", *EXTERNAL_FULFILLMENT_SOURCES)
+DEFINITIVE_PRODUCT_UNAVAILABLE_CODES = {
+    "PRODUCT_NOT_FOUND",
+    "SUPPLIER_PRODUCT_MISSING",
+    "SUPPLIER_HTTP_404",
+}
 SUMISTORE_RECOVERY_ATTEMPTS = 8
 SUMISTORE_RECOVERY_DELAY_SECONDS = 2.0
 
@@ -505,6 +510,9 @@ async def refresh_external_product(
         snapshot = await client.fetch_snapshot(product.supplier_product_id)
     except SupplierError as exc:
         product.external_stock = recovered_stock
+        if exc.code in DEFINITIVE_PRODUCT_UNAVAILABLE_CODES:
+            await apply_supplier_stock(session, product, 0)
+            product.supplier_synced_at = datetime.now(UTC)
         await session.flush()
         logger.warning(
             "Supplier sync failed for product %s: code=%s",

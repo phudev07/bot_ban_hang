@@ -10,8 +10,14 @@ from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from app.config import Settings
 from app.database import Base
-from app.models import Category, InventoryItem, Product
-from app.suppliers import SumistoreClient, ensure_sumistore_product, refresh_external_product
+from app.models import Category, InventoryItem, Product, ProductStockAlert
+from app.suppliers import (
+    SumistoreClient,
+    SupplierError,
+    SupplierSnapshot,
+    ensure_sumistore_product,
+    refresh_external_product,
+)
 
 
 def test_sumistore_snapshot_uses_balance_limited_stock() -> None:
@@ -106,6 +112,67 @@ def test_sumistore_stock_includes_recovered_local_inventory() -> None:
 
             assert stock == 3
             assert product.external_stock == 3
+        await engine.dispose()
+
+    asyncio.run(scenario())
+
+
+def test_removed_supplier_product_arms_back_in_stock_alert() -> None:
+    class AvailabilitySupplier:
+        unavailable = True
+
+        async def fetch_snapshot(self, product_id: str) -> SupplierSnapshot:
+            if self.unavailable:
+                raise SupplierError("PRODUCT_NOT_FOUND")
+            return SupplierSnapshot(
+                product_id=product_id,
+                name="ChatGPT Plus",
+                description="Available again",
+                unit_price=10_000,
+                source_stock=4,
+                owner_balance=100_000,
+            )
+
+    async def scenario() -> None:
+        engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+        async with engine.begin() as connection:
+            await connection.run_sync(Base.metadata.create_all)
+        sessions = async_sessionmaker(engine, expire_on_commit=False)
+        client = AvailabilitySupplier()
+        async with sessions() as session:
+            category = Category(name_vi="ChatGPT", name_en="ChatGPT")
+            session.add(category)
+            await session.flush()
+            product = Product(
+                category_id=category.id,
+                name_vi="ChatGPT Plus",
+                name_en="ChatGPT Plus",
+                price=15_000,
+                fulfillment_source="sumistore",
+                supplier_product_id="SP-GEF55PBV",
+                supplier_markup=5_000,
+                supplier_price=10_000,
+                external_stock=5,
+                supplier_available_stock=5,
+                supplier_available_stock_initialized=True,
+                supplier_synced_at=datetime.now(UTC),
+            )
+            session.add(product)
+            await session.commit()
+
+            assert await refresh_external_product(session, product, client) == 0  # type: ignore[arg-type]
+            await session.commit()
+            assert product.supplier_available_stock == 0
+            assert await session.scalar(select(ProductStockAlert.id)) is None
+
+            client.unavailable = False
+            assert await refresh_external_product(session, product, client) == 4  # type: ignore[arg-type]
+            await session.commit()
+            alert = await session.scalar(select(ProductStockAlert))
+            assert alert is not None
+            assert alert.stock_before == 0
+            assert alert.stock_after == 4
+            assert alert.sale_price == 15_000
         await engine.dispose()
 
     asyncio.run(scenario())

@@ -12,7 +12,12 @@ from app.config import Settings
 from app.models import Category, InventoryItem, Product
 from app.price_alerts import apply_supplier_price
 from app.stock_alerts import apply_supplier_stock
-from app.suppliers import SupplierError, SupplierPurchase, SupplierSnapshot
+from app.suppliers import (
+    DEFINITIVE_PRODUCT_UNAVAILABLE_CODES,
+    SupplierError,
+    SupplierPurchase,
+    SupplierSnapshot,
+)
 
 
 logger = logging.getLogger(__name__)
@@ -345,6 +350,9 @@ async def refresh_lehai_product(
         snapshot = await client.fetch_snapshot(product.supplier_product_id)
     except SupplierError as exc:
         product.external_stock = recovered_stock
+        if exc.code in DEFINITIVE_PRODUCT_UNAVAILABLE_CODES:
+            await apply_supplier_stock(session, product, 0)
+            product.supplier_synced_at = datetime.now(UTC)
         await session.flush()
         logger.warning(
             "Le Hai supplier sync failed for product %s: code=%s",
