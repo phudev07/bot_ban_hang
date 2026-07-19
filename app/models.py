@@ -264,6 +264,7 @@ class SmsRental(Base):
     source_stock: Mapped[int] = mapped_column(default=0)
     otp_code: Mapped[str | None] = mapped_column(String(64), nullable=True)
     otp_content: Mapped[str | None] = mapped_column(Text, nullable=True)
+    rental_message_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
     waiting_message_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
     failure_reason: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
     last_error: Mapped[str | None] = mapped_column(String(255), nullable=True)

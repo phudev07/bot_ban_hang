@@ -54,6 +54,7 @@ class SmsRentResult:
 class SmsPollNotification:
     rental_id: int
     user_id: int
+    rental_message_id: int | None
     waiting_message_id: int | None
     status: str
     shop_order_code: str
@@ -342,6 +343,25 @@ async def attach_sms_waiting_message(
             return True
 
 
+async def attach_sms_rental_message(
+    session_factory: async_sessionmaker[AsyncSession],
+    rental_id: int,
+    user_id: int,
+    message_id: int,
+) -> bool:
+    async with session_factory() as session:
+        async with session.begin():
+            rental = await session.scalar(
+                select(SmsRental)
+                .where(SmsRental.id == rental_id, SmsRental.user_id == user_id)
+                .with_for_update()
+            )
+            if rental is None or rental.status not in ACTIVE_SMS_STATUSES:
+                return False
+            rental.rental_message_id = message_id
+            return True
+
+
 async def refund_sms_rental(
     session_factory: async_sessionmaker[AsyncSession],
     rental_id: int,
@@ -371,6 +391,7 @@ async def refund_sms_rental(
             return SmsPollNotification(
                 rental_id=rental.id,
                 user_id=rental.user_id,
+                rental_message_id=rental.rental_message_id,
                 waiting_message_id=rental.waiting_message_id,
                 status=rental.status,
                 shop_order_code=rental.shop_order_code or f"SMS{rental.id}",
@@ -451,6 +472,7 @@ async def poll_pending_sms_rentals(
                     SmsPollNotification(
                         rental_id=rental.id,
                         user_id=rental.user_id,
+                        rental_message_id=rental.rental_message_id,
                         waiting_message_id=rental.waiting_message_id,
                         status=rental.status,
                         shop_order_code=rental.shop_order_code or f"SMS{rental.id}",
@@ -540,6 +562,7 @@ async def poll_pending_sms_rentals(
                     SmsPollNotification(
                         rental_id=rental.id,
                         user_id=rental.user_id,
+                        rental_message_id=rental.rental_message_id,
                         waiting_message_id=rental.waiting_message_id,
                         status=rental.status,
                         shop_order_code=rental.shop_order_code or f"SMS{rental.id}",

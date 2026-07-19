@@ -45,6 +45,12 @@ async def initialize_database(engine, session_factory, seed_demo_data: bool) -> 
         await connection.run_sync(Base.metadata.create_all)
         await connection.execute(
             text(
+                "ALTER TABLE sms_rentals ADD COLUMN IF NOT EXISTS "
+                "rental_message_id BIGINT NULL"
+            )
+        )
+        await connection.execute(
+            text(
                 "ALTER TABLE deposits ADD COLUMN IF NOT EXISTS "
                 "payment_kind VARCHAR(20) NOT NULL DEFAULT 'wallet'"
             )
@@ -504,11 +510,19 @@ async def rentsim_otp_worker(
                     if item.status == "refunded":
                         # Keep the refund visible as a separate notification instead
                         # of replacing the original waiting message.
-                        if item.waiting_message_id is not None:
+                        message_ids = {
+                            message_id
+                            for message_id in (
+                                item.rental_message_id,
+                                item.waiting_message_id,
+                            )
+                            if message_id is not None
+                        }
+                        for message_id in message_ids:
                             try:
                                 await bot.delete_message(
                                     chat_id=item.user_id,
-                                    message_id=item.waiting_message_id,
+                                    message_id=message_id,
                                 )
                             except TelegramBadRequest:
                                 pass

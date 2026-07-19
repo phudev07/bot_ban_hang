@@ -55,6 +55,7 @@ from app.services import (
     user_activity_stats,
 )
 from app.sms_rentals import (
+    attach_sms_rental_message,
     attach_sms_waiting_message,
     recent_sms_rentals,
     rent_sms_number,
@@ -489,7 +490,14 @@ def create_router(
             f"• Số dư ví: <b>{format_vnd(result.balance)}</b>"
         )
         if callback.message:
-            await edit_or_send_text(callback.message, phone_text)
+            rental_message = await edit_or_send_text(callback.message, phone_text)
+            if result.status == "pending":
+                await attach_sms_rental_message(
+                    session_factory,
+                    result.rental_id or 0,
+                    user.telegram_id,
+                    rental_message.message_id,
+                )
         if result.status == "success":
             otp_text = (
                 "✅ <b>OTP received</b>\n\n"
