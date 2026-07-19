@@ -23,8 +23,10 @@ async def apply_supplier_stock(
     session: AsyncSession,
     product: Product,
     supplier_available_stock: int,
+    *,
+    notify_on_increase: bool = True,
 ) -> bool:
-    """Store successful supplier stock and queue one alert whenever stock increases."""
+    """Store supplier stock and optionally queue a balance-funded alert."""
     if product.id is None:
         return False
 
@@ -72,7 +74,7 @@ async def apply_supplier_stock(
             pending.status = "superseded"
         return False
 
-    if not was_initialized or new_stock <= previous_stock:
+    if not notify_on_increase or not was_initialized or new_stock <= previous_stock:
         return False
 
     session.add(

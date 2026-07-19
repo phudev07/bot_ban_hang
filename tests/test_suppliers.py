@@ -117,6 +117,58 @@ def test_sumistore_stock_includes_recovered_local_inventory() -> None:
     asyncio.run(scenario())
 
 
+def test_price_drop_does_not_create_a_stock_alert_without_balance_topup() -> None:
+    class PriceDropSupplier:
+        async def fetch_snapshot(self, product_id: str) -> SupplierSnapshot:
+            return SupplierSnapshot(
+                product_id=product_id,
+                name="ChatGPT Plus",
+                description="Test",
+                unit_price=9_999,
+                source_stock=100,
+                owner_balance=100_000,
+            )
+
+    async def scenario() -> None:
+        engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+        async with engine.begin() as connection:
+            await connection.run_sync(Base.metadata.create_all)
+        sessions = async_sessionmaker(engine, expire_on_commit=False)
+        async with sessions() as session:
+            category = Category(name_vi="ChatGPT", name_en="ChatGPT")
+            session.add(category)
+            await session.flush()
+            product = Product(
+                category_id=category.id,
+                name_vi="ChatGPT Plus",
+                name_en="ChatGPT Plus",
+                price=15_000,
+                supplier_price=11_500,
+                supplier_product_id="SP-GEF55PBV",
+                fulfillment_source="sumistore",
+                external_stock=8,
+                supplier_available_stock=8,
+                supplier_available_stock_initialized=True,
+                supplier_owner_balance=100_000,
+            )
+            session.add(product)
+            await session.commit()
+
+            stock = await refresh_external_product(
+                session,
+                product,
+                PriceDropSupplier(),  # type: ignore[arg-type]
+            )
+            await session.commit()
+
+            assert stock == 10
+            assert product.supplier_owner_balance == 100_000
+            assert await session.scalar(select(ProductStockAlert.id)) is None
+        await engine.dispose()
+
+    asyncio.run(scenario())
+
+
 def test_removed_supplier_product_arms_back_in_stock_alert() -> None:
     class AvailabilitySupplier:
         unavailable = True
@@ -155,6 +207,7 @@ def test_removed_supplier_product_arms_back_in_stock_alert() -> None:
                 external_stock=5,
                 supplier_available_stock=5,
                 supplier_available_stock_initialized=True,
+                supplier_owner_balance=0,
                 supplier_synced_at=datetime.now(UTC),
             )
             session.add(product)

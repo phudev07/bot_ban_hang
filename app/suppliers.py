@@ -524,9 +524,21 @@ async def refresh_external_product(
             exc.code,
         )
         return product.external_stock
+    previous_owner_balance = product.supplier_owner_balance
+    current_owner_balance = max(0, snapshot.owner_balance)
+    balance_increased = (
+        previous_owner_balance is not None
+        and current_owner_balance > previous_owner_balance
+    )
+    product.supplier_owner_balance = current_owner_balance
     product.external_stock = snapshot.effective_stock + recovered_stock
     await apply_supplier_price(session, product, snapshot.unit_price)
-    await apply_supplier_stock(session, product, snapshot.effective_stock)
+    await apply_supplier_stock(
+        session,
+        product,
+        snapshot.effective_stock,
+        notify_on_increase=balance_increased,
+    )
     product.supplier_synced_at = datetime.now(UTC)
     await session.flush()
     return product.external_stock

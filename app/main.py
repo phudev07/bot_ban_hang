@@ -150,6 +150,20 @@ async def initialize_database(engine, session_factory, seed_demo_data: bool) -> 
         )
         await connection.execute(
             text(
+                "ALTER TABLE products ADD COLUMN IF NOT EXISTS "
+                "supplier_owner_balance BIGINT NULL"
+            )
+        )
+        await connection.execute(
+            text(
+                "UPDATE products SET supplier_owner_balance = supplier_balance_states.last_balance "
+                "FROM supplier_balance_states "
+                "WHERE products.fulfillment_source = supplier_balance_states.provider "
+                "AND products.supplier_owner_balance IS NULL"
+            )
+        )
+        await connection.execute(
+            text(
                 "ALTER TABLE product_stock_alerts ADD COLUMN IF NOT EXISTS "
                 "message_vi TEXT NULL"
             )
