@@ -7,7 +7,13 @@ from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 from app.database import Base
 from app.models import BalanceAdjustment, ReferralReward, SmsRental, User
 from app.rentsim import RentSimError, RentSimOtp, RentSimRental, RentSimSnapshot
-from app.sms_rentals import poll_pending_sms_rentals, refund_sms_rental, rent_sms_number
+from app.sms_rentals import (
+    mark_sms_review_alerted,
+    pending_sms_review_alerts,
+    poll_pending_sms_rentals,
+    refund_sms_rental,
+    rent_sms_number,
+)
 
 
 class FakeRentSim:
@@ -16,6 +22,7 @@ class FakeRentSim:
         self.rent_count = 0
         self.otp_status = "pending"
         self.rent_error: str | None = None
+        self.balance_after = 49_000
 
     async def fetch_snapshot(self, *, force: bool = False) -> RentSimSnapshot:
         assert force is True
@@ -41,6 +48,9 @@ class FakeRentSim:
             country_code="+855",
             service_name="ChatGPT",
         )
+
+    async def fetch_balance(self) -> int:
+        return self.balance_after
 
     async def fetch_otp(self, order_id: str) -> RentSimOtp:
         if self.otp_status == "success":
@@ -106,11 +116,19 @@ def test_sms_rental_charges_wallet_enforces_cooldown_and_unlocks_after_otp() -> 
         assert notifications[0].status == "success"
         assert notifications[0].otp_code == "654321"
 
-        next_rental = await rent_sms_number(
+        blocked = await rent_sms_number(
             sessions,
             1002,
             client,  # type: ignore[arg-type]
             now=started + timedelta(seconds=10),
+        )
+        assert blocked.ok is False and blocked.message == "cooldown"
+
+        next_rental = await rent_sms_number(
+            sessions,
+            1002,
+            client,  # type: ignore[arg-type]
+            now=started + timedelta(seconds=61),
         )
         assert next_rental.ok is True
         assert client.rent_count == 2
@@ -269,6 +287,49 @@ def test_sms_provider_failure_refunds_reserved_wallet_balance() -> None:
     asyncio.run(scenario())
 
 
+def test_ambiguous_provider_failure_holds_balance_for_review() -> None:
+    async def scenario() -> None:
+        engine, sessions = await make_database()
+        client = FakeRentSim()
+        client.rent_error = "PROVIDER_UNAVAILABLE"
+        async with sessions() as session:
+            session.add(User(telegram_id=3051, full_name="Buyer", balance=5_000))
+            await session.commit()
+
+        result = await rent_sms_number(
+            sessions,
+            3051,
+            client,  # type: ignore[arg-type]
+        )
+        assert result.ok is False
+        assert result.message == "provider_result_unknown"
+        assert result.status == "unknown"
+        assert result.provider_balance_before == 50_000
+        assert result.provider_balance_after == 49_000
+
+        blocked = await rent_sms_number(
+            sessions,
+            3051,
+            client,  # type: ignore[arg-type]
+            now=datetime.now(UTC) + timedelta(minutes=10),
+        )
+        assert blocked.message == "provider_result_unknown"
+        assert client.rent_count == 1
+        async with sessions() as session:
+            user = await session.get(User, 3051)
+            rental = await session.scalar(select(SmsRental))
+            adjustments = int(
+                await session.scalar(select(func.count(BalanceAdjustment.id))) or 0
+            )
+            assert user is not None and user.balance == 3_000
+            assert rental is not None and rental.status == "unknown"
+            assert rental.provider_balance_after == 49_000
+            assert adjustments == 0
+        await engine.dispose()
+
+    asyncio.run(scenario())
+
+
 def test_sms_rental_requires_wallet_balance_before_calling_provider() -> None:
     async def scenario() -> None:
         engine, sessions = await make_database()
@@ -297,7 +358,7 @@ def test_sms_rental_requires_wallet_balance_before_calling_provider() -> None:
     asyncio.run(scenario())
 
 
-def test_stale_request_is_recovered_after_process_interruption() -> None:
+def test_stale_request_is_held_for_review_after_process_interruption() -> None:
     async def scenario() -> None:
         engine, sessions = await make_database()
         client = FakeRentSim()
@@ -323,12 +384,75 @@ def test_stale_request_is_recovered_after_process_interruption() -> None:
         )
 
         assert len(notifications) == 1
-        assert notifications[0].status == "refunded"
+        assert notifications[0].status == "unknown"
         async with sessions() as session:
             user = await session.get(User, 4001)
             rental = await session.scalar(select(SmsRental))
-            assert user is not None and user.balance == 5_000
-            assert rental is not None and rental.failure_reason == "stale_request_recovery"
+            assert user is not None and user.balance == 3_000
+            assert rental is not None and rental.failure_reason == "stale_request_review"
+        await engine.dispose()
+
+    asyncio.run(scenario())
+
+
+def test_unknown_and_old_pending_rentals_alert_admin_once() -> None:
+    async def scenario() -> None:
+        engine, sessions = await make_database()
+        now = datetime.now(UTC)
+        async with sessions() as session:
+            user = User(telegram_id=5001, full_name="Buyer", balance=3_000)
+            session.add(user)
+            session.add_all(
+                [
+                    SmsRental(
+                        user_id=user.telegram_id,
+                        shop_order_code="SMS-UNKNOWN",
+                        status="unknown",
+                        sale_amount=2_000,
+                        cost_amount=1_000,
+                        requested_at=now,
+                    ),
+                    SmsRental(
+                        user_id=user.telegram_id,
+                        shop_order_code="SMS-OLD-PENDING",
+                        provider_order_id="ORDER-OLD",
+                        phone_number="+85511111111",
+                        status="pending",
+                        sale_amount=2_000,
+                        cost_amount=1_000,
+                        requested_at=now - timedelta(minutes=10),
+                    ),
+                    SmsRental(
+                        user_id=user.telegram_id,
+                        shop_order_code="SMS-RECENT",
+                        provider_order_id="ORDER-RECENT",
+                        phone_number="+85522222222",
+                        status="pending",
+                        sale_amount=2_000,
+                        cost_amount=1_000,
+                        requested_at=now - timedelta(seconds=30),
+                    ),
+                ]
+            )
+            await session.commit()
+
+        alerts = await pending_sms_review_alerts(
+            sessions,
+            pending_alert_seconds=300,
+            now=now,
+        )
+        assert {alert.shop_order_code for alert in alerts} == {
+            "SMS-UNKNOWN",
+            "SMS-OLD-PENDING",
+        }
+        unknown = next(alert for alert in alerts if alert.status == "unknown")
+        assert await mark_sms_review_alerted(sessions, unknown.rental_id, now=now) is True
+        remaining = await pending_sms_review_alerts(
+            sessions,
+            pending_alert_seconds=300,
+            now=now,
+        )
+        assert [alert.shop_order_code for alert in remaining] == ["SMS-OLD-PENDING"]
         await engine.dispose()
 
     asyncio.run(scenario())

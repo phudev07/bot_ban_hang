@@ -1,4 +1,5 @@
 import asyncio
+import re
 import time
 from dataclasses import dataclass
 
@@ -199,6 +200,15 @@ class RentSimClient:
     def invalidate_snapshot(self) -> None:
         self._snapshot_at = 0.0
 
+    @staticmethod
+    def _otp_fields(payload: dict[str, object]) -> tuple[str, str]:
+        content = str(payload.get("content") or "").strip()
+        code = str(payload.get("code") or "").strip()
+        if not code and content:
+            match = re.search(r"(?<!\d)(\d{4,8})(?!\d)", content)
+            code = match.group(1) if match else ""
+        return code, content
+
     async def rent(self) -> RentSimRental:
         payload = await self._get(
             f"api/{self.service_id}/{self.api_key}",
@@ -211,7 +221,14 @@ class RentSimClient:
         if not order_id or not phone_number:
             raise RentSimError("INVALID_RESPONSE")
         status_text = str(payload.get("status") or "Pending").lower()
-        status = "success" if status_text in {"success", "successed", "completed"} else "pending"
+        otp_code, otp_content = self._otp_fields(payload)
+        if status_text in {"failed", "cancelled", "canceled", "expired", "rejected"}:
+            raise RentSimError("RENT_FAILED")
+        status = (
+            "success"
+            if status_text in {"success", "successed", "completed"} and otp_code
+            else "pending"
+        )
         self.invalidate_snapshot()
         return RentSimRental(
             order_id=order_id,
@@ -220,8 +237,8 @@ class RentSimClient:
             phone_number_display=str(payload.get("phonenoprefix") or phone_number),
             country_code=str(payload.get("coutrycode") or payload.get("countrycode") or ""),
             service_name=str(payload.get("serviceName") or self.service_id),
-            otp_code=str(payload.get("code") or ""),
-            otp_content=str(payload.get("content") or ""),
+            otp_code=otp_code,
+            otp_content=otp_content,
         )
 
     async def fetch_otp(self, order_id: str) -> RentSimOtp:
@@ -235,12 +252,19 @@ class RentSimClient:
                 return RentSimOtp(status="timeout", order_id=order_id)
             raise error
         if status_text in {"success", "successed", "completed"}:
+            code, content = self._otp_fields(payload)
+            if not code:
+                return RentSimOtp(
+                    status="pending",
+                    order_id=str(payload.get("id") or order_id),
+                    service_name=str(payload.get("serviceName") or self.service_id),
+                )
             return RentSimOtp(
                 status="success",
                 order_id=str(payload.get("id") or order_id),
                 service_name=str(payload.get("serviceName") or self.service_id),
-                code=str(payload.get("code") or ""),
-                content=str(payload.get("content") or ""),
+                code=code,
+                content=content,
             )
         # RentSim reports refunded/failed orders with a terminal status rather
         # than the documented Timeout error payload. Do not leave these orders

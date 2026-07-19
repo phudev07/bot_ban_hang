@@ -261,6 +261,7 @@ class SmsRental(Base):
     sale_amount: Mapped[int] = mapped_column(BigInteger, default=0)
     cost_amount: Mapped[int] = mapped_column(BigInteger, default=0)
     provider_balance_before: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    provider_balance_after: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
     source_stock: Mapped[int] = mapped_column(default=0)
     otp_code: Mapped[str | None] = mapped_column(String(64), nullable=True)
     otp_content: Mapped[str | None] = mapped_column(Text, nullable=True)
@@ -277,6 +278,9 @@ class SmsRental(Base):
     )
     completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     refunded_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    review_alerted_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
 
 
 class ApiClient(Base):

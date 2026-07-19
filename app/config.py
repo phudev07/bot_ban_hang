@@ -78,6 +78,7 @@ class Settings(BaseSettings):
     rentsim_cooldown_seconds: int = 60
     rentsim_snapshot_cache_seconds: int = 10
     rentsim_request_recovery_seconds: int = 120
+    rentsim_pending_alert_seconds: int = 300
 
     shop_api_enabled: bool = True
     shop_api_base_url: str = "https://token.vietshare.site/v1"
@@ -159,6 +160,8 @@ class Settings(BaseSettings):
             raise ValueError("RentSim snapshot cache must be between 1 and 60 seconds")
         if not 60 <= self.rentsim_request_recovery_seconds <= 600:
             raise ValueError("RentSim request recovery must be between 60 and 600 seconds")
+        if not 60 <= self.rentsim_pending_alert_seconds <= 86_400:
+            raise ValueError("RentSim pending alert must be between 60 seconds and 24 hours")
         if self.shop_api_rate_limit_per_minute < 1:
             raise ValueError("Shop API rate limit must be positive")
         if self.shop_api_signature_tolerance_seconds < 30:

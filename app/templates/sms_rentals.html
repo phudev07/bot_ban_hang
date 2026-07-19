@@ -17,6 +17,7 @@
 <section class="metric-grid sms-metrics">
   <article class="metric"><span>Tổng lượt thuê</span><strong>{{ stats.total }}</strong><small>{{ stats.users }} người dùng đã thuê</small></article>
   <article class="metric"><span>Đang chờ OTP</span><strong>{{ stats.pending }}</strong><small>Bot tự kiểm tra theo chu kỳ</small></article>
+  <article class="metric danger-metric"><span>Cần đối soát</span><strong>{{ stats.unknown }}</strong><small>Kết quả thuê chưa xác định</small></article>
   <article class="metric"><span>Nhận OTP thành công</span><strong>{{ stats.success }}</strong><small>Doanh thu {{ stats.revenue|vnd }}</small></article>
   <article class="metric danger-metric"><span>Không có OTP / hoàn ví</span><strong>{{ stats.refunded }}</strong><small>Đã hoàn {{ stats.refund_total|vnd }}</small></article>
   <article class="metric"><span>Giá vốn thành công</span><strong>{{ stats.cost|vnd }}</strong><small>Chi phí RentSim thực tế</small></article>
@@ -26,7 +27,7 @@
 <section class="panel filter-panel">
   <form class="sms-filter" method="get" action="/admin/sms-rentals">
     <label>Tìm giao dịch<input name="q" value="{{ search }}" placeholder="Mã đơn, user, số điện thoại, OTP..."></label>
-    <label>Trạng thái<select name="status"><option value="all" {{ 'selected' if selected_status == 'all' else '' }}>Tất cả</option><option value="pending" {{ 'selected' if selected_status == 'pending' else '' }}>Đang chờ</option><option value="success" {{ 'selected' if selected_status == 'success' else '' }}>Thành công</option><option value="refunded" {{ 'selected' if selected_status == 'refunded' else '' }}>Đã hoàn ví</option></select></label>
+    <label>Trạng thái<select name="status"><option value="all" {{ 'selected' if selected_status == 'all' else '' }}>Tất cả</option><option value="pending" {{ 'selected' if selected_status == 'pending' else '' }}>Đang chờ</option><option value="unknown" {{ 'selected' if selected_status == 'unknown' else '' }}>Cần đối soát</option><option value="success" {{ 'selected' if selected_status == 'success' else '' }}>Thành công</option><option value="refunded" {{ 'selected' if selected_status == 'refunded' else '' }}>Đã hoàn ví</option></select></label>
     <button class="button primary" type="submit">Lọc dữ liệu</button>
     <a class="button quiet" href="/admin/sms-rentals">Xóa lọc</a>
   </form>
@@ -41,8 +42,8 @@
       <td><a class="text-link" href="/admin/users/{{ row.user.telegram_id }}">{{ row.user.full_name }}</a><small><code>{{ row.user.telegram_id }}</code> · @{{ row.user.username or '—' }}</small></td>
       <td><strong><code>{{ item.phone_number or '—' }}</code></strong><small>{{ item.phone_number_display or 'Cambodia' }}</small></td>
       <td><strong><code>{{ item.otp_code or '—' }}</code></strong><small class="sms-content">{{ item.otp_content or item.last_error or 'Chưa có nội dung OTP' }}</small></td>
-      <td><strong>{{ item.sale_amount|vnd }}</strong><small>Vốn {{ item.cost_amount|vnd }} · lãi {{ (item.sale_amount - item.cost_amount)|vnd }}</small></td>
-      <td>{% if item.status == 'success' %}<span class="status on">Thành công</span>{% elif item.status == 'refunded' %}<span class="status off">Đã hoàn ví</span>{% else %}<span class="status wait">Đang chờ</span>{% endif %}<small>{{ item.failure_reason or (item.poll_attempts ~ ' lần kiểm tra') }}</small></td>
+      <td><strong>{{ item.sale_amount|vnd }}</strong><small>Vốn {{ item.cost_amount|vnd }} · lãi {{ (item.sale_amount - item.cost_amount)|vnd }}</small>{% if item.provider_balance_before is not none %}<small>Nguồn {{ item.provider_balance_before|vnd }} → {% if item.provider_balance_after is not none %}{{ item.provider_balance_after|vnd }}{% else %}chưa đọc được{% endif %}</small>{% endif %}</td>
+      <td>{% if item.status == 'success' %}<span class="status on">Thành công</span>{% elif item.status == 'refunded' %}<span class="status off">Đã hoàn ví</span>{% elif item.status == 'unknown' %}<span class="status off">Cần đối soát</span>{% else %}<span class="status wait">Đang chờ</span>{% endif %}<small>{{ item.failure_reason or (item.poll_attempts ~ ' lần kiểm tra') }}</small></td>
       <td><strong>{{ item.requested_at|localtime }}</strong><small>Hoàn tất {{ item.completed_at|localtime }}</small></td>
     </tr>
     {% else %}<tr><td colspan="7" class="empty">Chưa có lượt thuê số SMS nào trong bộ lọc này.</td></tr>{% endfor %}

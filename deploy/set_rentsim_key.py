@@ -30,6 +30,7 @@ def main() -> None:
         "RENTSIM_COOLDOWN_SECONDS": "60",
         "RENTSIM_SNAPSHOT_CACHE_SECONDS": "10",
         "RENTSIM_REQUEST_RECOVERY_SECONDS": "120",
+        "RENTSIM_PENDING_ALERT_SECONDS": "300",
     }
     lines = env_path.read_text(encoding="utf-8").splitlines()
     updated: set[str] = set()

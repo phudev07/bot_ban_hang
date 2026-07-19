@@ -28,7 +28,11 @@ from app.models import Category, Product
 from app.payment_expiry import payment_expiry_worker
 from app.rate_limit import BotSpamProtectionMiddleware
 from app.rentsim import RentSimClient, create_rentsim_client
-from app.sms_rentals import poll_pending_sms_rentals
+from app.sms_rentals import (
+    mark_sms_review_alerted,
+    pending_sms_review_alerts,
+    poll_pending_sms_rentals,
+)
 from app.supplier_audit import reconcile_supplier_balance
 from app.suppliers import (
     ExternalSupplierClient,
@@ -47,6 +51,18 @@ async def initialize_database(engine, session_factory, seed_demo_data: bool) -> 
             text(
                 "ALTER TABLE sms_rentals ADD COLUMN IF NOT EXISTS "
                 "rental_message_id BIGINT NULL"
+            )
+        )
+        await connection.execute(
+            text(
+                "ALTER TABLE sms_rentals ADD COLUMN IF NOT EXISTS "
+                "provider_balance_after BIGINT NULL"
+            )
+        )
+        await connection.execute(
+            text(
+                "ALTER TABLE sms_rentals ADD COLUMN IF NOT EXISTS "
+                "review_alerted_at TIMESTAMPTZ NULL"
             )
         )
         await connection.execute(
@@ -459,9 +475,11 @@ async def rentsim_otp_worker(
     session_factory,
     client: RentSimClient,
     bot: Bot,
+    admin_ids: tuple[int, ...],
     poll_seconds: int,
     referral_commission_percent: int,
     request_recovery_seconds: int,
+    pending_alert_seconds: int,
 ) -> None:
     while True:
         try:
@@ -480,16 +498,16 @@ async def rentsim_otp_worker(
                         f"• Number: <code>{escape(item.phone_number)}</code>\n"
                         f"• OTP: <code>{escape(item.otp_code or '—')}</code>\n"
                         f"• Message: {escape(item.otp_content or '—')}\n\n"
-                        "You can rent another number immediately."
+                        "You can rent another number once 60 seconds have passed from this rental."
                         if item.language == "en"
                         else "✅ <b>Đã nhận được OTP</b>\n\n"
                         f"• Mã đơn: <code>{escape(item.shop_order_code)}</code>\n"
                         f"• Số điện thoại: <code>{escape(item.phone_number)}</code>\n"
                         f"• Mã OTP: <code>{escape(item.otp_code or '—')}</code>\n"
                         f"• Nội dung: {escape(item.otp_content or '—')}\n\n"
-                        "Bạn có thể thuê số tiếp theo ngay."
+                        "Bạn có thể thuê số tiếp theo sau khi đủ 60 giây tính từ lượt thuê này."
                     )
-                else:
+                elif item.status == "refunded":
                     text = (
                         "↩️ <b>No OTP received</b>\n\n"
                         f"• Order: <code>{escape(item.shop_order_code)}</code>\n"
@@ -504,6 +522,22 @@ async def rentsim_otp_worker(
                         f"• Đã hoàn ví: <b>{format_vnd(item.sale_amount)}</b>\n"
                         f"• Số dư hiện tại: <b>{format_vnd(item.balance)}</b>\n\n"
                         f"Số <code>{escape(item.phone_number or '—')}</code> không nhận được mã OTP nên tiền thuê đã được hoàn lại đầy đủ."
+                    )
+                else:
+                    text = (
+                        "⚠️ <b>SMS rental needs review</b>\n\n"
+                        f"• Order: <code>{escape(item.shop_order_code)}</code>\n"
+                        f"• Temporarily held: <b>{format_vnd(item.sale_amount)}</b>\n"
+                        f"• Wallet balance: <b>{format_vnd(item.balance)}</b>\n\n"
+                        "The provider result could not be confirmed. The shop has not marked the "
+                        "rental as successful and has not issued an unsafe automatic refund."
+                        if item.language == "en"
+                        else "⚠️ <b>Đơn thuê số cần đối soát</b>\n\n"
+                        f"• Mã đơn: <code>{escape(item.shop_order_code)}</code>\n"
+                        f"• Đang tạm giữ: <b>{format_vnd(item.sale_amount)}</b>\n"
+                        f"• Số dư ví: <b>{format_vnd(item.balance)}</b>\n\n"
+                        "Kết quả từ nguồn chưa xác định nên shop chưa tính là thuê thành công và "
+                        "không tự động hoàn nhầm. Admin đã được cảnh báo để kiểm tra."
                     )
                 markup = sms_waiting_menu(item.language, item.sale_amount)
                 try:
@@ -549,6 +583,50 @@ async def rentsim_otp_worker(
                         "Could not deliver RentSim OTP result for rental %s",
                         item.rental_id,
                     )
+            review_alerts = await pending_sms_review_alerts(
+                session_factory,
+                pending_alert_seconds=pending_alert_seconds,
+            )
+            for review in review_alerts:
+                before = (
+                    format_vnd(review.provider_balance_before)
+                    if review.provider_balance_before is not None
+                    else "không đọc được"
+                )
+                after = (
+                    format_vnd(review.provider_balance_after)
+                    if review.provider_balance_after is not None
+                    else "không đọc được"
+                )
+                status_label = (
+                    "kết quả thuê chưa xác định"
+                    if review.status == "unknown"
+                    else "chờ OTP quá lâu"
+                )
+                alert_text = (
+                    "🚨 <b>Đơn thuê SMS cần đối soát</b>\n\n"
+                    f"• Mã đơn: <code>{escape(review.shop_order_code)}</code>\n"
+                    f"• User: <code>{review.user_id}</code>\n"
+                    f"• Trạng thái: <b>{status_label}</b>\n"
+                    f"• Số thuê: <code>{escape(review.phone_number or '—')}</code>\n"
+                    f"• Số dư nguồn trước/sau: <b>{before} → {after}</b>\n"
+                    f"• Lỗi gần nhất: <code>{escape(review.last_error or '—')}</code>\n"
+                    f"• Đã kiểm tra OTP: <b>{review.poll_attempts}</b> lần\n\n"
+                    "Không hoàn thủ công nếu chưa xác minh đúng đơn tại nguồn."
+                )
+                delivered = False
+                for admin_id in admin_ids:
+                    try:
+                        await bot.send_message(admin_id, alert_text)
+                        delivered = True
+                    except Exception:
+                        logging.getLogger(__name__).exception(
+                            "Could not alert admin %s about SMS rental %s",
+                            admin_id,
+                            review.rental_id,
+                        )
+                if delivered:
+                    await mark_sms_review_alerted(session_factory, review.rental_id)
         except Exception:
             logging.getLogger(__name__).exception("Could not poll RentSim OTP orders")
         await asyncio.sleep(max(2, poll_seconds))
@@ -718,9 +796,11 @@ async def main() -> None:
                 session_factory,
                 rentsim_client,
                 bot,
+                settings.admin_ids,
                 settings.rentsim_poll_seconds,
                 settings.referral_commission_percent,
                 settings.rentsim_request_recovery_seconds,
+                settings.rentsim_pending_alert_seconds,
             )
         )
         if rentsim_client is not None

@@ -2554,7 +2554,7 @@ def create_dashboard_router(
             return redirect_to_login()
         selected_status = (
             status
-            if status in {"all", "pending", "success", "refunded"}
+            if status in {"all", "pending", "unknown", "success", "refunded"}
             else "all"
         )
         search = q.strip()[:100]
@@ -2596,6 +2596,7 @@ def create_dashboard_router(
                         func.count(SmsRental.id).filter(
                             SmsRental.status.in_(("requesting", "pending"))
                         ),
+                        func.count(SmsRental.id).filter(SmsRental.status == "unknown"),
                         func.count(SmsRental.id).filter(SmsRental.status == "success"),
                         func.count(SmsRental.id).filter(SmsRental.status == "refunded"),
                         func.count(func.distinct(SmsRental.user_id)),
@@ -2640,7 +2641,7 @@ def create_dashboard_router(
             settings.rentsim_markup,
             fallback_unit_cost=settings.rentsim_fallback_price,
         )
-        total, pending, success, refunded, users, revenue, cost, refund_total = (
+        total, pending, unknown, success, refunded, users, revenue, cost, refund_total = (
             int(value) for value in metrics
         )
         return templates.TemplateResponse(
@@ -2657,6 +2658,7 @@ def create_dashboard_router(
                 stats={
                     "total": total,
                     "pending": pending,
+                    "unknown": unknown,
                     "success": success,
                     "refunded": refunded,
                     "users": users,

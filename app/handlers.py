@@ -438,6 +438,11 @@ def create_router(
                     "blocked": "Your account is blocked. Please contact support.",
                     "invalid_key": "The SMS provider key is unavailable. Please try again later.",
                     "provider_unavailable": "The SMS provider is temporarily unavailable.",
+                    "provider_result_unknown": (
+                        f"The provider result is unclear. {format_vnd(result.sale_amount)} is "
+                        "temporarily held while the order is reviewed; it has not been marked "
+                        "as a successful rental or refunded yet."
+                    ),
                 }
                 text = f"⚠️ {messages.get(result.message, 'Could not rent a number. Your wallet was not charged.')}"
             else:
@@ -457,6 +462,11 @@ def create_router(
                     "blocked": "Tài khoản đang bị khóa. Hãy liên hệ hỗ trợ.",
                     "invalid_key": "Key nguồn thuê số đang lỗi. Hãy thử lại sau.",
                     "provider_unavailable": "Nguồn thuê số đang tạm gián đoạn.",
+                    "provider_result_unknown": (
+                        f"Kết quả thuê số chưa xác định. Khoản {format_vnd(result.sale_amount)} "
+                        "đang được tạm giữ để đối soát, chưa tính là thuê thành công và cũng chưa "
+                        "tự động hoàn nhầm. Admin đã được cảnh báo để kiểm tra."
+                    ),
                 }
                 default_message = (
                     "Không thể thuê số. Nếu ví đã bị trừ thì hệ thống đã tự động hoàn lại."
@@ -502,11 +512,13 @@ def create_router(
             otp_text = (
                 "✅ <b>OTP received</b>\n\n"
                 f"• Code: <code>{escape(result.otp_code or '—')}</code>\n"
-                f"• Message: {escape(result.otp_content or '—')}"
+                f"• Message: {escape(result.otp_content or '—')}\n\n"
+                "You can rent another number after 60 seconds from this rental."
                 if user.language == "en"
                 else "✅ <b>Đã nhận được OTP</b>\n\n"
                 f"• Mã OTP: <code>{escape(result.otp_code or '—')}</code>\n"
-                f"• Nội dung: {escape(result.otp_content or '—')}"
+                f"• Nội dung: {escape(result.otp_content or '—')}\n\n"
+                "Bạn có thể thuê số tiếp theo sau khi đủ 60 giây tính từ lượt thuê này."
             )
             if callback.message:
                 await callback.message.answer(
@@ -557,6 +569,7 @@ def create_router(
                 "pending": "đang chờ OTP",
                 "success": "thành công",
                 "refunded": "đã hoàn ví",
+                "unknown": "cần đối soát",
             }
             lines = []
             for rental in rentals:
@@ -567,6 +580,7 @@ def create_router(
                         "pending": "waiting for OTP",
                         "success": "success",
                         "refunded": "refunded",
+                        "unknown": "under review",
                     }.get(rental.status, rental.status)
                 code = f" · OTP {escape(rental.otp_code)}" if rental.otp_code else ""
                 lines.append(

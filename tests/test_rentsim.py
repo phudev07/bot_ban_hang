@@ -116,3 +116,47 @@ def test_rentsim_failed_order_is_a_terminal_refund_result() -> None:
         assert otp.order_id == "ORDER-FAILED"
 
     asyncio.run(scenario())
+
+
+def test_rentsim_success_without_an_otp_stays_pending() -> None:
+    async def handler(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json={"status": "Successed", "id": "ORDER-EMPTY", "content": ""},
+        )
+
+    async def scenario() -> None:
+        client = RentSimClient(
+            "http://supplier.test",
+            "secret-test",
+            transport=httpx.MockTransport(handler),
+        )
+        otp = await client.fetch_otp("ORDER-EMPTY")
+        assert otp.status == "pending"
+        assert otp.code == ""
+
+    asyncio.run(scenario())
+
+
+def test_rentsim_extracts_otp_from_success_message() -> None:
+    async def handler(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json={
+                "status": "Successed",
+                "id": "ORDER-CONTENT",
+                "content": "Your ChatGPT verification code is 123456.",
+            },
+        )
+
+    async def scenario() -> None:
+        client = RentSimClient(
+            "http://supplier.test",
+            "secret-test",
+            transport=httpx.MockTransport(handler),
+        )
+        otp = await client.fetch_otp("ORDER-CONTENT")
+        assert otp.status == "success"
+        assert otp.code == "123456"
+
+    asyncio.run(scenario())
