@@ -630,6 +630,8 @@ def test_dashboard_groups_multi_item_purchase_as_one_order(tmp_path) -> None:
         )
         home = client.get("/admin")
         assert "1 đơn hàng" in home.text
+        assert re.search(r"<dt>Nick [^<]+</dt><dd>2</dd>", home.text)
+        assert "2 nick trong tháng" in home.text
 
         orders_page = client.get("/admin/orders")
         assert orders_page.text.count("B-SHOP-123") == 1

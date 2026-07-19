@@ -174,6 +174,7 @@ async def financial_summary(
 ) -> dict[str, int | float]:
     statement = select(
         purchase_order_count(),
+        func.count(Order.id),
         func.coalesce(func.sum(Order.amount), 0),
         func.coalesce(func.sum(Order.cost_amount), 0),
         func.coalesce(func.sum(Order.discount_amount), 0),
@@ -184,7 +185,9 @@ async def financial_summary(
     )
     if start_at is not None:
         statement = statement.where(Order.created_at >= start_at)
-    order_count, revenue, cost, discount = (await session.execute(statement)).one()
+    order_count, account_count, revenue, cost, discount = (
+        await session.execute(statement)
+    ).one()
     sms_statement = select(
         func.count(SmsRental.id),
         func.coalesce(func.sum(SmsRental.sale_amount), 0),
@@ -206,6 +209,7 @@ async def financial_summary(
     profit = gross_profit - referral
     return {
         "orders": order_count,
+        "accounts": int(account_count),
         "revenue": revenue,
         "cost": cost,
         "gross_profit": gross_profit,
@@ -224,23 +228,30 @@ async def financial_summaries(
     def count_since(start_at: datetime):
         return purchase_order_count().filter(Order.created_at >= start_at)
 
+    def account_count_since(start_at: datetime):
+        return func.count(Order.id).filter(Order.created_at >= start_at)
+
     def sum_since(column, start_at: datetime):
         return func.coalesce(func.sum(column).filter(Order.created_at >= start_at), 0)
 
     statement = select(
         count_since(periods["today"]).label("today_orders"),
+        account_count_since(periods["today"]).label("today_accounts"),
         sum_since(Order.amount, periods["today"]).label("today_revenue"),
         sum_since(Order.cost_amount, periods["today"]).label("today_cost"),
         sum_since(Order.discount_amount, periods["today"]).label("today_discount"),
         count_since(periods["month"]).label("month_orders"),
+        account_count_since(periods["month"]).label("month_accounts"),
         sum_since(Order.amount, periods["month"]).label("month_revenue"),
         sum_since(Order.cost_amount, periods["month"]).label("month_cost"),
         sum_since(Order.discount_amount, periods["month"]).label("month_discount"),
         count_since(periods["year"]).label("year_orders"),
+        account_count_since(periods["year"]).label("year_accounts"),
         sum_since(Order.amount, periods["year"]).label("year_revenue"),
         sum_since(Order.cost_amount, periods["year"]).label("year_cost"),
         sum_since(Order.discount_amount, periods["year"]).label("year_discount"),
         purchase_order_count().label("all_orders"),
+        func.count(Order.id).label("all_accounts"),
         func.coalesce(func.sum(Order.amount), 0).label("all_revenue"),
         func.coalesce(func.sum(Order.cost_amount), 0).label("all_cost"),
         func.coalesce(func.sum(Order.discount_amount), 0).label("all_discount"),
@@ -366,6 +377,7 @@ async def financial_summaries(
         profit = gross_profit - referral
         result[key] = {
             "orders": int(fields[f"{key}_orders"]) + int(sms_fields[f"{key}_orders"]),
+            "accounts": int(fields[f"{key}_accounts"]),
             "revenue": revenue,
             "cost": cost,
             "gross_profit": gross_profit,
@@ -535,6 +547,10 @@ def create_dashboard_router(
             orders_today = int(financials["today"]["orders"])
             orders_month = int(financials["month"]["orders"])
             orders_year = int(financials["year"]["orders"])
+            accounts = int(financials["all"]["accounts"])
+            accounts_today = int(financials["today"]["accounts"])
+            accounts_month = int(financials["month"]["accounts"])
+            accounts_year = int(financials["year"]["accounts"])
             revenue = int(financials["all"]["revenue"])
             revenue_today = int(financials["today"]["revenue"])
             revenue_month = int(financials["month"]["revenue"])
@@ -651,6 +667,7 @@ def create_dashboard_router(
                 select(
                     Product,
                     purchase_order_count(),
+                    func.count(Order.id),
                     func.coalesce(func.sum(Order.amount), 0),
                     func.coalesce(func.sum(Order.cost_amount), 0),
                     func.coalesce(func.sum(Order.discount_amount), 0),
@@ -669,12 +686,13 @@ def create_dashboard_router(
                 {
                     "product": product,
                     "orders": int(count),
+                    "accounts": int(account_count),
                     "revenue": int(total),
                     "cost": int(cost),
                     "profit": int(total) - int(cost),
                     "discount": int(discount),
                 }
-                for product, count, total, cost, discount in top_product_rows
+                for product, count, account_count, total, cost, discount in top_product_rows
             ]
             sales_rows = await session.execute(
                 select(Order.created_at, Order.amount, Order.cost_amount)
@@ -790,6 +808,7 @@ def create_dashboard_router(
                 "profit": 0,
                 "discount": 0,
                 "orders": 0,
+                "accounts": 0,
             }
             for month in range(1, now_local.month + 1)
         }
@@ -805,6 +824,7 @@ def create_dashboard_router(
                 monthly_values[month]["cost"] += int(cost)
                 monthly_values[month]["profit"] += int(amount) - int(cost)
                 monthly_values[month]["discount"] += int(discount)
+                monthly_values[month]["accounts"] += 1
                 monthly_order_keys[month].add(str(group_key))
         for created_at, amount, cost, group_key in sms_year_sales_rows:
             if created_at is None:
@@ -848,6 +868,10 @@ def create_dashboard_router(
                     "orders_today": orders_today,
                     "orders_month": orders_month,
                     "orders_year": orders_year,
+                    "accounts": accounts,
+                    "accounts_today": accounts_today,
+                    "accounts_month": accounts_month,
+                    "accounts_year": accounts_year,
                     "revenue": revenue,
                     "revenue_today": revenue_today,
                     "revenue_month": revenue_month,

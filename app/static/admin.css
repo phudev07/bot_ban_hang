@@ -251,7 +251,7 @@ textarea { resize: vertical; }
 .finance-card.featured .finance-card-head b { color: var(--ink); background: var(--lime); }
 .finance-card.featured > strong { color: white; }
 .finance-card.featured dl { border-color: rgba(255,255,255,.2); }
-.operations-grid { display: grid; grid-template-columns: repeat(6, minmax(0,1fr)); gap: 10px; margin-bottom: 18px; }
+.operations-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 10px; margin-bottom: 18px; }
 .operations-grid article { padding: 15px; border: 1px solid var(--line); border-radius: 14px; background: #ece8dc; }
 .operations-grid span, .operations-grid small { display: block; color: var(--muted); font-size: 10px; }
 .operations-grid strong { display: block; margin: 8px 0 5px; font: 700 24px/1 "Fraunces", serif; }
