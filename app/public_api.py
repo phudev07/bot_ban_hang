@@ -32,7 +32,7 @@ from app.models import (
 from app.partner_services import api_signature
 from app.services import active_products, available_stock, purchase_product
 from app.suppliers import SumistoreClient
-from app.suppliers import EXTERNAL_FULFILLMENT_SOURCES
+from app.suppliers import EXTERNAL_FULFILLMENT_SOURCES, SELLABLE_FULFILLMENT_SOURCES
 from app.utils import SecretCipher
 
 
@@ -356,7 +356,12 @@ def create_public_api_router(
     ) -> dict[str, object]:
         async with session_factory() as session:
             product = await session.get(Product, product_id)
-            if product is None or not product.active or product.product_type != "account":
+            if (
+                product is None
+                or not product.active
+                or product.product_type != "account"
+                or product.fulfillment_source not in SELLABLE_FULFILLMENT_SOURCES
+            ):
                 raise api_error(404, "PRODUCT_NOT_FOUND", "Product does not exist")
             stock = await available_stock(session, product.id)
             return {
@@ -386,6 +391,26 @@ def create_public_api_router(
             request_hash=request_hash,
         )
         async with session_factory() as session:
+            # Only products exposed by the shop catalog may be ordered through
+            # the warehouse API. Keep idempotent replays working if a product
+            # is later disabled or removed from the catalog.
+            existing_request = await session.scalar(
+                select(ApiOrderRequest).where(
+                    ApiOrderRequest.api_client_id == principal.client.id,
+                    ApiOrderRequest.idempotency_key == normalized_key,
+                )
+            )
+            if existing_request is None:
+                product_exists = await session.scalar(
+                    select(Product.id).where(
+                        Product.id == body.product_id,
+                        Product.active.is_(True),
+                        Product.product_type == "account",
+                        Product.fulfillment_source.in_(SELLABLE_FULFILLMENT_SOURCES),
+                    )
+                )
+                if product_exists is None:
+                    raise api_error(404, "PRODUCT_NOT_FOUND", "Product does not exist")
             session.add(order_request)
             try:
                 await session.commit()

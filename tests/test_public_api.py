@@ -143,6 +143,17 @@ def test_warehouse_api_purchases_from_shared_wallet_and_is_idempotent(tmp_path) 
             )
             session.add(product)
             await session.flush()
+            sms_product = Product(
+                category_id=category.id,
+                name_vi="Thuê số SMS ChatGPT",
+                name_en="ChatGPT SMS rental",
+                price=2_000,
+                product_type="account",
+                fulfillment_source="rentsim",
+                active=True,
+            )
+            session.add(sms_product)
+            await session.flush()
             session.add_all(
                 [
                     InventoryItem(
@@ -159,9 +170,19 @@ def test_warehouse_api_purchases_from_shared_wallet_and_is_idempotent(tmp_path) 
                 60,
             )
             await session.commit()
-        return engine, sessions, cipher, product.id, api_client.api_id, api_secret
+        return (
+            engine,
+            sessions,
+            cipher,
+            product.id,
+            sms_product.id,
+            api_client.api_id,
+            api_secret,
+        )
 
-    engine, sessions, cipher, product_id, api_id, api_secret = asyncio.run(setup_database())
+    engine, sessions, cipher, product_id, sms_product_id, api_id, api_secret = asyncio.run(
+        setup_database()
+    )
     assert api_secret is not None
     settings = Settings(
         _env_file=None,
@@ -210,7 +231,35 @@ def test_warehouse_api_purchases_from_shared_wallet_and_is_idempotent(tmp_path) 
             headers=signed_headers(api_id, api_secret, "GET", "/v1/catalog"),
         )
         assert products.status_code == 200
+        assert products.json()["count"] == 1
         assert products.json()["products"][0]["stock"] == 2
+
+        for path in (f"/v1/products/{sms_product_id}", f"/v1/stock/{sms_product_id}"):
+            blocked_stock = client.get(
+                path,
+                headers=signed_headers(api_id, api_secret, "GET", path),
+            )
+            assert blocked_stock.status_code == 404
+            assert blocked_stock.json()["detail"]["code"] == "PRODUCT_NOT_FOUND"
+
+        blocked_body = json.dumps(
+            {"product_id": sms_product_id, "quantity": 1},
+            separators=(",", ":"),
+        ).encode()
+        blocked_order = client.post(
+            "/v1/orders",
+            content=blocked_body,
+            headers=signed_headers(
+                api_id,
+                api_secret,
+                "POST",
+                "/v1/orders",
+                blocked_body,
+                idempotency_key="SMS-ORDER-BLOCKED-01",
+            ),
+        )
+        assert blocked_order.status_code == 404
+        assert blocked_order.json()["detail"]["code"] == "PRODUCT_NOT_FOUND"
 
         first = client.post(
             "/v1/orders",
