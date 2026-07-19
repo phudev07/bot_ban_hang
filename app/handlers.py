@@ -447,6 +447,10 @@ def create_router(
                         "temporarily held while the order is reviewed; it has not been marked "
                         "as a successful rental or refunded yet."
                     ),
+                    "provider_error_refunded": (
+                        "RentSim returned a temporary error and did not charge its wallet. "
+                        "Your rental amount has been refunded. Please try again after 60 seconds."
+                    ),
                 }
                 text = f"⚠️ {messages.get(result.message, 'Could not rent a number. Your wallet was not charged.')}"
             else:
@@ -470,6 +474,11 @@ def create_router(
                         f"Kết quả thuê số chưa xác định. Khoản {format_vnd(result.sale_amount)} "
                         "đang được tạm giữ để đối soát, chưa tính là thuê thành công và cũng chưa "
                         "tự động hoàn nhầm. Admin đã được cảnh báo để kiểm tra."
+                    ),
+                    "provider_error_refunded": (
+                        "RentSim trả về lỗi tạm thời và không trừ tiền nguồn. "
+                        f"Khoản {format_vnd(result.sale_amount)} đã được hoàn vào ví. "
+                        "Bạn thử thuê lại sau 60 giây."
                     ),
                 }
                 default_message = (

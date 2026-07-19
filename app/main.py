@@ -509,21 +509,41 @@ async def rentsim_otp_worker(
                         "Bạn có thể thuê số tiếp theo sau khi đủ 60 giây tính từ lượt thuê này."
                     )
                 elif item.status == "refunded":
-                    text = (
-                        "↩️ <b>No OTP received</b>\n\n"
-                        f"• Order: <code>{escape(item.shop_order_code)}</code>\n"
-                        f"• Rented number: <code>{escape(item.phone_number or '—')}</code>\n"
-                        f"• Refunded: <b>{format_vnd(item.sale_amount)}</b>\n"
-                        f"• Wallet balance: <b>{format_vnd(item.balance)}</b>\n\n"
-                        "This rented number did not receive an OTP, so the rental was refunded in full."
-                        if item.language == "en"
-                        else "↩️ <b>Không nhận được OTP</b>\n\n"
-                        f"• Mã đơn: <code>{escape(item.shop_order_code)}</code>\n"
-                        f"• Số thuê: <code>{escape(item.phone_number or '—')}</code>\n"
-                        f"• Đã hoàn ví: <b>{format_vnd(item.sale_amount)}</b>\n"
-                        f"• Số dư hiện tại: <b>{format_vnd(item.balance)}</b>\n\n"
-                        f"Số <code>{escape(item.phone_number or '—')}</code> không nhận được mã OTP nên tiền thuê đã được hoàn lại đầy đủ."
-                    )
+                    request_failed = item.failure_reason == "provider_request_not_confirmed"
+                    if request_failed and item.language == "en":
+                        text = (
+                            "↩️ <b>SMS rental was refunded</b>\n\n"
+                            f"• Order: <code>{escape(item.shop_order_code)}</code>\n"
+                            f"• Refunded: <b>{format_vnd(item.sale_amount)}</b>\n"
+                            f"• Wallet balance: <b>{format_vnd(item.balance)}</b>\n\n"
+                            "RentSim did not create an order, so the full rental amount was refunded."
+                        )
+                    elif request_failed:
+                        text = (
+                            "↩️ <b>Đã hoàn tiền thuê số</b>\n\n"
+                            f"• Mã đơn: <code>{escape(item.shop_order_code)}</code>\n"
+                            f"• Đã hoàn ví: <b>{format_vnd(item.sale_amount)}</b>\n"
+                            f"• Số dư hiện tại: <b>{format_vnd(item.balance)}</b>\n\n"
+                            "RentSim không tạo đơn thuê nên toàn bộ tiền đã được hoàn lại."
+                        )
+                    elif item.language == "en":
+                        text = (
+                            "↩️ <b>No OTP received</b>\n\n"
+                            f"• Order: <code>{escape(item.shop_order_code)}</code>\n"
+                            f"• Rented number: <code>{escape(item.phone_number or '—')}</code>\n"
+                            f"• Refunded: <b>{format_vnd(item.sale_amount)}</b>\n"
+                            f"• Wallet balance: <b>{format_vnd(item.balance)}</b>\n\n"
+                            "This rented number did not receive an OTP, so the rental was refunded in full."
+                        )
+                    else:
+                        text = (
+                            "↩️ <b>Không nhận được OTP</b>\n\n"
+                            f"• Mã đơn: <code>{escape(item.shop_order_code)}</code>\n"
+                            f"• Số thuê: <code>{escape(item.phone_number or '—')}</code>\n"
+                            f"• Đã hoàn ví: <b>{format_vnd(item.sale_amount)}</b>\n"
+                            f"• Số dư hiện tại: <b>{format_vnd(item.balance)}</b>\n\n"
+                            f"Số <code>{escape(item.phone_number or '—')}</code> không nhận được mã OTP nên tiền thuê đã được hoàn lại đầy đủ."
+                        )
                 else:
                     text = (
                         "⚠️ <b>SMS rental needs review</b>\n\n"

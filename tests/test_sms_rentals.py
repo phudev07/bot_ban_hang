@@ -330,6 +330,92 @@ def test_ambiguous_provider_failure_holds_balance_for_review() -> None:
     asyncio.run(scenario())
 
 
+def test_http_500_with_unchanged_provider_balance_refunds_and_allows_retry() -> None:
+    async def scenario() -> None:
+        engine, sessions = await make_database()
+        client = FakeRentSim()
+        client.rent_error = "PROVIDER_HTTP_500"
+        client.balance_after = 50_000
+        started = datetime.now(UTC)
+        async with sessions() as session:
+            session.add(User(telegram_id=3061, full_name="Buyer", balance=5_000))
+            await session.commit()
+
+        failed = await rent_sms_number(
+            sessions,
+            3061,
+            client,  # type: ignore[arg-type]
+            now=started,
+        )
+        assert failed.ok is False
+        assert failed.message == "provider_error_refunded"
+        assert failed.status == "refunded"
+        assert failed.provider_balance_before == 50_000
+        assert failed.provider_balance_after == 50_000
+
+        client.rent_error = None
+        retried = await rent_sms_number(
+            sessions,
+            3061,
+            client,  # type: ignore[arg-type]
+            now=started + timedelta(seconds=61),
+        )
+        assert retried.ok is True
+        assert retried.status == "pending"
+        assert client.rent_count == 2
+        async with sessions() as session:
+            user = await session.get(User, 3061)
+            rentals = list(await session.scalars(select(SmsRental).order_by(SmsRental.id)))
+            assert user is not None and user.balance == 3_000
+            assert [rental.status for rental in rentals] == ["refunded", "pending"]
+        await engine.dispose()
+
+    asyncio.run(scenario())
+
+
+def test_old_unknown_request_with_unchanged_balance_is_auto_refunded() -> None:
+    async def scenario() -> None:
+        engine, sessions = await make_database()
+        client = FakeRentSim()
+        client.balance_after = 89_000
+        started = datetime.now(UTC) - timedelta(seconds=61)
+        async with sessions() as session:
+            user = User(telegram_id=3071, full_name="Buyer", balance=3_000)
+            session.add(user)
+            await session.flush()
+            session.add(
+                SmsRental(
+                    user_id=user.telegram_id,
+                    shop_order_code="SMS15",
+                    status="unknown",
+                    sale_amount=2_000,
+                    cost_amount=1_000,
+                    provider_balance_before=89_000,
+                    provider_balance_after=89_000,
+                    last_error="provider_http_500",
+                    requested_at=started,
+                )
+            )
+            await session.commit()
+
+        notifications = await poll_pending_sms_rentals(
+            sessions,
+            client,  # type: ignore[arg-type]
+            now=datetime.now(UTC),
+        )
+        assert len(notifications) == 1
+        assert notifications[0].status == "refunded"
+        assert notifications[0].failure_reason == "provider_request_not_confirmed"
+        async with sessions() as session:
+            user = await session.get(User, 3071)
+            rental = await session.scalar(select(SmsRental))
+            assert user is not None and user.balance == 5_000
+            assert rental is not None and rental.status == "refunded"
+        await engine.dispose()
+
+    asyncio.run(scenario())
+
+
 def test_sms_rental_requires_wallet_balance_before_calling_provider() -> None:
     async def scenario() -> None:
         engine, sessions = await make_database()
