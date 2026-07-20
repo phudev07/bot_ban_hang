@@ -6,9 +6,9 @@ from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
 from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message
 from sqlalchemy import func, select
-from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from app.broadcasts import deliver_broadcast
+from app.broadcasts import queue_broadcast
 from app.config import Settings
 from app.models import Category, InventoryItem, Order, Product, User
 from app.states import BroadcastStates
@@ -185,8 +185,7 @@ def create_admin_router(settings: Settings, cipher: SecretCipher) -> Router:
     )
     async def confirm_broadcast(
         callback: CallbackQuery,
-        bot: Bot,
-        session: AsyncSession,
+        session_factory: async_sessionmaker[AsyncSession],
         state: FSMContext,
     ) -> None:
         admin_id = callback.from_user.id if callback.from_user else None
@@ -202,35 +201,25 @@ def create_admin_router(settings: Settings, cipher: SecretCipher) -> Router:
             return
 
         await state.clear()
-        recipient_count = int(data.get("recipient_count", 0))
-        progress_message = None
         if callback.message:
             try:
                 await callback.message.edit_reply_markup(reply_markup=None)
             except TelegramBadRequest:
                 pass
-            progress_message = await callback.message.answer(
-                f"⏳ Đang gửi thông báo tới {recipient_count} người..."
-            )
-        await callback.answer("Đang gửi...")
-
-        result = await deliver_broadcast(
-            session,
-            bot,
+        queued = await queue_broadcast(
+            session_factory,
             admin_id=int(admin_id),
             source_chat_id=source_chat_id,
             source_message_id=source_message_id,
         )
-        result_text = (
-            "✅ <b>Đã gửi thông báo</b>\n\n"
-            f"• Thành công: <b>{result.delivered}</b>\n"
-            f"• Thất bại: <b>{result.failed}</b>\n"
-            f"• Tổng: <b>{result.total}</b>"
-        )
-        if progress_message:
-            await progress_message.edit_text(result_text)
-        elif callback.message:
-            await callback.message.answer(result_text)
+        await callback.answer("Đã đưa vào hàng chờ.")
+        if callback.message:
+            await callback.message.answer(
+                "✅ <b>Đã đưa thông báo vào hàng chờ</b>\n\n"
+                f"• Mã lần gửi: <code>#{queued.broadcast_id}</code>\n"
+                f"• Người nhận: <b>{queued.total}</b>\n\n"
+                "Xem tốc độ và kết quả trong trang Admin → Thông báo."
+            )
 
     @router.message(Command("products"))
     async def list_products(message: Message, session: AsyncSession) -> None:

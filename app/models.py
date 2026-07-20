@@ -536,4 +536,45 @@ class BroadcastLog(Base):
     total_recipients: Mapped[int] = mapped_column(default=0)
     delivered_count: Mapped[int] = mapped_column(default=0)
     failed_count: Mapped[int] = mapped_column(default=0)
+    status: Mapped[str] = mapped_column(
+        String(20), default="queued", server_default="queued", index=True
+    )
+    started_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    completed_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    last_error: Mapped[str | None] = mapped_column(String(500), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class BroadcastDelivery(Base):
+    __tablename__ = "broadcast_deliveries"
+    __table_args__ = (
+        UniqueConstraint(
+            "broadcast_id",
+            "user_id",
+            name="uq_broadcast_delivery_recipient",
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    broadcast_id: Mapped[int] = mapped_column(
+        ForeignKey("broadcast_logs.id", ondelete="CASCADE"), index=True
+    )
+    user_id: Mapped[int] = mapped_column(
+        ForeignKey("users.telegram_id", ondelete="CASCADE"), index=True
+    )
+    status: Mapped[str] = mapped_column(
+        String(20), default="pending", server_default="pending", index=True
+    )
+    attempt_count: Mapped[int] = mapped_column(default=0, server_default="0")
+    last_error: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    sent_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )

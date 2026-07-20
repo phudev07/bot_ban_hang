@@ -3,7 +3,7 @@
 {% block content %}
 <section class="metric-grid">
   <article class="metric accent"><span>Đang nhận tin</span><strong>{{ active_recipients }}</strong><small>Người đã dùng /start</small></article>
-  <article class="metric"><span>Lần phát</span><strong>{{ broadcast_count }}</strong><small>Thông báo đã xác nhận gửi</small></article>
+  <article class="metric"><span>Đang xử lý</span><strong>{{ active_broadcasts }}</strong><small>{{ broadcast_count }} chiến dịch trong lịch sử</small></article>
   <article class="metric"><span>Thành công</span><strong>{{ delivered_count }}</strong><small>Tổng lượt đã giao</small></article>
   <article class="metric"><span>Thất bại</span><strong>{{ failed_count }}</strong><small>Bot bị chặn hoặc lỗi gửi</small></article>
 </section>
@@ -12,17 +12,28 @@
   <section class="panel">
     <div class="panel-head"><div><span>BROADCAST HISTORY</span><h2>Toàn bộ lịch sử gửi</h2></div><small>100 lần mỗi trang</small></div>
     <div class="table-wrap">
-      <table>
-        <thead><tr><th>Lần gửi</th><th>Quản trị</th><th>Đối tượng</th><th>Đã giao</th><th>Lỗi</th><th>Thời gian</th></tr></thead>
+      <table class="broadcast-table">
+        <thead><tr><th>Lần gửi</th><th>Trạng thái</th><th>Tiến độ</th><th>Tốc độ</th><th>Thời lượng</th><th>Thời gian</th></tr></thead>
         <tbody>
-          {% for item in broadcasts %}
+          {% for row in broadcasts %}{% set item = row.broadcast %}
           <tr>
-            <td><code>#{{ item.id }}</code><small>Message {{ item.source_message_id }}</small></td>
-            <td><code>{{ item.admin_id }}</code></td>
-            <td>{{ item.total_recipients }}</td>
-            <td><span class="status on">{{ item.delivered_count }}</span></td>
-            <td><span class="status {{ 'off' if item.failed_count else 'on' }}">{{ item.failed_count }}</span></td>
-            <td>{{ item.created_at|localtime }}</td>
+            <td><code>#{{ item.id }}</code><small>Admin {{ item.admin_id }} · Message {{ item.source_message_id }}</small></td>
+            <td>
+              {% if item.status == 'completed' %}<span class="status on">Hoàn thành</span>
+              {% elif item.status == 'sending' %}<span class="status wait">Đang gửi</span>
+              {% elif item.status == 'queued' %}<span class="status wait">Chờ gửi</span>
+              {% else %}<span class="status off">{{ item.status }}</span>{% endif %}
+              {% if item.last_error %}<small>{{ item.last_error }}</small>{% endif %}
+            </td>
+            <td class="broadcast-progress-cell">
+              <div class="broadcast-progress"><i style="width: {{ (row.processed * 100 / item.total_recipients) if item.total_recipients else 100 }}%"></i></div>
+              <strong>{{ row.processed }}/{{ item.total_recipients }}</strong>
+              <small>Thành công {{ item.delivered_count }} · lỗi {{ item.failed_count }} · còn {{ row.remaining }}</small>
+              {% if row.failures %}<details class="broadcast-errors"><summary>Xem lỗi gửi</summary>{% for failure in row.failures %}<small>{{ failure.count }} × {{ failure.error }}</small>{% endfor %}</details>{% endif %}
+            </td>
+            <td><strong>{{ row.speed }} tin/s</strong></td>
+            <td><strong>{{ row.duration }}</strong></td>
+            <td><strong>{{ item.created_at|localtime }}</strong><small>Bắt đầu {{ item.started_at|localtime }}<br>Hoàn tất {{ item.completed_at|localtime }}</small></td>
           </tr>
           {% else %}
           <tr><td colspan="6" class="empty">Chưa có thông báo nào được gửi.</td></tr>
@@ -98,4 +109,7 @@
   </div>
   {{ render_pager(stock_pager, 'lần hàng về') }}
 </section>
+{% if auto_refresh %}
+<script>window.setTimeout(() => window.location.reload(), 10000);</script>
+{% endif %}
 {% endblock %}

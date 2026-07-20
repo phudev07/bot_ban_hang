@@ -17,6 +17,7 @@ from app.config import Settings
 from app.lehai_suppliers import LeHaiPremiumClient
 from app.models import (
     BalanceAdjustment,
+    BroadcastDelivery,
     BroadcastLog,
     ApiClient,
     ApiRequestAudit,
@@ -1947,6 +1948,14 @@ def create_dashboard_router(
             broadcast_count = int(
                 await session.scalar(select(func.count(BroadcastLog.id))) or 0
             )
+            active_broadcasts = int(
+                await session.scalar(
+                    select(func.count(BroadcastLog.id)).where(
+                        BroadcastLog.status.in_(("queued", "sending"))
+                    )
+                )
+                or 0
+            )
             delivered_count = int(
                 await session.scalar(
                     select(func.coalesce(func.sum(BroadcastLog.delivered_count), 0))
@@ -1965,7 +1974,7 @@ def create_dashboard_router(
                 broadcast_page,
                 page_parameter="broadcast_page",
             )
-            broadcasts = list(
+            broadcast_records = list(
                 await session.scalars(
                     select(BroadcastLog)
                     .order_by(BroadcastLog.id.desc())
@@ -1973,6 +1982,68 @@ def create_dashboard_router(
                     .limit(ADMIN_PAGE_SIZE)
                 )
             )
+            broadcast_ids = [broadcast.id for broadcast in broadcast_records]
+            failure_groups: dict[int, list[dict[str, object]]] = {}
+            if broadcast_ids:
+                for broadcast_id, error, count in await session.execute(
+                    select(
+                        BroadcastDelivery.broadcast_id,
+                        BroadcastDelivery.last_error,
+                        func.count(BroadcastDelivery.id),
+                    )
+                    .where(
+                        BroadcastDelivery.broadcast_id.in_(broadcast_ids),
+                        BroadcastDelivery.status == "failed",
+                    )
+                    .group_by(
+                        BroadcastDelivery.broadcast_id,
+                        BroadcastDelivery.last_error,
+                    )
+                    .order_by(BroadcastDelivery.broadcast_id.desc())
+                ):
+                    failure_groups.setdefault(int(broadcast_id), []).append(
+                        {
+                            "error": error or "Không rõ lỗi",
+                            "count": int(count),
+                        }
+                    )
+            now = datetime.now(UTC)
+            broadcasts = []
+            for broadcast in broadcast_records:
+                started_at = broadcast.started_at
+                completed_at = broadcast.completed_at
+                if started_at is not None and started_at.tzinfo is None:
+                    started_at = started_at.replace(tzinfo=UTC)
+                if completed_at is not None and completed_at.tzinfo is None:
+                    completed_at = completed_at.replace(tzinfo=UTC)
+                processed = broadcast.delivered_count + broadcast.failed_count
+                elapsed_seconds = 0
+                if started_at is not None:
+                    elapsed_seconds = max(
+                        0,
+                        int(((completed_at or now) - started_at).total_seconds()),
+                    )
+                if elapsed_seconds >= 60:
+                    minutes, seconds = divmod(elapsed_seconds, 60)
+                    duration = f"{minutes}p {seconds}s"
+                elif started_at is not None:
+                    duration = f"{elapsed_seconds}s"
+                else:
+                    duration = "—"
+                broadcasts.append(
+                    {
+                        "broadcast": broadcast,
+                        "processed": processed,
+                        "remaining": max(0, broadcast.total_recipients - processed),
+                        "speed": (
+                            round(processed / elapsed_seconds, 1)
+                            if elapsed_seconds > 0
+                            else 0
+                        ),
+                        "duration": duration,
+                        "failures": failure_groups.get(broadcast.id, []),
+                    }
+                )
             sale_alert_count = int(
                 await session.scalar(select(func.count(ProductPriceAlert.id))) or 0
             )
@@ -2023,6 +2094,7 @@ def create_dashboard_router(
                 "Thông báo",
                 "broadcasts",
                 active_recipients=active_recipients,
+                active_broadcasts=active_broadcasts,
                 broadcast_count=broadcast_count,
                 delivered_count=delivered_count,
                 failed_count=failed_count,
@@ -2034,6 +2106,7 @@ def create_dashboard_router(
                 stock_alert_count=stock_alert_count,
                 stock_alerts=stock_alerts,
                 stock_pager=stock_pager,
+                auto_refresh=active_broadcasts > 0,
             ),
         )
 

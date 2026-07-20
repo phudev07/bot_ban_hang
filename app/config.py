@@ -39,6 +39,9 @@ class Settings(BaseSettings):
     sepay_webhook_global_rate_limit_per_minute: int = 300
     public_api_ip_rate_limit_per_minute: int = 180
     public_api_global_rate_limit_per_minute: int = 1_500
+    broadcast_rate_per_second: int = 20
+    broadcast_concurrency: int = 12
+    broadcast_batch_size: int = 100
 
     sumistore_enabled: bool = False
     sumistore_base_url: str = "https://sumistore.me/api"
@@ -187,6 +190,12 @@ class Settings(BaseSettings):
             raise ValueError("Global SePay webhook limit must cover the per-IP limit")
         if self.public_api_ip_rate_limit_per_minute < 10:
             raise ValueError("Public API IP rate limit is too small")
+        if not 5 <= self.broadcast_rate_per_second <= 25:
+            raise ValueError("Broadcast rate must be between 5 and 25 messages per second")
+        if not 2 <= self.broadcast_concurrency <= 20:
+            raise ValueError("Broadcast concurrency must be between 2 and 20")
+        if not 10 <= self.broadcast_batch_size <= 500:
+            raise ValueError("Broadcast batch size must be between 10 and 500")
         if (
             self.public_api_global_rate_limit_per_minute
             < self.public_api_ip_rate_limit_per_minute

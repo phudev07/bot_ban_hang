@@ -14,7 +14,7 @@ from sqlalchemy import select, text
 
 from app.admin import create_admin_router
 from app.api import create_api
-from app.broadcasts import backfill_stock_alert_messages, sale_alert_worker
+from app.broadcasts import backfill_stock_alert_messages, broadcast_worker, sale_alert_worker
 from app.config import get_settings
 from app.database import Base, DatabaseSessionMiddleware, create_database
 from app.handlers import create_router
@@ -53,6 +53,45 @@ from app.utils import SecretCipher, format_vnd
 async def initialize_database(engine, session_factory, seed_demo_data: bool) -> None:
     async with engine.begin() as connection:
         await connection.run_sync(Base.metadata.create_all)
+        await connection.execute(
+            text(
+                "ALTER TABLE broadcast_logs ADD COLUMN IF NOT EXISTS "
+                "status VARCHAR(20) NOT NULL DEFAULT 'completed'"
+            )
+        )
+        await connection.execute(
+            text("ALTER TABLE broadcast_logs ALTER COLUMN status SET DEFAULT 'queued'")
+        )
+        await connection.execute(
+            text(
+                "ALTER TABLE broadcast_logs ADD COLUMN IF NOT EXISTS "
+                "started_at TIMESTAMPTZ NULL"
+            )
+        )
+        await connection.execute(
+            text(
+                "ALTER TABLE broadcast_logs ADD COLUMN IF NOT EXISTS "
+                "completed_at TIMESTAMPTZ NULL"
+            )
+        )
+        await connection.execute(
+            text(
+                "ALTER TABLE broadcast_logs ADD COLUMN IF NOT EXISTS "
+                "last_error VARCHAR(500) NULL"
+            )
+        )
+        await connection.execute(
+            text(
+                "CREATE INDEX IF NOT EXISTS ix_broadcast_logs_status "
+                "ON broadcast_logs (status)"
+            )
+        )
+        await connection.execute(
+            text(
+                "CREATE INDEX IF NOT EXISTS ix_broadcast_deliveries_campaign_status "
+                "ON broadcast_deliveries (broadcast_id, status, id)"
+            )
+        )
         await connection.execute(
             text(
                 "ALTER TABLE sms_rentals ADD COLUMN IF NOT EXISTS "
@@ -856,6 +895,15 @@ async def main() -> None:
             settings.payment_expiry_sweep_seconds,
         )
     )
+    broadcast_task = asyncio.create_task(
+        broadcast_worker(
+            session_factory,
+            bot,
+            rate_per_second=settings.broadcast_rate_per_second,
+            concurrency=settings.broadcast_concurrency,
+            batch_size=settings.broadcast_batch_size,
+        )
+    )
     supplier_task = (
         asyncio.create_task(
             supplier_sync_worker(
@@ -942,6 +990,9 @@ async def main() -> None:
         await bot.delete_webhook(drop_pending_updates=False)
         await dispatcher.start_polling(bot)
     finally:
+        broadcast_task.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await broadcast_task
         payment_expiry_task.cancel()
         with contextlib.suppress(asyncio.CancelledError):
             await payment_expiry_task

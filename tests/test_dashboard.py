@@ -181,6 +181,7 @@ def test_dashboard_login_catalog_inventory_and_balance(tmp_path) -> None:
                         total_recipients=10,
                         delivered_count=9,
                         failed_count=1,
+                        status="completed",
                     ),
                     SmsRental(
                         user_id=user.telegram_id,
@@ -272,6 +273,8 @@ def test_dashboard_login_catalog_inventory_and_balance(tmp_path) -> None:
         assert broadcasts_page.status_code == 200
         assert "Toàn bộ lịch sử gửi" in broadcasts_page.text
         assert "Message 123" in broadcasts_page.text
+        assert "Hoàn thành" in broadcasts_page.text
+        assert "10/10" in broadcasts_page.text
         assert "Sale API tự động" in broadcasts_page.text
 
         invalid_csrf = client.post(
