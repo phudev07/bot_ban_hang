@@ -35,6 +35,7 @@ from app.sms_rentals import (
     poll_pending_sms_rentals,
 )
 from app.supplier_audit import reconcile_supplier_balance
+from app.supplier_recovery import recover_pending_sumistore_orders
 from app.suppliers import (
     ExternalSupplierClient,
     SumistoreClient,
@@ -467,6 +468,33 @@ async def supplier_sync_worker(
         await asyncio.sleep(max(15, interval_seconds))
 
 
+async def supplier_recovery_worker(
+    session_factory,
+    client: SumistoreClient,
+    cipher: SecretCipher,
+    interval_seconds: int = 15,
+) -> None:
+    while True:
+        try:
+            result = await recover_pending_sumistore_orders(
+                session_factory,
+                client,
+                cipher,
+            )
+            if result.matched_orders or result.linked_audits:
+                logging.getLogger(__name__).warning(
+                    "Recovered delayed Sumi orders: orders=%s accounts=%s audits=%s",
+                    result.matched_orders,
+                    result.inserted_accounts,
+                    result.linked_audits,
+                )
+        except Exception:
+            logging.getLogger(__name__).exception(
+                "Could not recover delayed Sumi orders"
+            )
+        await asyncio.sleep(max(10, interval_seconds))
+
+
 async def lehai_sync_worker(
     session_factory,
     client: LeHaiPremiumClient,
@@ -821,6 +849,17 @@ async def main() -> None:
         if supplier_client is not None
         else None
     )
+    supplier_recovery_task = (
+        asyncio.create_task(
+            supplier_recovery_worker(
+                session_factory,
+                supplier_client,
+                cipher,
+            )
+        )
+        if supplier_client is not None
+        else None
+    )
     supplier_audit_task = (
         asyncio.create_task(
             supplier_audit_worker(
@@ -892,6 +931,10 @@ async def main() -> None:
             supplier_task.cancel()
             with contextlib.suppress(asyncio.CancelledError):
                 await supplier_task
+        if supplier_recovery_task is not None:
+            supplier_recovery_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await supplier_recovery_task
         if supplier_audit_task is not None:
             supplier_audit_task.cancel()
             with contextlib.suppress(asyncio.CancelledError):

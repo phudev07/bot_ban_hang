@@ -30,7 +30,7 @@ DEFINITIVE_PRODUCT_UNAVAILABLE_CODES = {
     "SUPPLIER_PRODUCT_MISSING",
     "SUPPLIER_HTTP_404",
 }
-SUMISTORE_RECOVERY_ATTEMPTS = 8
+SUMISTORE_RECOVERY_ATTEMPTS = 20
 SUMISTORE_RECOVERY_DELAY_SECONDS = 2.0
 
 
@@ -349,10 +349,12 @@ class SumistoreClient:
                 and order.quantity == quantity
                 and order.created_at >= earliest
             ]
-            if len(candidates) == 1:
-                return await self.fetch_order(candidates[0].order_code)
-            if len(candidates) > 1:
-                return None
+            if candidates:
+                candidate = min(
+                    candidates,
+                    key=lambda order: (order.created_at, order.order_code),
+                )
+                return await self.fetch_order(candidate.order_code)
             if attempt < SUMISTORE_RECOVERY_ATTEMPTS - 1:
                 # Sumi can debit the wallet before the completed order appears
                 # in tele-orders. Keep the supplier lock while waiting so a

@@ -13,6 +13,7 @@ from app.models import (
     Product,
     QuantityDiscount,
     ReferralReward,
+    SupplierRecoveryRequest,
     User,
 )
 from app.services import (
@@ -78,6 +79,22 @@ class TimeoutRecoveringSupplier(FakeSupplier):
             ),
             product_id=product_id,
         )
+
+
+class PendingRecoverySupplier(FakeSupplier):
+    provider = "sumistore"
+
+    async def buy(self, product_id: str, quantity: int) -> SupplierPurchase:
+        self.buy_calls += 1
+        raise SupplierError("SUPPLIER_UNAVAILABLE")
+
+    async def recover_recent_purchase(
+        self,
+        product_id: str,
+        quantity: int,
+        **_kwargs,
+    ) -> None:
+        return None
 
 
 def test_purchase_is_atomic_and_delivers_stock() -> None:
@@ -662,6 +679,53 @@ def test_external_purchase_recovers_supplier_order_after_timeout() -> None:
             assert all(
                 order.supplier_order_code == "API-TELE-RECOVERED" for order in orders
             )
+        await engine.dispose()
+
+    asyncio.run(scenario())
+
+
+def test_external_purchase_queues_late_recovery_without_charging_user() -> None:
+    async def scenario() -> None:
+        engine, sessions = await make_database()
+        cipher = SecretCipher(Fernet.generate_key().decode())
+        supplier = PendingRecoverySupplier(balance=30_000, stock=100)
+        async with sessions() as session:
+            category = Category(name_vi="ChatGPT", name_en="ChatGPT")
+            session.add(category)
+            await session.flush()
+            product = Product(
+                category_id=category.id,
+                name_vi="ChatGPT Plus",
+                name_en="ChatGPT Plus",
+                price=20_000,
+                allow_quantity=True,
+                fulfillment_source="sumistore",
+                supplier_product_id="SP-GEF55PBV",
+                supplier_markup=5_000,
+            )
+            user = User(telegram_id=123456, full_name="Buyer", balance=50_000)
+            session.add_all([product, user])
+            await session.commit()
+
+        result = await purchase_product(
+            sessions,
+            user.telegram_id,
+            product.id,
+            cipher,
+            2,
+            supplier,  # type: ignore[arg-type]
+        )
+
+        assert result.ok is False
+        assert result.message == "supplier_unavailable"
+        async with sessions() as session:
+            stored_user = await session.get(User, user.telegram_id)
+            recovery = await session.scalar(select(SupplierRecoveryRequest))
+            assert stored_user is not None and stored_user.balance == 50_000
+            assert recovery is not None and recovery.status == "pending"
+            assert recovery.product_id == product.id
+            assert recovery.supplier_product_id == "SP-GEF55PBV"
+            assert recovery.quantity == 2
         await engine.dispose()
 
     asyncio.run(scenario())

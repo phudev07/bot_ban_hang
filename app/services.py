@@ -22,11 +22,13 @@ from app.models import (
     QuantityDiscount,
     SmsRental,
     SupplierBalanceTransaction,
+    SupplierRecoveryRequest,
     User,
 )
 from app.price_alerts import apply_supplier_price
 from app.partner_services import award_referral_commission, ensure_referral_code
 from app.supplier_audit import record_supplier_purchase
+from app.supplier_recovery import queue_supplier_recovery
 from app.suppliers import (
     EXTERNAL_FULFILLMENT_SOURCES,
     SELLABLE_FULFILLMENT_SOURCES,
@@ -99,6 +101,21 @@ async def buy_supplier_product(
             )
         )
     )
+    known_order_codes.update(
+        await session.scalars(
+            select(InventoryItem.supplier_order_code).where(
+                InventoryItem.supplier_order_code.is_not(None)
+            )
+        )
+    )
+    known_order_codes.update(
+        await session.scalars(
+            select(SupplierRecoveryRequest.supplier_order_code).where(
+                SupplierRecoveryRequest.provider == provider,
+                SupplierRecoveryRequest.supplier_order_code.is_not(None),
+            )
+        )
+    )
     started_at = datetime.now(UTC)
     try:
         if provider == "sumistore":
@@ -165,6 +182,18 @@ async def buy_supplier_product(
         except SupplierError:
             recovered = None
         if recovered is None:
+            await queue_supplier_recovery(
+                session,
+                provider=provider,
+                supplier_product_id=product_id,
+                quantity=quantity,
+                request_key=(
+                    idempotency_key
+                    or f"sumistore-recovery-{secrets.token_hex(16)}"
+                ),
+                started_at=started_at,
+                error_code=exc.code,
+            )
             raise exc
         logger.warning(
             "Recovered completed Sumi order after supplier response failure: order=%s",

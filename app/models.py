@@ -443,6 +443,43 @@ class SupplierBalanceTransaction(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
 
+class SupplierRecoveryRequest(Base):
+    __tablename__ = "supplier_recovery_requests"
+
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    provider: Mapped[str] = mapped_column(String(32), default="sumistore", index=True)
+    request_key: Mapped[str] = mapped_column(String(96), unique=True, index=True)
+    product_id: Mapped[int] = mapped_column(
+        ForeignKey("products.id", ondelete="CASCADE"), index=True
+    )
+    supplier_product_id: Mapped[str] = mapped_column(String(64), index=True)
+    quantity: Mapped[int]
+    status: Mapped[str] = mapped_column(String(24), default="pending", index=True)
+    error_code: Mapped[str] = mapped_column(String(64), default="")
+    supplier_order_code: Mapped[str | None] = mapped_column(
+        String(64), nullable=True, unique=True, index=True
+    )
+    unit_price: Mapped[int] = mapped_column(BigInteger, default=0)
+    total_cost: Mapped[int] = mapped_column(BigInteger, default=0)
+    inserted_count: Mapped[int] = mapped_column(default=0)
+    audit_transaction_id: Mapped[int | None] = mapped_column(
+        ForeignKey("supplier_balance_transactions.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
+    started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
+    supplier_created_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True, index=True
+    )
+    recovered_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+
+
 class BroadcastLog(Base):
     __tablename__ = "broadcast_logs"
 
