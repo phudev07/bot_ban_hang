@@ -10,11 +10,22 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from sqlalchemy.orm import selectinload
 
+from app.flash_sales import (
+    FlashSaleUnavailable,
+    active_flash_sale,
+    complete_deposit_flash_sale,
+    consume_flash_sale,
+    flash_sale_remaining,
+    release_deposit_flash_sale,
+    reserve_flash_sale,
+    stop_unsafe_flash_sale,
+)
 from app.lehai_suppliers import LeHaiPremiumClient, refresh_lehai_product
 from app.models import (
     Category,
     Deposit,
     DiscountCode,
+    FlashSaleCampaign,
     InventoryItem,
     Order,
     PaymentTransaction,
@@ -375,6 +386,7 @@ class ProductPricing:
     coupon_discount_per_unit: int = 0
     quantity_discount_percent: int = 0
     quantity_discount_per_unit: int = 0
+    flash_sale: FlashSaleCampaign | None = None
 
 
 async def product_pricing(
@@ -385,7 +397,22 @@ async def product_pricing(
     coupon_id: int | None = None,
     quantity: int = 1,
     lock_coupon: bool = False,
+    lock_flash_sale: bool = False,
 ) -> ProductPricing | None:
+    flash_sale = await active_flash_sale(
+        session,
+        product.id,
+        quantity=1,
+        for_update=lock_flash_sale,
+    )
+    if flash_sale is not None:
+        return ProductPricing(
+            original_unit_price=product.price,
+            discount_per_unit=max(0, product.price - flash_sale.sale_price),
+            final_unit_price=flash_sale.sale_price,
+            flash_sale=flash_sale,
+        )
+
     coupon: DiscountCode | None = None
     coupon_discount = 0
     if coupon_code or coupon_id is not None:
@@ -651,7 +678,9 @@ async def _purchase_product(
             user = await session.scalar(
                 select(User).where(User.telegram_id == telegram_id).with_for_update()
             )
-            product = await session.get(Product, product_id)
+            product = await session.scalar(
+                select(Product).where(Product.id == product_id).with_for_update()
+            )
             if user is None or product is None or not product.active:
                 return PurchaseResult(False, "not_found")
             if user.is_blocked:
@@ -695,9 +724,15 @@ async def _purchase_product(
                 coupon_id=coupon_id,
                 quantity=quantity,
                 lock_coupon=bool(coupon_code or coupon_id is not None),
+                lock_flash_sale=True,
             )
             if pricing is None:
                 return PurchaseResult(False, "invalid_coupon")
+            if (
+                pricing.flash_sale is not None
+                and flash_sale_remaining(pricing.flash_sale) < quantity
+            ):
+                return PurchaseResult(False, "out_of_stock")
             total_amount = pricing.final_unit_price * quantity
             total_discount = pricing.discount_per_unit * quantity
             if user.balance < total_amount:
@@ -730,6 +765,9 @@ async def _purchase_product(
                             discount_amount=pricing.discount_per_unit,
                             discount_code_id=pricing.coupon.id if pricing.coupon else None,
                             discount_code=pricing.coupon.code if pricing.coupon else None,
+                            flash_sale_id=(
+                                pricing.flash_sale.id if pricing.flash_sale else None
+                            ),
                             batch_code=batch_code,
                             supplier_order_code=item.supplier_order_code,
                             sales_channel=sales_channel,
@@ -754,6 +792,7 @@ async def _purchase_product(
                         sales_channel=sales_channel,
                         commission_percent=referral_commission_percent,
                     )
+                    consume_flash_sale(pricing.flash_sale, quantity)
                     await session.flush()
                     return PurchaseResult(
                         True,
@@ -840,6 +879,9 @@ async def _purchase_product(
                         discount_amount=pricing.discount_per_unit,
                         discount_code_id=pricing.coupon.id if pricing.coupon else None,
                         discount_code=pricing.coupon.code if pricing.coupon else None,
+                        flash_sale_id=(
+                            pricing.flash_sale.id if pricing.flash_sale else None
+                        ),
                         batch_code=batch_code,
                         supplier_order_code=supplier_purchase.order_code or None,
                         sales_channel=sales_channel,
@@ -873,6 +915,7 @@ async def _purchase_product(
                     sales_channel=sales_channel,
                     commission_percent=referral_commission_percent,
                 )
+                consume_flash_sale(pricing.flash_sale, quantity)
                 await session.flush()
                 return PurchaseResult(
                     True,
@@ -917,6 +960,7 @@ async def _purchase_product(
                     discount_amount=pricing.discount_per_unit,
                     discount_code_id=pricing.coupon.id if pricing.coupon else None,
                     discount_code=pricing.coupon.code if pricing.coupon else None,
+                    flash_sale_id=pricing.flash_sale.id if pricing.flash_sale else None,
                     batch_code=batch_code,
                     sales_channel=sales_channel,
                     api_client_id=api_client_id,
@@ -939,6 +983,7 @@ async def _purchase_product(
                 sales_channel=sales_channel,
                 commission_percent=referral_commission_percent,
             )
+            consume_flash_sale(pricing.flash_sale, quantity)
             await session.flush()
             return PurchaseResult(
                 True,
@@ -968,6 +1013,8 @@ async def create_deposit(
     discount_amount: int = 0,
     discount_code_id: int | None = None,
     discount_code: str | None = None,
+    flash_sale_id: int | None = None,
+    flash_sale_quantity: int = 0,
     expiry_seconds: int = 300,
     max_pending_deposits: int = 3,
 ) -> Deposit:
@@ -992,6 +1039,7 @@ async def create_deposit(
             Deposit.product_id == product_id,
             Deposit.quantity == quantity,
             Deposit.discount_code_id == discount_code_id,
+            Deposit.flash_sale_id == flash_sale_id,
         )
         .order_by(Deposit.id.desc())
         .limit(1)
@@ -1015,6 +1063,23 @@ async def create_deposit(
         await session.rollback()
         raise PendingDepositLimitReached
 
+    flash_sale: FlashSaleCampaign | None = None
+    if flash_sale_id is not None:
+        flash_sale = await session.scalar(
+            select(FlashSaleCampaign)
+            .where(FlashSaleCampaign.id == flash_sale_id)
+            .with_for_update()
+        )
+        reserved_quantity = max(1, flash_sale_quantity or quantity)
+        if (
+            flash_sale is None
+            or flash_sale.status != "active"
+            or flash_sale.product_id != product_id
+            or amount != flash_sale.sale_price * quantity
+        ):
+            raise FlashSaleUnavailable("Flash sale is no longer available")
+        reserve_flash_sale(flash_sale, reserved_quantity)
+
     code = f"{payment_prefix.upper()}{user_id}{secrets.token_hex(2).upper()}"
     deposit = Deposit(
         user_id=user_id,
@@ -1026,6 +1091,10 @@ async def create_deposit(
         discount_amount=discount_amount,
         discount_code_id=discount_code_id,
         discount_code=discount_code,
+        flash_sale_id=flash_sale.id if flash_sale is not None else None,
+        flash_sale_quantity=(
+            max(1, flash_sale_quantity or quantity) if flash_sale is not None else 0
+        ),
         expires_at=now + timedelta(seconds=max(1, expiry_seconds)),
     )
     session.add(deposit)
@@ -1213,6 +1282,8 @@ async def _process_sepay_payment(
                 credit_status = "failed_request"
 
             if rejected_status is not None and credit_status is not None:
+                if credit_status in {"expired", "failed_request"}:
+                    await release_deposit_flash_sale(session, deposit)
                 session.add(
                     PaymentTransaction(
                         deposit_id=deposit.id,
@@ -1240,10 +1311,44 @@ async def _process_sepay_payment(
                 and deposit.product_id is not None
             )
             if direct_purchase_ready:
-                product = await session.get(Product, deposit.product_id)
+                product = await session.scalar(
+                    select(Product)
+                    .where(Product.id == deposit.product_id)
+                    .with_for_update()
+                )
+                flash_sale_can_fulfill = True
+                deposit_campaign: FlashSaleCampaign | None = None
+                if deposit.flash_sale_id is not None:
+                    deposit_campaign = await session.scalar(
+                        select(FlashSaleCampaign)
+                        .where(FlashSaleCampaign.id == deposit.flash_sale_id)
+                        .with_for_update()
+                    )
+                    unsafe_status = (
+                        stop_unsafe_flash_sale(deposit_campaign, product)
+                        if deposit_campaign is not None and product is not None
+                        else None
+                    )
+                    flash_sale_can_fulfill = bool(
+                        deposit_campaign is not None
+                        and unsafe_status is None
+                        and deposit_campaign.status
+                        not in {"cost_exceeded", "price_invalid"}
+                        and (
+                            product is None
+                            or product.fulfillment_source
+                            not in EXTERNAL_FULFILLMENT_SOURCES
+                            or int(product.supplier_price or 0)
+                            <= deposit_campaign.sale_price
+                        )
+                        and (
+                            product is None
+                            or deposit_campaign.sale_price < product.price
+                        )
+                    )
                 items: list[InventoryItem] = []
                 supplier_purchase_made = False
-                if product is not None and product.active:
+                if product is not None and product.active and flash_sale_can_fulfill:
                     if deposit.quantity == 1 or product.allow_quantity:
                         external_client = supplier_client_for_source(
                             product.fulfillment_source,
@@ -1275,11 +1380,26 @@ async def _process_sepay_payment(
                                     supplier_client,
                                     lehai_client,
                                 )
+                                if deposit_campaign is not None:
+                                    unsafe_status = stop_unsafe_flash_sale(
+                                        deposit_campaign,
+                                        product,
+                                    )
+                                    flash_sale_can_fulfill = bool(
+                                        unsafe_status is None
+                                        and deposit_campaign.status
+                                        not in {"cost_exceeded", "price_invalid"}
+                                        and int(product.supplier_price or 0)
+                                        <= deposit_campaign.sale_price
+                                        and deposit_campaign.sale_price < product.price
+                                    )
                                 supplier_stock = max(
                                     0,
                                     product.external_stock - recovered_stock,
                                 )
                             if not items and (
+                                flash_sale_can_fulfill
+                                and
                                 cipher is not None
                                 and external_client is not None
                                 and product.supplier_product_id
@@ -1363,6 +1483,7 @@ async def _process_sepay_payment(
                             discount_amount=deposit.discount_amount // deposit.quantity,
                             discount_code_id=deposit.discount_code_id,
                             discount_code=deposit.discount_code,
+                            flash_sale_id=deposit.flash_sale_id,
                             batch_code=batch_code,
                             supplier_order_code=item.supplier_order_code,
                             sales_channel="telegram",
@@ -1400,6 +1521,7 @@ async def _process_sepay_payment(
                         sales_channel="telegram",
                         commission_percent=referral_commission_percent,
                     )
+                    await complete_deposit_flash_sale(session, deposit)
                     deposit.status = "paid"
                     deposit.paid_amount = amount
                     deposit.paid_at = now
@@ -1431,6 +1553,7 @@ async def _process_sepay_payment(
                         paid_at=now,
                     )
 
+            await release_deposit_flash_sale(session, deposit)
             user.balance += amount
             deposit.status = "paid"
             deposit.paid_amount = amount

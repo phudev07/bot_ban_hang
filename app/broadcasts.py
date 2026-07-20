@@ -10,9 +10,11 @@ from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 from sqlalchemy import func, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+from app.flash_sales import stop_unsafe_flash_sale
 from app.models import (
     BroadcastDelivery,
     BroadcastLog,
+    FlashSaleCampaign,
     Product,
     ProductAlertDelivery,
     ProductPriceAlert,
@@ -107,6 +109,15 @@ class StockAlertPayload:
     price: int
     stock: int
     recipients: tuple[tuple[int, str], ...]
+
+
+@dataclass(frozen=True)
+class FlashSalePayload:
+    campaign_id: int
+    product_id: int
+    sale_price: int
+    message_text: str
+    telegram_photo_file_id: str | None
 
 
 def broadcast_purchase_keyboard() -> InlineKeyboardMarkup:
@@ -603,6 +614,11 @@ async def recover_interrupted_product_alerts(
                 .where(ProductStockAlert.status == "sending")
                 .values(status="pending")
             )
+            await session.execute(
+                update(FlashSaleCampaign)
+                .where(FlashSaleCampaign.notification_status == "sending")
+                .values(notification_status="pending")
+            )
 
 
 async def _ensure_product_alert_deliveries(
@@ -701,7 +717,12 @@ async def _sync_product_alert_progress(
     alert_type: str,
     alert_id: int,
 ) -> bool:
-    model = ProductPriceAlert if alert_type == "sale" else ProductStockAlert
+    if alert_type == "sale":
+        model = ProductPriceAlert
+    elif alert_type == "stock":
+        model = ProductStockAlert
+    else:
+        model = FlashSaleCampaign
     async with session_factory() as session:
         async with session.begin():
             alert = await session.scalar(
@@ -733,9 +754,14 @@ async def _sync_product_alert_progress(
             alert.failed_count = int(failed)
             if int(unfinished) == 0:
                 completed_at = datetime.now(UTC)
-                alert.status = "sent"
-                alert.sent_at = completed_at
-                alert.completed_at = completed_at
+                if alert_type == "flash":
+                    alert.notification_status = "sent"
+                    alert.notification_sent_at = completed_at
+                    alert.notification_completed_at = completed_at
+                else:
+                    alert.status = "sent"
+                    alert.sent_at = completed_at
+                    alert.completed_at = completed_at
                 return True
             return False
 
@@ -749,6 +775,25 @@ async def _deliver_product_alert(
     send_delivery: Callable[[ProductAlertDelivery], Awaitable[DeliveryResult]],
 ) -> None:
     while True:
+        if alert_type == "flash":
+            async with session_factory() as session:
+                async with session.begin():
+                    campaign = await session.scalar(
+                        select(FlashSaleCampaign)
+                        .where(FlashSaleCampaign.id == alert_id)
+                        .with_for_update()
+                    )
+                    if (
+                        campaign is None
+                        or campaign.status != "active"
+                        or campaign.notification_status == "superseded"
+                    ):
+                        if (
+                            campaign is not None
+                            and campaign.notification_status in {"pending", "sending"}
+                        ):
+                            campaign.notification_status = "superseded"
+                        return
         deliveries = await _claim_product_alert_delivery_batch(
             session_factory,
             alert_type=alert_type,
@@ -1069,6 +1114,130 @@ async def deliver_pending_stock_alerts(
     return processed
 
 
+async def _claim_flash_sale(
+    session_factory: async_sessionmaker[AsyncSession],
+) -> FlashSalePayload | None:
+    now = datetime.now(UTC)
+    async with session_factory() as session:
+        campaigns = list(
+            await session.scalars(
+                select(FlashSaleCampaign)
+                .where(FlashSaleCampaign.notification_status == "pending")
+                .order_by(FlashSaleCampaign.id)
+                .limit(50)
+            )
+        )
+        for campaign in campaigns:
+            product = await session.get(Product, campaign.product_id)
+            unsafe_status = (
+                stop_unsafe_flash_sale(campaign, product)
+                if product is not None
+                else None
+            )
+            if (
+                campaign.status != "active"
+                or product is None
+                or not product.active
+                or unsafe_status is not None
+            ):
+                campaign.notification_status = "superseded"
+                continue
+            recipient_count = await _ensure_product_alert_deliveries(
+                session,
+                alert_type="flash",
+                alert_id=campaign.id,
+            )
+            campaign.notification_status = "sending"
+            campaign.notification_started_at = campaign.notification_started_at or now
+            campaign.total_recipients = recipient_count
+            campaign.notification_last_error = None
+            payload = FlashSalePayload(
+                campaign_id=campaign.id,
+                product_id=campaign.product_id,
+                sale_price=campaign.sale_price,
+                message_text=campaign.message_text,
+                telegram_photo_file_id=campaign.telegram_photo_file_id,
+            )
+            await session.commit()
+            return payload
+        await session.commit()
+    return None
+
+
+async def _send_flash_sale(
+    bot: Bot,
+    payload: FlashSalePayload,
+    delivery: ProductAlertDelivery,
+    limiter: BroadcastRateLimiter,
+    semaphore: asyncio.Semaphore,
+) -> DeliveryResult:
+    keyboard = sale_purchase_keyboard(
+        payload.product_id,
+        payload.sale_price,
+        "en" if delivery.language == "en" else "vi",
+    )
+
+    async def operation() -> object:
+        if payload.telegram_photo_file_id:
+            return await bot.send_photo(
+                delivery.user_id,
+                payload.telegram_photo_file_id,
+                caption=payload.message_text,
+                reply_markup=keyboard,
+            )
+        return await bot.send_message(
+            delivery.user_id,
+            payload.message_text,
+            reply_markup=keyboard,
+        )
+
+    delivered, inactive, error = await _send_with_retry(
+        operation,
+        limiter,
+        semaphore,
+    )
+    return DeliveryResult(
+        delivery_id=delivery.id,
+        user_id=delivery.user_id,
+        delivered=delivered,
+        inactive=inactive,
+        error=error,
+    )
+
+
+async def deliver_pending_flash_sales(
+    session_factory: async_sessionmaker[AsyncSession],
+    bot: Bot,
+    *,
+    batch_limit: int = 5,
+    limiter: BroadcastRateLimiter | None = None,
+    concurrency: int = 12,
+    recipient_batch_size: int = 100,
+) -> int:
+    controller = limiter or BroadcastRateLimiter(20)
+    semaphore = asyncio.Semaphore(max(1, concurrency))
+    processed = 0
+    while processed < batch_limit:
+        payload = await _claim_flash_sale(session_factory)
+        if payload is None:
+            break
+        await _deliver_product_alert(
+            session_factory,
+            alert_type="flash",
+            alert_id=payload.campaign_id,
+            recipient_batch_size=recipient_batch_size,
+            send_delivery=lambda delivery: _send_flash_sale(
+                bot,
+                payload,
+                delivery,
+                controller,
+                semaphore,
+            ),
+        )
+        processed += 1
+    return processed
+
+
 async def sale_alert_worker(
     session_factory: async_sessionmaker[AsyncSession],
     bot: Bot,
@@ -1082,6 +1251,13 @@ async def sale_alert_worker(
     await recover_interrupted_product_alerts(session_factory)
     while True:
         try:
+            await deliver_pending_flash_sales(
+                session_factory,
+                bot,
+                limiter=controller,
+                concurrency=concurrency,
+                recipient_batch_size=batch_size,
+            )
             await deliver_pending_sale_alerts(
                 session_factory,
                 bot,
@@ -1098,7 +1274,24 @@ async def sale_alert_worker(
             )
         except asyncio.CancelledError:
             raise
-        except Exception:
+        except Exception as exc:
             logger.exception("Could not deliver automatic supplier product alerts")
+            async with session_factory() as session:
+                async with session.begin():
+                    await session.execute(
+                        update(ProductPriceAlert)
+                        .where(ProductPriceAlert.status == "sending")
+                        .values(last_error=str(exc)[:500])
+                    )
+                    await session.execute(
+                        update(ProductStockAlert)
+                        .where(ProductStockAlert.status == "sending")
+                        .values(last_error=str(exc)[:500])
+                    )
+                    await session.execute(
+                        update(FlashSaleCampaign)
+                        .where(FlashSaleCampaign.notification_status == "sending")
+                        .values(notification_last_error=str(exc)[:500])
+                    )
             await recover_interrupted_product_alerts(session_factory)
         await asyncio.sleep(max(2, poll_seconds))

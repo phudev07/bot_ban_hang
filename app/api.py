@@ -211,6 +211,7 @@ def create_api(
                 supplier_client,
                 lehai_client,
                 rentsim_client,
+                bot,
             )
         )
 

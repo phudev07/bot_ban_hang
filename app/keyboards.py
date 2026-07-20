@@ -154,28 +154,39 @@ def categories_menu(categories: list[Category], language: str) -> InlineKeyboard
 
 
 def products_menu(
-    products: list[Product], language: str, back_callback: str
+    products: list[Product],
+    language: str,
+    back_callback: str,
+    prices: dict[int, int] | None = None,
 ) -> InlineKeyboardMarkup:
     builder = InlineKeyboardBuilder()
     for product in products:
         name = product.name_en if language == "en" else product.name_vi
+        display_price = (prices or {}).get(product.id, product.price)
         builder.button(
-            text=f"{name} · {format_vnd(product.price)}", callback_data=f"prod:{product.id}"
+            text=f"{name} · {format_vnd(display_price)}", callback_data=f"prod:{product.id}"
         )
     builder.adjust(1)
     builder.row(InlineKeyboardButton(text=tr(language, "back"), callback_data=back_callback))
     return builder.as_markup()
 
 
-def product_detail(product: Product, language: str, stock: int) -> InlineKeyboardMarkup:
+def product_detail(
+    product: Product,
+    language: str,
+    stock: int,
+    *,
+    allow_coupon: bool = True,
+) -> InlineKeyboardMarkup:
     buy_callback = f"qtymenu:{product.id}" if product.allow_quantity else f"buy:{product.id}:1"
     rows = []
     if stock > 0:
         rows.append([InlineKeyboardButton(text=tr(language, "buy"), callback_data=buy_callback)])
-        coupon_label = "🏷 Nhập mã giảm giá" if language == "vi" else "🏷 Apply discount code"
-        rows.append(
-            [InlineKeyboardButton(text=coupon_label, callback_data=f"coupon:{product.id}")]
-        )
+        if allow_coupon:
+            coupon_label = "🏷 Nhập mã giảm giá" if language == "vi" else "🏷 Apply discount code"
+            rows.append(
+                [InlineKeyboardButton(text=coupon_label, callback_data=f"coupon:{product.id}")]
+            )
     rows.append(
         [
             InlineKeyboardButton(
@@ -188,13 +199,19 @@ def product_detail(product: Product, language: str, stock: int) -> InlineKeyboar
     )
 
 
-def quantity_menu(product: Product, language: str, stock: int) -> InlineKeyboardMarkup:
+def quantity_menu(
+    product: Product,
+    language: str,
+    stock: int,
+    unit_price: int | None = None,
+) -> InlineKeyboardMarkup:
     builder = InlineKeyboardBuilder()
     maximum = min(product.max_quantity, max(0, stock))
     suggestions = [value for value in (1, 2, 5, 10) if value <= maximum]
+    display_price = product.price if unit_price is None else unit_price
     for quantity in suggestions:
         builder.button(
-            text=f"{quantity} × {format_vnd(product.price)}",
+            text=f"{quantity} × {format_vnd(display_price)}",
             callback_data=f"buy:{product.id}:{quantity}",
         )
     builder.adjust(2)

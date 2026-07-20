@@ -80,6 +80,55 @@ class Product(Base):
     )
 
 
+class FlashSaleCampaign(Base):
+    __tablename__ = "flash_sale_campaigns"
+
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    product_id: Mapped[int] = mapped_column(
+        ForeignKey("products.id", ondelete="CASCADE"), index=True
+    )
+    original_price: Mapped[int] = mapped_column(BigInteger)
+    sale_price: Mapped[int] = mapped_column(BigInteger)
+    total_quantity: Mapped[int]
+    sold_quantity: Mapped[int] = mapped_column(default=0, server_default="0")
+    reserved_quantity: Mapped[int] = mapped_column(default=0, server_default="0")
+    status: Mapped[str] = mapped_column(
+        String(20), default="active", server_default="active", index=True
+    )
+    message_text: Mapped[str] = mapped_column(Text, default="")
+    telegram_photo_file_id: Mapped[str | None] = mapped_column(Text, nullable=True)
+    notification_status: Mapped[str] = mapped_column(
+        String(20), default="pending", server_default="pending", index=True
+    )
+    total_recipients: Mapped[int] = mapped_column(default=0, server_default="0")
+    delivered_count: Mapped[int] = mapped_column(default=0, server_default="0")
+    failed_count: Mapped[int] = mapped_column(default=0, server_default="0")
+    notification_started_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    notification_completed_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    notification_sent_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    notification_last_error: Mapped[str | None] = mapped_column(
+        String(500), nullable=True
+    )
+    created_by: Mapped[str] = mapped_column(String(255), default="admin")
+    started_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), index=True
+    )
+    ended_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), index=True
+    )
+
+    product: Mapped[Product] = relationship()
+
+
 class ProductPriceAlert(Base):
     __tablename__ = "product_price_alerts"
 
@@ -259,6 +308,11 @@ class Order(Base):
         ForeignKey("discount_codes.id", ondelete="SET NULL"), nullable=True, index=True
     )
     discount_code: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    flash_sale_id: Mapped[int | None] = mapped_column(
+        ForeignKey("flash_sale_campaigns.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
     batch_code: Mapped[str | None] = mapped_column(String(32), nullable=True, index=True)
     supplier_order_code: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
     sales_channel: Mapped[str] = mapped_column(String(16), default="telegram", index=True)
@@ -298,6 +352,12 @@ class Deposit(Base):
         ForeignKey("discount_codes.id", ondelete="SET NULL"), nullable=True, index=True
     )
     discount_code: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    flash_sale_id: Mapped[int | None] = mapped_column(
+        ForeignKey("flash_sale_campaigns.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
+    flash_sale_quantity: Mapped[int] = mapped_column(default=0, server_default="0")
     status: Mapped[str] = mapped_column(String(20), default="pending", index=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)

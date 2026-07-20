@@ -20,6 +20,11 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from sqlalchemy.orm import selectinload
 
 from app.config import Settings
+from app.flash_sales import (
+    active_flash_sale,
+    active_flash_sale_campaigns,
+    flash_sale_remaining,
+)
 from app.lehai_suppliers import LeHaiPremiumClient
 from app.models import (
     ApiClient,
@@ -321,6 +326,9 @@ def create_public_api_router(
     async def products(principal: ApiPrincipal = Depends(authenticate)) -> dict[str, object]:
         async with session_factory() as session:
             rows = await active_products(session)
+            flash_sales = await active_flash_sale_campaigns(
+                session, [product.id for product in rows]
+            )
             local_stock = {
                 int(product_id): int(stock)
                 for product_id, stock in await session.execute(
@@ -331,17 +339,21 @@ def create_public_api_router(
             }
             values = []
             for product in rows:
+                flash_sale = flash_sales.get(product.id)
+                stock = (
+                    max(0, product.external_stock)
+                    if product.fulfillment_source in EXTERNAL_FULFILLMENT_SOURCES
+                    else local_stock.get(product.id, 0)
+                )
+                if flash_sale is not None:
+                    stock = min(stock, flash_sale_remaining(flash_sale))
                 values.append(
                     {
                         "id": product.id,
                         "name": product.name_vi,
                         "description": product.description_vi,
-                        "price": product.price,
-                        "stock": (
-                            max(0, product.external_stock)
-                            if product.fulfillment_source in EXTERNAL_FULFILLMENT_SOURCES
-                            else local_stock.get(product.id, 0)
-                        ),
+                        "price": flash_sale.sale_price if flash_sale else product.price,
+                        "stock": stock,
                         "allow_quantity": product.allow_quantity,
                         "max_quantity": product.max_quantity,
                     }
@@ -364,11 +376,14 @@ def create_public_api_router(
             ):
                 raise api_error(404, "PRODUCT_NOT_FOUND", "Product does not exist")
             stock = await available_stock(session, product.id)
+            flash_sale = await active_flash_sale(session, product.id)
+            if flash_sale is not None:
+                stock = min(stock, flash_sale_remaining(flash_sale))
             return {
                 "id": product.id,
                 "name": product.name_vi,
                 "description": product.description_vi,
-                "price": product.price,
+                "price": flash_sale.sale_price if flash_sale else product.price,
                 "stock": stock,
                 "allow_quantity": product.allow_quantity,
                 "max_quantity": product.max_quantity,

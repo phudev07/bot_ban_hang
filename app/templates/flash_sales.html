@@ -1,0 +1,163 @@
+{% extends "base.html" %}
+{% from "_pagination.html" import render_pager %}
+{% block content %}
+<section class="flash-sale-hero">
+  <div>
+    <span>SHOP CAMPAIGN CONTROL</span>
+    <h2>Tạo đợt giảm giá có giới hạn, không chạm vào giá gốc.</h2>
+    <p>Giá thường vẫn cập nhật theo nguồn API. Khi hết suất, chiến dịch tự ngắt và sản phẩm quay về đúng giá hiện tại.</p>
+  </div>
+  <dl>
+    <div><dt>Đang chạy</dt><dd>{{ active_count }}</dd></div>
+    <div><dt>Đã bán sale</dt><dd>{{ sold_quantity }}</dd></div>
+    <div><dt>Đang giữ QR</dt><dd>{{ reserved_quantity }}</dd></div>
+    <div><dt>Thông báo chờ</dt><dd>{{ notification_active }}</dd></div>
+  </dl>
+</section>
+
+<div class="flash-sale-layout">
+  <section class="panel form-panel flash-sale-form-panel">
+    <div class="panel-head"><div><span>NEW FLASH SALE</span><h2>Mở chiến dịch</h2></div><small>Mỗi sản phẩm chỉ có 1 chiến dịch</small></div>
+    <form method="post" action="/admin/flash-sales" enctype="multipart/form-data" class="form-grid cols-2" id="flash-sale-form">
+      <input type="hidden" name="csrf" value="{{ csrf_token }}">
+      <label class="wide">Sản phẩm
+        <select name="product_id" id="flash-product" required>
+          <option value="">Chọn mặt hàng cần sale</option>
+          {% for row in products %}
+          <option value="{{ row.product.id }}" data-name="{{ row.product.name_vi }}" data-price="{{ row.product.price }}" data-cost="{{ row.unit_cost }}" data-stock="{{ row.stock }}">{{ row.product.name_vi }} · giá {{ row.product.price|vnd }} · kho {{ row.stock }}</option>
+          {% endfor %}
+        </select>
+        {% if not products %}<small>Chưa có sản phẩm đang bán và còn hàng.</small>{% endif %}
+      </label>
+      <label>Giá Flash Sale
+        <input name="sale_price" id="flash-price" inputmode="numeric" placeholder="Ví dụ 12000" required>
+        <small id="flash-price-hint">Phải thấp hơn giá bán và không thấp hơn giá vốn API.</small>
+      </label>
+      <label>Số lượng ưu đãi
+        <input type="number" name="total_quantity" id="flash-quantity" min="1" max="100000" value="1" required>
+        <small id="flash-stock-hint">Không được vượt tồn kho hiện tại.</small>
+      </label>
+      <label class="wide">Nội dung thông báo
+        <textarea name="message_text" id="flash-message" rows="9" maxlength="4096" placeholder="Để trống để bot tự tạo nội dung theo sản phẩm."></textarea>
+        <small>Có thể chỉnh toàn bộ nội dung và dùng HTML Telegram. Khi kèm ảnh, caption tối đa 1.024 ký tự.</small>
+      </label>
+      <label class="wide flash-image-field">Ảnh thông báo (không bắt buộc)
+        <input type="file" name="image" id="flash-image" accept="image/*">
+        <small>JPG/PNG/WebP, tối đa 8 MB. Bot lưu bằng Telegram file_id nên không chiếm ổ đĩa VPS.</small>
+      </label>
+      <div class="flash-sale-guard wide">
+        <strong>Chống bán lỗ và bán vượt suất</strong>
+        <p>Ví QR đang chờ sẽ giữ chỗ. Mua bằng ví, Telegram và API đấu kho dùng chung một quota khóa theo giao dịch. Nếu giá vốn API tăng cao hơn giá sale, chiến dịch tự dừng.</p>
+      </div>
+      <button class="button primary" type="submit" {% if not products %}disabled{% endif %}>Bật Flash Sale & gửi thông báo</button>
+    </form>
+  </section>
+
+  <aside class="panel flash-sale-preview">
+    <span>LIVE PREVIEW</span>
+    <h2>Nội dung khách sẽ nhận</h2>
+    <div class="flash-preview-card">
+      <div class="flash-preview-image" id="flash-image-preview"><b>FLASH</b><small>Ảnh tùy chọn</small></div>
+      <pre id="flash-message-preview">Chọn sản phẩm để xem nội dung mặc định.</pre>
+      <button type="button" disabled>🛒 Mua ngay</button>
+    </div>
+    <p>Thông báo đi qua cùng hàng đợi bền vững với thông báo admin, sale API và hàng mới về; bot khởi động lại vẫn gửi tiếp đúng người còn thiếu.</p>
+  </aside>
+</div>
+
+<section class="panel">
+  <div class="panel-head"><div><span>CAMPAIGN HISTORY</span><h2>Lịch sử Flash Sale</h2></div><strong>{{ campaign_count }} chiến dịch</strong></div>
+  <div class="table-wrap">
+    <table class="flash-sale-table">
+      <thead><tr><th>Chiến dịch</th><th>Sản phẩm / Giá</th><th>Quota sale</th><th>Trạng thái</th><th>Thông báo</th><th>Nội dung</th><th>Thời gian</th><th></th></tr></thead>
+      <tbody>
+        {% for row in campaigns %}{% set item = row.campaign %}
+        <tr>
+          <td><code>#FS{{ item.id }}</code><small>{{ item.created_by }}{% if item.telegram_photo_file_id %} · Có ảnh{% endif %}</small></td>
+          <td><strong>{{ row.product.name_vi }}</strong><small><s>{{ item.original_price|vnd }}</s> → <b>{{ item.sale_price|vnd }}</b></small><small>Giá thường hiện tại: {{ row.product.price|vnd }}</small></td>
+          <td class="flash-quota-cell">
+            <div class="broadcast-progress"><i style="width: {{ ((item.sold_quantity + item.reserved_quantity) * 100 / item.total_quantity) if item.total_quantity else 0 }}%"></i></div>
+            <strong>{{ item.sold_quantity }} bán · {{ item.reserved_quantity }} giữ QR</strong>
+            <small>Còn {{ row.remaining_quantity }}/{{ item.total_quantity }} suất</small>
+          </td>
+          <td>
+            {% if item.status == 'active' %}<span class="status wait">Đang sale</span>
+            {% elif item.status == 'completed' %}<span class="status on">Hết suất</span>
+            {% elif item.status == 'cancelled' %}<span class="status off">Đã dừng</span>
+            {% elif item.status == 'cost_exceeded' %}<span class="status off">Giá vốn vượt sale</span>
+            {% elif item.status == 'price_invalid' %}<span class="status off">Giá thường thấp hơn sale</span>
+            {% else %}<span class="status off">{{ item.status }}</span>{% endif %}
+            {% if item.status == 'cost_exceeded' %}<small>Tự ngắt để không bán lỗ</small>{% endif %}
+          </td>
+          <td class="broadcast-progress-cell">
+            <span class="status {{ 'on' if item.notification_status == 'sent' else ('wait' if item.notification_status in ('pending', 'sending') else 'off') }}">{{ 'Hoàn thành' if item.notification_status == 'sent' else ('Đang gửi' if item.notification_status == 'sending' else ('Chờ gửi' if item.notification_status == 'pending' else 'Đã ngắt')) }}</span>
+            <div class="broadcast-progress"><i style="width: {{ (row.processed * 100 / item.total_recipients) if item.total_recipients else (100 if item.notification_status == 'sent' else 0) }}%"></i></div>
+            <strong>{{ row.processed }}/{{ item.total_recipients }}</strong>
+            <small>Thành công {{ item.delivered_count }} · lỗi {{ item.failed_count }} · còn {{ row.notification_remaining }}</small>
+            <small>{{ row.speed }} tin/s · {{ row.duration }}</small>
+            {% if row.failures %}<details class="broadcast-errors"><summary>Xem lỗi gửi</summary>{% for failure in row.failures %}<small>{{ failure.count }} × {{ failure.error }}</small>{% endfor %}</details>{% endif %}
+          </td>
+          <td><details class="notification-preview"><summary>Xem nội dung</summary><pre>{{ item.message_text }}</pre></details></td>
+          <td><strong>{{ item.started_at|localtime }}</strong><small>Kết thúc {{ item.ended_at|localtime }}</small></td>
+          <td>{% if item.status == 'active' %}<form method="post" action="/admin/flash-sales/{{ item.id }}/cancel" onsubmit="return confirm('Dừng Flash Sale này?');"><input type="hidden" name="csrf" value="{{ csrf_token }}"><button class="button danger compact" type="submit">Dừng</button></form>{% else %}—{% endif %}</td>
+        </tr>
+        {% else %}
+        <tr><td colspan="8" class="empty">Chưa có chiến dịch Flash Sale nào.</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {{ render_pager(pager, 'chiến dịch') }}
+</section>
+
+<script>
+(() => {
+  const product = document.getElementById('flash-product');
+  const price = document.getElementById('flash-price');
+  const quantity = document.getElementById('flash-quantity');
+  const message = document.getElementById('flash-message');
+  const image = document.getElementById('flash-image');
+  const messagePreview = document.getElementById('flash-message-preview');
+  const imagePreview = document.getElementById('flash-image-preview');
+  const priceHint = document.getElementById('flash-price-hint');
+  const stockHint = document.getElementById('flash-stock-hint');
+  let messageEdited = false;
+  const money = (value) => new Intl.NumberFormat('vi-VN').format(Number(value || 0)) + 'đ';
+  const defaultMessage = () => {
+    const option = product.options[product.selectedIndex];
+    if (!option || !option.value) return 'Chọn sản phẩm để xem nội dung mặc định.';
+    return `⚡ <b>FLASH SALE GIỚI HẠN</b>\n\n• Sản phẩm: <b>${option.dataset.name}</b>\n• Giá cũ: <s>${money(option.dataset.price)}</s>\n• Giá Flash Sale: <b>${money(price.value)}</b>\n• Số lượng ưu đãi: <b>${quantity.value || 1}</b>\n\nNhanh tay mua trước khi hết suất.`;
+  };
+  const refresh = () => {
+    const option = product.options[product.selectedIndex];
+    if (option && option.value) {
+      priceHint.textContent = `Giá bán ${money(option.dataset.price)} · giá vốn API ${money(option.dataset.cost)}.`;
+      stockHint.textContent = `Kho hiện tại ${option.dataset.stock} sản phẩm.`;
+      quantity.max = option.dataset.stock;
+    }
+    const content = message.value.trim() || defaultMessage();
+    messagePreview.textContent = content;
+    if (!messageEdited && product.value) message.placeholder = defaultMessage();
+  };
+  product.addEventListener('change', refresh);
+  price.addEventListener('input', refresh);
+  quantity.addEventListener('input', refresh);
+  message.addEventListener('input', () => { messageEdited = true; refresh(); });
+  image.addEventListener('change', () => {
+    const file = image.files && image.files[0];
+    if (!file) {
+      imagePreview.removeAttribute('style');
+      imagePreview.innerHTML = '<b>FLASH</b><small>Ảnh tùy chọn</small>';
+      message.maxLength = 4096;
+      return;
+    }
+    const url = URL.createObjectURL(file);
+    imagePreview.style.backgroundImage = `url(${url})`;
+    imagePreview.innerHTML = '';
+    message.maxLength = 1024;
+  });
+  refresh();
+})();
+</script>
+{% if auto_refresh %}<script>window.setTimeout(() => window.location.reload(), 10000);</script>{% endif %}
+{% endblock %}

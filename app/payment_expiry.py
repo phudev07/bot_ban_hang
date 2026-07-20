@@ -8,6 +8,7 @@ from aiogram.exceptions import TelegramBadRequest, TelegramForbiddenError
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+from app.flash_sales import release_deposit_flash_sale
 from app.models import Deposit
 
 
@@ -69,6 +70,7 @@ async def expire_pending_deposits(
                 )
             )
             for deposit in deposits:
+                await release_deposit_flash_sale(session, deposit)
                 deposit.status = "failed"
                 deposit.failure_reason = "expired"
                 deposit.failed_at = current_time

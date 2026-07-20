@@ -1,12 +1,18 @@
 import hmac
+import logging
 import re
+from contextlib import suppress
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
+from html import escape
 from pathlib import Path
 from urllib.parse import urlencode
 from zoneinfo import ZoneInfo
 
-from fastapi import APIRouter, Form, Request
+from aiogram import Bot
+from aiogram.exceptions import TelegramBadRequest
+from aiogram.types import BufferedInputFile
+from fastapi import APIRouter, File, Form, Request, UploadFile
 from fastapi.responses import HTMLResponse, RedirectResponse, Response
 from fastapi.templating import Jinja2Templates
 from sqlalchemy import String, cast, delete, func, literal, or_, select
@@ -24,6 +30,7 @@ from app.models import (
     Category,
     Deposit,
     DiscountCode,
+    FlashSaleCampaign,
     InventoryItem,
     Order,
     PaymentTransaction,
@@ -58,6 +65,8 @@ templates.env.filters["vnd"] = format_vnd
 
 LOCAL_TIMEZONE = ZoneInfo("Asia/Bangkok")
 ADMIN_PAGE_SIZE = 100
+MAX_FLASH_SALE_IMAGE_BYTES = 8 * 1024 * 1024
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -494,6 +503,22 @@ def normalize_fulfillment_source(value: str) -> str | None:
     return normalized if normalized in SELLABLE_FULFILLMENT_SOURCES else None
 
 
+def default_flash_sale_message(
+    product_name: str,
+    original_price: int,
+    sale_price: int,
+    quantity: int,
+) -> str:
+    return (
+        "⚡ <b>FLASH SALE GIỚI HẠN</b>\n\n"
+        f"• Sản phẩm: <b>{escape(product_name)}</b>\n"
+        f"• Giá cũ: <s>{format_vnd(original_price)}</s>\n"
+        f"• Giá Flash Sale: <b>{format_vnd(sale_price)}</b>\n"
+        f"• Số lượng ưu đãi: <b>{quantity}</b>\n\n"
+        "Nhanh tay mua trước khi hết suất."
+    )
+
+
 def create_dashboard_router(
     settings: Settings,
     session_factory: async_sessionmaker[AsyncSession],
@@ -501,8 +526,40 @@ def create_dashboard_router(
     supplier_client: SumistoreClient | None = None,
     lehai_client: LeHaiPremiumClient | None = None,
     rentsim_client: RentSimClient | None = None,
+    bot: Bot | None = None,
 ) -> APIRouter:
     router = APIRouter()
+
+    async def upload_flash_sale_image(image: UploadFile | None) -> str | None:
+        if image is None or not image.filename:
+            return None
+        if not (image.content_type or "").lower().startswith("image/"):
+            raise ValueError("Tệp đính kèm phải là ảnh.")
+        content = await image.read(MAX_FLASH_SALE_IMAGE_BYTES + 1)
+        if not content:
+            raise ValueError("Ảnh đính kèm đang trống.")
+        if len(content) > MAX_FLASH_SALE_IMAGE_BYTES:
+            raise ValueError("Ảnh Flash Sale không được lớn hơn 8 MB.")
+        if bot is None or not settings.admin_ids:
+            raise ValueError("Bot chưa sẵn sàng để lưu ảnh Flash Sale.")
+        admin_chat_id = settings.admin_ids[0]
+        try:
+            preview = await bot.send_photo(
+                admin_chat_id,
+                BufferedInputFile(content, filename=image.filename),
+            )
+        except TelegramBadRequest as exc:
+            raise ValueError("Telegram không nhận ảnh này. Hãy thử ảnh JPG/PNG khác.") from exc
+        except Exception as exc:
+            logger.exception("Could not upload Flash Sale photo to Telegram")
+            raise ValueError("Không thể tải ảnh lên Telegram lúc này.") from exc
+        try:
+            if not preview.photo:
+                raise ValueError("Telegram không trả về mã ảnh hợp lệ.")
+            return preview.photo[-1].file_id
+        finally:
+            with suppress(Exception):
+                await bot.delete_message(admin_chat_id, preview.message_id)
 
     @router.get("/admin/login", response_class=HTMLResponse)
     async def login_page(request: Request) -> Response:
@@ -1277,7 +1334,9 @@ def create_dashboard_router(
         parsed_markup = parse_vnd(supplier_markup) or 0
         normalized_supplier_id = supplier_product_id.strip() or None
         async with session_factory() as session:
-            product = await session.get(Product, product_id)
+            product = await session.scalar(
+                select(Product).where(Product.id == product_id).with_for_update()
+            )
             category = await session.get(Category, category_id)
             if (
                 product is None
@@ -1315,6 +1374,19 @@ def create_dashboard_router(
             product.allow_quantity = allow_quantity is not None
             product.max_quantity = max(1, min(max_quantity, 100))
             product.active = active is not None
+            active_campaign = await session.scalar(
+                select(FlashSaleCampaign)
+                .where(
+                    FlashSaleCampaign.product_id == product.id,
+                    FlashSaleCampaign.status == "active",
+                )
+                .with_for_update()
+            )
+            if active_campaign is not None and active_campaign.sale_price >= parsed_price:
+                active_campaign.status = "price_invalid"
+                active_campaign.ended_at = datetime.now(UTC)
+                if active_campaign.notification_status in {"pending", "sending"}:
+                    active_campaign.notification_status = "superseded"
             await session.commit()
         flash(request, "Đã lưu thông tin sản phẩm.")
         return RedirectResponse(f"/admin/products/{product_id}", status_code=303)
@@ -1366,6 +1438,290 @@ def create_dashboard_router(
             await session.commit()
         flash(request, "Đã xóa sản phẩm và toàn bộ kho chưa bán của sản phẩm đó.")
         return RedirectResponse("/admin/products", status_code=303)
+
+    @router.get("/admin/flash-sales", response_class=HTMLResponse)
+    async def flash_sales_page(request: Request, page: int = 1) -> Response:
+        if not is_admin(request):
+            return redirect_to_login()
+        async with session_factory() as session:
+            products = [
+                row
+                for row in await product_rows(session)
+                if row["product"].active and int(row["stock"]) > 0
+            ]
+            campaign_count = int(
+                await session.scalar(select(func.count(FlashSaleCampaign.id))) or 0
+            )
+            pager = admin_pager(request, campaign_count, page)
+            campaign_records = (
+                await session.execute(
+                    select(FlashSaleCampaign, Product)
+                    .join(Product, Product.id == FlashSaleCampaign.product_id)
+                    .order_by(FlashSaleCampaign.id.desc())
+                    .offset(pager.offset)
+                    .limit(ADMIN_PAGE_SIZE)
+                )
+            ).all()
+            campaign_ids = [campaign.id for campaign, _product in campaign_records]
+            failure_groups: dict[int, list[dict[str, object]]] = {}
+            if campaign_ids:
+                for campaign_id, error, count in await session.execute(
+                    select(
+                        ProductAlertDelivery.alert_id,
+                        ProductAlertDelivery.last_error,
+                        func.count(ProductAlertDelivery.id),
+                    )
+                    .where(
+                        ProductAlertDelivery.alert_type == "flash",
+                        ProductAlertDelivery.alert_id.in_(campaign_ids),
+                        ProductAlertDelivery.status == "failed",
+                    )
+                    .group_by(
+                        ProductAlertDelivery.alert_id,
+                        ProductAlertDelivery.last_error,
+                    )
+                ):
+                    failure_groups.setdefault(int(campaign_id), []).append(
+                        {
+                            "error": error or "Không rõ lỗi",
+                            "count": int(count),
+                        }
+                    )
+
+            now = datetime.now(UTC)
+            campaigns = []
+            for campaign, product in campaign_records:
+                started_at = campaign.notification_started_at
+                completed_at = campaign.notification_completed_at
+                if started_at is not None and started_at.tzinfo is None:
+                    started_at = started_at.replace(tzinfo=UTC)
+                if completed_at is not None and completed_at.tzinfo is None:
+                    completed_at = completed_at.replace(tzinfo=UTC)
+                processed = campaign.delivered_count + campaign.failed_count
+                elapsed_seconds = 0
+                if started_at is not None:
+                    elapsed_seconds = max(
+                        0,
+                        int(((completed_at or now) - started_at).total_seconds()),
+                    )
+                if elapsed_seconds >= 60:
+                    minutes, seconds = divmod(elapsed_seconds, 60)
+                    duration = f"{minutes}p {seconds}s"
+                elif started_at is not None:
+                    duration = f"{elapsed_seconds}s"
+                else:
+                    duration = "—"
+                campaigns.append(
+                    {
+                        "campaign": campaign,
+                        "product": product,
+                        "remaining_quantity": max(
+                            0,
+                            campaign.total_quantity
+                            - campaign.sold_quantity
+                            - campaign.reserved_quantity,
+                        ),
+                        "processed": processed,
+                        "notification_remaining": max(
+                            0,
+                            campaign.total_recipients - processed,
+                        ),
+                        "speed": (
+                            round(processed / elapsed_seconds, 1)
+                            if elapsed_seconds > 0
+                            else 0
+                        ),
+                        "duration": duration,
+                        "failures": failure_groups.get(campaign.id, []),
+                    }
+                )
+
+            active_count = int(
+                await session.scalar(
+                    select(func.count(FlashSaleCampaign.id)).where(
+                        FlashSaleCampaign.status == "active"
+                    )
+                )
+                or 0
+            )
+            sold_quantity = int(
+                await session.scalar(
+                    select(func.coalesce(func.sum(FlashSaleCampaign.sold_quantity), 0))
+                )
+                or 0
+            )
+            reserved_quantity = int(
+                await session.scalar(
+                    select(func.coalesce(func.sum(FlashSaleCampaign.reserved_quantity), 0))
+                )
+                or 0
+            )
+            notification_active = int(
+                await session.scalar(
+                    select(func.count(FlashSaleCampaign.id)).where(
+                        FlashSaleCampaign.notification_status.in_(("pending", "sending"))
+                    )
+                )
+                or 0
+            )
+        return templates.TemplateResponse(
+            request,
+            "flash_sales.html",
+            page_context(
+                request,
+                "Flash Sale",
+                "flash-sales",
+                products=products,
+                campaigns=campaigns,
+                campaign_count=campaign_count,
+                active_count=active_count,
+                sold_quantity=sold_quantity,
+                reserved_quantity=reserved_quantity,
+                notification_active=notification_active,
+                pager=pager,
+                auto_refresh=notification_active > 0,
+            ),
+        )
+
+    @router.post("/admin/flash-sales")
+    async def create_flash_sale(
+        request: Request,
+        csrf: str = Form(...),
+        product_id: int = Form(...),
+        sale_price: str = Form(...),
+        total_quantity: int = Form(...),
+        message_text: str = Form(""),
+        image: UploadFile | None = File(default=None),
+    ) -> RedirectResponse:
+        if not is_admin(request):
+            return redirect_to_login()
+        if not valid_csrf(request, csrf):
+            flash(request, "Phiên biểu mẫu không hợp lệ.", "error")
+            return RedirectResponse("/admin/flash-sales", status_code=303)
+        parsed_sale_price = parse_vnd(sale_price) or 0
+        custom_message = message_text.strip()
+        if parsed_sale_price <= 0 or total_quantity <= 0 or total_quantity > 100_000:
+            flash(request, "Giá sale hoặc số lượng sale không hợp lệ.", "error")
+            return RedirectResponse("/admin/flash-sales", status_code=303)
+        message_limit = 1024 if image is not None and image.filename else 4096
+        if custom_message and len(custom_message) > message_limit:
+            flash(
+                request,
+                f"Nội dung thông báo tối đa {message_limit} ký tự với lựa chọn hiện tại.",
+                "error",
+            )
+            return RedirectResponse("/admin/flash-sales", status_code=303)
+        try:
+            telegram_photo_file_id = await upload_flash_sale_image(image)
+        except ValueError as exc:
+            flash(request, str(exc), "error")
+            return RedirectResponse("/admin/flash-sales", status_code=303)
+
+        async with session_factory() as session:
+            async with session.begin():
+                product = await session.scalar(
+                    select(Product).where(Product.id == product_id).with_for_update()
+                )
+                if (
+                    product is None
+                    or not product.active
+                    or product.product_type != "account"
+                    or product.fulfillment_source not in SELLABLE_FULFILLMENT_SOURCES
+                    or parsed_sale_price >= product.price
+                    or (
+                        product.fulfillment_source in EXTERNAL_FULFILLMENT_SOURCES
+                        and parsed_sale_price < int(product.supplier_price or 0)
+                    )
+                ):
+                    flash(
+                        request,
+                        "Sản phẩm không hợp lệ; giá sale phải thấp hơn giá bán nhưng "
+                        "không được thấp hơn giá vốn API hiện tại.",
+                        "error",
+                    )
+                    return RedirectResponse("/admin/flash-sales", status_code=303)
+                existing = await session.scalar(
+                    select(FlashSaleCampaign)
+                    .where(
+                        FlashSaleCampaign.product_id == product.id,
+                        or_(
+                            FlashSaleCampaign.status == "active",
+                            FlashSaleCampaign.reserved_quantity > 0,
+                        ),
+                    )
+                    .with_for_update()
+                )
+                if existing is not None:
+                    flash(request, "Sản phẩm này đang có một chiến dịch Flash Sale.", "error")
+                    return RedirectResponse("/admin/flash-sales", status_code=303)
+                if product.fulfillment_source in EXTERNAL_FULFILLMENT_SOURCES:
+                    stock = max(0, product.external_stock)
+                else:
+                    stock = int(
+                        await session.scalar(
+                            select(func.count(InventoryItem.id)).where(
+                                InventoryItem.product_id == product.id,
+                                InventoryItem.status == "available",
+                            )
+                        )
+                        or 0
+                    )
+                if stock < total_quantity:
+                    flash(
+                        request,
+                        f"Kho hiện chỉ có {stock} sản phẩm, không đủ {total_quantity} suất sale.",
+                        "error",
+                    )
+                    return RedirectResponse("/admin/flash-sales", status_code=303)
+                campaign_message = custom_message or default_flash_sale_message(
+                    product.name_vi,
+                    product.price,
+                    parsed_sale_price,
+                    total_quantity,
+                )
+                session.add(
+                    FlashSaleCampaign(
+                        product_id=product.id,
+                        original_price=product.price,
+                        sale_price=parsed_sale_price,
+                        total_quantity=total_quantity,
+                        message_text=campaign_message,
+                        telegram_photo_file_id=telegram_photo_file_id,
+                        created_by=str(request.session.get("dashboard_admin") or "admin"),
+                    )
+                )
+        flash(
+            request,
+            "Đã bật Flash Sale. Thông báo đang được xếp hàng gửi tới khách hàng.",
+        )
+        return RedirectResponse("/admin/flash-sales", status_code=303)
+
+    @router.post("/admin/flash-sales/{campaign_id}/cancel")
+    async def cancel_flash_sale(
+        campaign_id: int,
+        request: Request,
+        csrf: str = Form(...),
+    ) -> RedirectResponse:
+        if not is_admin(request):
+            return redirect_to_login()
+        if not valid_csrf(request, csrf):
+            return RedirectResponse("/admin/flash-sales", status_code=303)
+        async with session_factory() as session:
+            async with session.begin():
+                campaign = await session.scalar(
+                    select(FlashSaleCampaign)
+                    .where(FlashSaleCampaign.id == campaign_id)
+                    .with_for_update()
+                )
+                if campaign is None or campaign.status != "active":
+                    flash(request, "Chiến dịch không còn hoạt động.", "error")
+                    return RedirectResponse("/admin/flash-sales", status_code=303)
+                campaign.status = "cancelled"
+                campaign.ended_at = datetime.now(UTC)
+                if campaign.notification_status in {"pending", "sending"}:
+                    campaign.notification_status = "superseded"
+        flash(request, "Đã dừng Flash Sale; sản phẩm lập tức trở về giá thường.")
+        return RedirectResponse("/admin/flash-sales", status_code=303)
 
     @router.get("/admin/discounts", response_class=HTMLResponse)
     async def discounts_page(request: Request, product_id: int | None = None) -> Response:

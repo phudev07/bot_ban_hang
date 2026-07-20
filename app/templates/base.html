@@ -7,7 +7,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=Fraunces:opsz,wght@9..144,600;9..144,700&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="/admin-assets/admin.css?v=9">
+  <link rel="stylesheet" href="/admin-assets/admin.css?v=11">
 </head>
 <body>
   <div class="shell">
@@ -39,6 +39,7 @@
         <div class="nav-group">
           <span class="nav-group-title">Tăng trưởng</span>
           <a class="{{ 'active' if section == 'users' else '' }}" href="/admin/users" {{ 'aria-current=page' if section == 'users' else '' }}><span class="nav-icon">KH</span><b>Khách hàng</b></a>
+          <a class="{{ 'active' if section == 'flash-sales' else '' }}" href="/admin/flash-sales" {{ 'aria-current=page' if section == 'flash-sales' else '' }}><span class="nav-icon">FS</span><b>Flash Sale</b></a>
           <a class="{{ 'active' if section == 'broadcasts' else '' }}" href="/admin/broadcasts" {{ 'aria-current=page' if section == 'broadcasts' else '' }}><span class="nav-icon">TB</span><b>Thông báo</b></a>
           <a class="{{ 'active' if section == 'referrals' else '' }}" href="/admin/referrals" {{ 'aria-current=page' if section == 'referrals' else '' }}><span class="nav-icon">GT</span><b>Giới thiệu bạn bè</b></a>
         </div>

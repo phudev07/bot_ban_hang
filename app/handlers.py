@@ -17,6 +17,11 @@ from app.delivery import (
     delivery_keyboard,
     delivery_text,
 )
+from app.flash_sales import (
+    FlashSaleUnavailable,
+    active_flash_sale_prices,
+    flash_sale_remaining,
+)
 from app.keyboards import (
     back_menu,
     categories_menu,
@@ -202,12 +207,20 @@ def create_router(
     async def quick_buy_command(message: Message, session: AsyncSession) -> None:
         user = await get_or_create_user(message, session)
         products = await active_products(session)
+        flash_prices = await active_flash_sale_prices(
+            session, [product.id for product in products]
+        )
         text = "⚡ <b>Mua nhanh</b>" if user.language == "vi" else "⚡ <b>Quick buy</b>"
         if not products:
             text = "Kho chưa có mặt hàng." if user.language == "vi" else "No products yet."
         await message.answer(
             text,
-            reply_markup=products_menu(products, user.language, "back:menu"),
+            reply_markup=products_menu(
+                products,
+                user.language,
+                "back:menu",
+                flash_prices,
+            ),
         )
 
     @router.message(Command("naptien"))
@@ -327,6 +340,9 @@ def create_router(
         user = await get_or_create_user(callback, session)
         category_id = int(callback.data.split(":", 1)[1])
         products = await active_products(session, category_id)
+        flash_prices = await active_flash_sale_prices(
+            session, [product.id for product in products]
+        )
         text = "📦 <b>Chọn mặt hàng</b>" if user.language == "vi" else "📦 <b>Choose a product</b>"
         if not products:
             text = (
@@ -337,7 +353,12 @@ def create_router(
         if callback.message:
             await callback.message.edit_text(
                 text,
-                reply_markup=products_menu(products, user.language, "menu:products"),
+                reply_markup=products_menu(
+                    products,
+                    user.language,
+                    "menu:products",
+                    flash_prices,
+                ),
             )
         await callback.answer()
 
@@ -345,12 +366,21 @@ def create_router(
     async def quick_buy(callback: CallbackQuery, session: AsyncSession) -> None:
         user = await get_or_create_user(callback, session)
         products = await active_products(session)
+        flash_prices = await active_flash_sale_prices(
+            session, [product.id for product in products]
+        )
         text = "⚡ <b>Mua nhanh</b>" if user.language == "vi" else "⚡ <b>Quick buy</b>"
         if not products:
             text = "Kho chưa có mặt hàng." if user.language == "vi" else "No products yet."
         if callback.message:
             await callback.message.edit_text(
-                text, reply_markup=products_menu(products, user.language, "back:menu")
+                text,
+                reply_markup=products_menu(
+                    products,
+                    user.language,
+                    "back:menu",
+                    flash_prices,
+                ),
             )
         await callback.answer()
 
@@ -640,6 +670,8 @@ def create_router(
             lehai_client=lehai_client,
             refresh_external=True,
         )
+        pricing = await product_pricing(session, product)
+        display_price = pricing.final_unit_price if pricing is not None else product.price
         quantity_discounts = await active_quantity_discounts(session, product.id)
         name = product.name_en if user.language == "en" else product.name_vi
         description = product.description_en if user.language == "en" else product.description_vi
@@ -648,13 +680,25 @@ def create_router(
             if user.language == "en"
             else ("Giá", "Còn hàng", "Thông tin")
         )
+        price_text = f"<b>{format_vnd(display_price)}</b>"
+        if pricing is not None and pricing.flash_sale is not None:
+            price_text = (
+                f"<s>{format_vnd(product.price)}</s> → <b>{format_vnd(display_price)}</b>"
+            )
         text = (
             f"📦 <b>{escape(name)}</b>\n\n"
             f"📝 {labels[2]}: {escape(description or '—')}\n\n"
-            f"💵 {labels[0]}: <b>{format_vnd(product.price)}</b>\n"
+            f"💵 {labels[0]}: {price_text}\n"
             f"📊 {labels[1]}: <b>{stock}</b>"
         )
-        if quantity_discounts:
+        if pricing is not None and pricing.flash_sale is not None:
+            remaining = flash_sale_remaining(pricing.flash_sale)
+            text += (
+                f"\n⚡ Flash Sale còn: <b>{remaining}</b> suất"
+                if user.language == "vi"
+                else f"\n⚡ Flash Sale remaining: <b>{remaining}</b>"
+            )
+        if quantity_discounts and not (pricing and pricing.flash_sale):
             tier_lines = "\n".join(
                 (
                     f"• Từ <b>{tier.min_quantity}</b>: giảm <b>{tier.discount_percent}%</b>"
@@ -672,7 +716,12 @@ def create_router(
         if callback.message:
             await callback.message.edit_text(
                 text,
-                reply_markup=product_detail(product, user.language, stock),
+                reply_markup=product_detail(
+                    product,
+                    user.language,
+                    stock,
+                    allow_coupon=not bool(pricing and pricing.flash_sale),
+                ),
             )
         await callback.answer()
 
@@ -858,6 +907,13 @@ def create_router(
         if product is None or not product.active:
             await callback.answer("Sản phẩm không tồn tại.", show_alert=True)
             return
+        pricing = await product_pricing(session, product)
+        if pricing is not None and pricing.flash_sale is not None:
+            await callback.answer(
+                "Sản phẩm đang Flash Sale nên không cộng thêm mã giảm giá.",
+                show_alert=True,
+            )
+            return
         await state.set_state(PurchaseStates.waiting_for_coupon)
         await state.update_data(product_id=product.id)
         prompt = (
@@ -914,6 +970,12 @@ def create_router(
         await state.clear()
         coupon = pricing.coupon
         if coupon is None:
+            if pricing.flash_sale is not None:
+                await message.answer(
+                    "Sản phẩm đang Flash Sale nên không áp dụng thêm mã giảm giá."
+                    if user.language == "vi"
+                    else "This product is on Flash Sale, so coupon stacking is disabled."
+                )
             return
         text = (
             f"✅ <b>Đã áp dụng mã {escape(coupon.code)}</b>\n\n"
@@ -954,6 +1016,11 @@ def create_router(
             lehai_client=lehai_client,
             refresh_external=True,
         )
+        pricing = await product_pricing(session, product)
+        display_price = pricing.final_unit_price if pricing is not None else product.price
+        menu_stock = stock
+        if pricing is not None and pricing.flash_sale is not None:
+            menu_stock = min(stock, flash_sale_remaining(pricing.flash_sale))
         quantity_discounts = await active_quantity_discounts(session, product.id)
         if stock <= 0:
             if callback.message:
@@ -965,17 +1032,17 @@ def create_router(
         text = (
             f"🧮 <b>Chọn số lượng</b>\n\n"
             f"• Sản phẩm: <b>{escape(product.name_vi)}</b>\n"
-            f"• Đơn giá: <b>{format_vnd(product.price)}</b>\n"
+            f"• Đơn giá: <b>{format_vnd(display_price)}</b>\n"
             f"• Còn hàng: <b>{stock}</b>\n"
             f"• Tối đa mỗi lần: <b>{product.max_quantity}</b>"
             if user.language == "vi"
             else f"🧮 <b>Choose quantity</b>\n\n"
             f"• Product: <b>{escape(product.name_en)}</b>\n"
-            f"• Unit price: <b>{format_vnd(product.price)}</b>\n"
+            f"• Unit price: <b>{format_vnd(display_price)}</b>\n"
             f"• In stock: <b>{stock}</b>\n"
             f"• Maximum per order: <b>{product.max_quantity}</b>"
         )
-        if quantity_discounts:
+        if quantity_discounts and not (pricing and pricing.flash_sale):
             tier_summary = " · ".join(
                 f"{tier.min_quantity}+: -{tier.discount_percent}%"
                 for tier in quantity_discounts
@@ -984,7 +1051,12 @@ def create_router(
         if callback.message:
             await callback.message.edit_text(
                 text,
-                reply_markup=quantity_menu(product, user.language, stock),
+                reply_markup=quantity_menu(
+                    product,
+                    user.language,
+                    menu_stock,
+                    display_price,
+                ),
             )
         await callback.answer()
 
@@ -1010,7 +1082,13 @@ def create_router(
         if stock <= 0:
             await callback.answer("Sản phẩm đã hết hàng.", show_alert=True)
             return
-        maximum = min(product.max_quantity, stock)
+        pricing = await product_pricing(session, product)
+        flash_limit = (
+            flash_sale_remaining(pricing.flash_sale)
+            if pricing is not None and pricing.flash_sale is not None
+            else stock
+        )
+        maximum = min(product.max_quantity, stock, flash_limit)
         await state.set_state(PurchaseStates.waiting_for_quantity)
         await state.update_data(product_id=product.id, maximum_quantity=maximum)
         prompt = (
@@ -1230,12 +1308,21 @@ def create_router(
                 discount_amount=total_discount,
                 discount_code_id=pricing.coupon.id if pricing.coupon else None,
                 discount_code=pricing.coupon.code if pricing.coupon else None,
+                flash_sale_id=pricing.flash_sale.id if pricing.flash_sale else None,
+                flash_sale_quantity=quantity if pricing.flash_sale else 0,
                 expiry_seconds=settings.payment_expiry_seconds,
                 max_pending_deposits=settings.max_pending_deposits_per_user,
             )
         except PendingDepositLimitReached:
             await callback.answer(
                 "Bạn đang có quá nhiều QR chờ thanh toán. Hãy dùng QR cũ hoặc chờ hết hạn.",
+                show_alert=True,
+            )
+            return
+        except FlashSaleUnavailable:
+            await session.rollback()
+            await callback.answer(
+                "Suất Flash Sale vừa hết. Vui lòng mở lại sản phẩm để xem giá hiện tại.",
                 show_alert=True,
             )
             return

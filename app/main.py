@@ -124,6 +124,44 @@ async def initialize_database(engine, session_factory, seed_demo_data: bool) -> 
         )
         await connection.execute(
             text(
+                "CREATE INDEX IF NOT EXISTS ix_flash_sale_campaigns_product_status "
+                "ON flash_sale_campaigns (product_id, status, id)"
+            )
+        )
+        await connection.execute(
+            text(
+                "ALTER TABLE orders ADD COLUMN IF NOT EXISTS "
+                "flash_sale_id INTEGER NULL REFERENCES flash_sale_campaigns(id) "
+                "ON DELETE SET NULL"
+            )
+        )
+        await connection.execute(
+            text(
+                "ALTER TABLE deposits ADD COLUMN IF NOT EXISTS "
+                "flash_sale_id INTEGER NULL REFERENCES flash_sale_campaigns(id) "
+                "ON DELETE SET NULL"
+            )
+        )
+        await connection.execute(
+            text(
+                "ALTER TABLE deposits ADD COLUMN IF NOT EXISTS "
+                "flash_sale_quantity INTEGER NOT NULL DEFAULT 0"
+            )
+        )
+        await connection.execute(
+            text(
+                "CREATE INDEX IF NOT EXISTS ix_orders_flash_sale_id "
+                "ON orders (flash_sale_id)"
+            )
+        )
+        await connection.execute(
+            text(
+                "CREATE INDEX IF NOT EXISTS ix_deposits_flash_sale_id "
+                "ON deposits (flash_sale_id)"
+            )
+        )
+        await connection.execute(
+            text(
                 "ALTER TABLE sms_rentals ADD COLUMN IF NOT EXISTS "
                 "rental_message_id BIGINT NULL"
             )
@@ -1013,18 +1051,14 @@ async def main() -> None:
         if rentsim_client is not None
         else None
     )
-    sale_alert_task = (
-        asyncio.create_task(
-            sale_alert_worker(
-                session_factory,
-                bot,
-                limiter=notification_limiter,
-                concurrency=settings.broadcast_concurrency,
-                batch_size=settings.broadcast_batch_size,
-            )
+    sale_alert_task = asyncio.create_task(
+        sale_alert_worker(
+            session_factory,
+            bot,
+            limiter=notification_limiter,
+            concurrency=settings.broadcast_concurrency,
+            batch_size=settings.broadcast_batch_size,
         )
-        if supplier_client is not None or lehai_client is not None
-        else None
     )
     try:
         await bot.delete_webhook(drop_pending_updates=False)
@@ -1060,10 +1094,9 @@ async def main() -> None:
             rentsim_task.cancel()
             with contextlib.suppress(asyncio.CancelledError):
                 await rentsim_task
-        if sale_alert_task is not None:
-            sale_alert_task.cancel()
-            with contextlib.suppress(asyncio.CancelledError):
-                await sale_alert_task
+        sale_alert_task.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await sale_alert_task
         server.should_exit = True
         await api_task
         await storage.close()
