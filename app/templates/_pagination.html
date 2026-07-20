@@ -1,0 +1,13 @@
+{% macro render_pager(pager, item_label='dòng') %}
+<div class="admin-pager">
+  <p>
+    Hiển thị <strong>{{ pager.start_item }}–{{ pager.end_item }}</strong>
+    trên tổng <strong>{{ pager.total_items }}</strong> {{ item_label }}
+    · Trang <strong>{{ pager.page }}/{{ pager.total_pages }}</strong>
+  </p>
+  <nav aria-label="Phân trang">
+    {% if pager.previous_url %}<a class="button quiet compact" href="{{ pager.previous_url }}">← Trang trước</a>{% else %}<span class="button quiet compact disabled">← Trang trước</span>{% endif %}
+    {% if pager.next_url %}<a class="button quiet compact" href="{{ pager.next_url }}">Trang sau →</a>{% else %}<span class="button quiet compact disabled">Trang sau →</span>{% endif %}
+  </nav>
+</div>
+{% endmacro %}

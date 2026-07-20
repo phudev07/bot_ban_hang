@@ -1,4 +1,5 @@
 {% extends "base.html" %}
+{% from "_pagination.html" import render_pager %}
 {% block content %}
 <section class="mini-metrics">
   <article><span>Kết quả lọc</span><strong>{{ summary.orders }}</strong><small>đơn hàng</small></article>
@@ -23,7 +24,7 @@
 </section>
 
 <section class="panel">
-  <div class="panel-head"><div><span>FULFILLMENT DESK</span><h2>Đơn hàng và hỗ trợ</h2></div><small>Tối đa 300 kết quả mới nhất</small></div>
+  <div class="panel-head"><div><span>FULFILLMENT DESK</span><h2>Đơn hàng và hỗ trợ</h2></div><small>100 đơn mỗi trang</small></div>
   <div class="table-wrap"><table><thead><tr><th>Mã đơn</th><th>Khách hàng</th><th>Sản phẩm</th><th>Nguồn / Kênh</th><th>Doanh thu</th><th>Giá vốn</th><th>Lợi nhuận gộp</th><th>Giảm giá</th><th>Trạng thái</th><th>Thời gian tạo</th><th></th></tr></thead><tbody>
   {% for row in orders %}
   <tr>
@@ -41,5 +42,6 @@
   </tr>
   {% else %}<tr><td colspan="11" class="empty">Không tìm thấy đơn hàng phù hợp.</td></tr>{% endfor %}
   </tbody></table></div>
+  {{ render_pager(pager, 'đơn hàng') }}
 </section>
 {% endblock %}

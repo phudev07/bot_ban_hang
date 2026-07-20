@@ -1,4 +1,5 @@
 {% extends "base.html" %}
+{% from "_pagination.html" import render_pager %}
 {% block content %}
 <section class="panel filter-panel">
   <form class="filter-grid customer-filter" method="get">
@@ -10,7 +11,7 @@
 </section>
 
 <section class="panel">
-  <div class="panel-head"><div><span>CUSTOMER SUPPORT</span><h2>Khách hàng, ví và lịch sử</h2></div><small>Tối đa 200 khách mới nhất</small></div>
+  <div class="panel-head"><div><span>CUSTOMER SUPPORT</span><h2>Khách hàng, ví và lịch sử</h2><small>Tổng số dư trong bộ lọc: <strong>{{ filtered_wallet_total|vnd }}</strong></small></div><small>100 khách mỗi trang</small></div>
   <div class="table-wrap"><table><thead><tr><th>Khách hàng</th><th>Tham gia / Hoạt động</th><th>Số dư</th><th>Đã nạp</th><th>Đơn / Đã chi</th><th>Trạng thái</th><th>Điều chỉnh số dư</th></tr></thead><tbody>
   {% for row in users %}{% set user = row.user %}
   <tr>
@@ -24,5 +25,6 @@
   </tr>
   {% else %}<tr><td colspan="7" class="empty">Không tìm thấy khách hàng.</td></tr>{% endfor %}
   </tbody></table></div>
+  {{ render_pager(pager, 'khách hàng') }}
 </section>
 {% endblock %}

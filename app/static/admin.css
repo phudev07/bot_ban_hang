@@ -48,6 +48,10 @@ h1, h2 { font-family: "Fraunces", serif; }
 .panel-head a { color: var(--green); font-size: 13px; font-weight: 700; }
 .table-wrap { overflow-x: auto; }
 table { width: 100%; border-collapse: collapse; font-size: 13px; }
+.admin-pager { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 14px; margin-top: 16px; padding-top: 14px; border-top: 1px solid var(--line); }
+.admin-pager p { margin: 0; color: var(--muted); font-size: 13px; }
+.admin-pager nav { display: flex; gap: 8px; }
+.admin-pager .disabled { opacity: .45; pointer-events: none; }
 th { padding: 12px 16px; color: var(--muted); background: #f7f4ec; text-align: left; font-size: 10px; letter-spacing: .11em; text-transform: uppercase; }
 td { padding: 14px 16px; border-top: 1px solid #e9e5db; vertical-align: middle; }
 td strong, td small { display: block; }

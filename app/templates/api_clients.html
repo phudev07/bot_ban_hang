@@ -1,4 +1,5 @@
 {% extends "base.html" %}
+{% from "_pagination.html" import render_pager %}
 {% block content %}
 <section class="page-intro api-control-hero">
   <div class="api-hero-copy">
@@ -88,6 +89,7 @@
           <input type="hidden" name="csrf" value="{{ csrf_token }}">
           <input type="hidden" name="return_q" value="{{ query }}">
           <input type="hidden" name="return_status" value="{{ status }}">
+          <input type="hidden" name="return_page" value="{{ pager.page }}">
           <label><span>Request mỗi phút</span><input type="number" name="rate_limit_per_minute" value="{{ client.rate_limit_per_minute }}" min="1" max="10000"><small>Khuyến nghị 60-300 tùy đối tác.</small></label>
           <label class="wide"><span>IP được phép gọi API</span><textarea name="allowed_ips" rows="3" placeholder="Để trống nếu cho phép mọi IP. Nhiều IP cách nhau bằng dấu phẩy.">{{ client.allowed_ips }}</textarea><small>Chỉ nhập IP cố định của server đối tác, không nhập URL.</small></label>
           <label class="api-block-switch"><input type="checkbox" name="admin_blocked" {{ 'checked' if client.admin_blocked else '' }}><span><b>Đình chỉ client này</b><small>Client bị khóa sẽ nhận lỗi 403 và không thể mua hàng.</small></span></label>
@@ -99,5 +101,6 @@
     <div class="api-empty-state"><span>API</span><h3>Không tìm thấy client phù hợp</h3><p>Thử đổi từ khóa hoặc đặt lại bộ lọc. Client mới sẽ tự xuất hiện khi người dùng mở mục API đấu kho trong bot.</p><a class="button quiet" href="/admin/api-clients">Xóa bộ lọc</a></div>
   {% endfor %}
   </div>
+  {{ render_pager(pager, 'API client') }}
 </section>
 {% endblock %}

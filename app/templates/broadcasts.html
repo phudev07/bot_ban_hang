@@ -1,4 +1,5 @@
 {% extends "base.html" %}
+{% from "_pagination.html" import render_pager %}
 {% block content %}
 <section class="metric-grid">
   <article class="metric accent"><span>Đang nhận tin</span><strong>{{ active_recipients }}</strong><small>Người đã dùng /start</small></article>
@@ -9,7 +10,7 @@
 
 <div class="split-layout">
   <section class="panel">
-    <div class="panel-head"><div><span>BROADCAST HISTORY</span><h2>100 lần gửi gần nhất</h2></div></div>
+    <div class="panel-head"><div><span>BROADCAST HISTORY</span><h2>Toàn bộ lịch sử gửi</h2></div><small>100 lần mỗi trang</small></div>
     <div class="table-wrap">
       <table>
         <thead><tr><th>Lần gửi</th><th>Quản trị</th><th>Đối tượng</th><th>Đã giao</th><th>Lỗi</th><th>Thời gian</th></tr></thead>
@@ -29,6 +30,7 @@
         </tbody>
       </table>
     </div>
+    {{ render_pager(broadcast_pager, 'lần gửi') }}
   </section>
 
   <aside class="panel note-panel">
@@ -61,6 +63,7 @@
       </tbody>
     </table>
   </div>
+  {{ render_pager(sale_pager, 'lần giảm giá') }}
 </section>
 
 <section class="panel">
@@ -93,5 +96,6 @@
       </tbody>
     </table>
   </div>
+  {{ render_pager(stock_pager, 'lần hàng về') }}
 </section>
 {% endblock %}

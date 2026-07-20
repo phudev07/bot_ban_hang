@@ -1,4 +1,5 @@
 {% extends "base.html" %}
+{% from "_pagination.html" import render_pager %}
 {% block content %}
 <section class="page-intro audit-intro">
   <div>
@@ -100,6 +101,7 @@
       </tbody>
     </table>
   </div>
+  {{ render_pager(transaction_pager, 'biến động số dư') }}
 </section>
 
 <section class="panel">
@@ -131,5 +133,6 @@
       </tbody>
     </table>
   </div>
+  {{ render_pager(attempt_pager, 'lần gọi mua') }}
 </section>
 {% endblock %}

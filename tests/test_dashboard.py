@@ -1,6 +1,6 @@
 import asyncio
 import re
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 from cryptography.fernet import Fernet
 from fastapi.testclient import TestClient
@@ -17,6 +17,7 @@ from app.models import (
     ApiClient,
     ApiRequestAudit,
     Category,
+    Deposit,
     DiscountCode,
     InventoryItem,
     Order,
@@ -33,6 +34,118 @@ from app.utils import SecretCipher
 class FakeBot:
     async def send_message(self, *_args, **_kwargs) -> None:
         return None
+
+
+def test_admin_core_ledgers_paginate_all_rows(tmp_path) -> None:
+    async def setup_database():
+        database_path = (tmp_path / "dashboard-pagination.db").as_posix()
+        engine = create_async_engine(f"sqlite+aiosqlite:///{database_path}")
+        async with engine.begin() as connection:
+            await connection.run_sync(Base.metadata.create_all)
+        sessions = async_sessionmaker(engine, expire_on_commit=False)
+        now = datetime.now(UTC)
+        async with sessions() as session:
+            users = [
+                User(
+                    telegram_id=7_000_000_000 + index,
+                    full_name=f"PagedUser-{index:03d}",
+                    balance=index,
+                    created_at=now + timedelta(seconds=index),
+                )
+                for index in range(205)
+            ]
+            session.add_all(users)
+            category = Category(name_vi="Phân trang", name_en="Pagination")
+            session.add(category)
+            await session.flush()
+            product = Product(
+                category_id=category.id,
+                name_vi="Sản phẩm phân trang",
+                name_en="Pagination product",
+                price=1_000,
+                fulfillment_source="local",
+            )
+            session.add(product)
+            await session.flush()
+            for index in range(1, 106):
+                item = InventoryItem(
+                    product_id=product.id,
+                    encrypted_secret=f"item-{index}",
+                    status="sold",
+                    sold_at=now,
+                )
+                session.add(item)
+                await session.flush()
+                session.add(
+                    Order(
+                        user_id=users[0].telegram_id,
+                        product_id=product.id,
+                        inventory_item_id=item.id,
+                        amount=1_000,
+                        status="completed",
+                        delivered_at=now,
+                    )
+                )
+                session.add(
+                    Deposit(
+                        user_id=users[0].telegram_id,
+                        code=f"PAGEDEP{index:03d}",
+                        requested_amount=10_000,
+                        status="pending",
+                        expires_at=now + timedelta(minutes=5),
+                    )
+                )
+            await session.commit()
+        return engine, sessions
+
+    engine, sessions = asyncio.run(setup_database())
+    encryption_key = Fernet.generate_key().decode()
+    settings = Settings(
+        _env_file=None,
+        bot_token="123456:ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghi",
+        inventory_encryption_key=encryption_key,
+        dashboard_enabled=True,
+        dashboard_username="admin",
+        dashboard_password_hash=hash_dashboard_password("dashboard-password"),
+        dashboard_session_secret="session-secret-long-enough-for-tests",
+    )
+    app = create_api(
+        settings,
+        sessions,
+        FakeBot(),  # type: ignore[arg-type]
+        SecretCipher(encryption_key),
+    )
+
+    with TestClient(app, base_url="https://testserver") as client:
+        client.post(
+            "/admin/login",
+            data={"username": "admin", "password": "dashboard-password"},
+        )
+
+        users_page = client.get("/admin/users?page=2")
+        assert users_page.status_code == 200
+        assert "PagedUser-104" in users_page.text
+        assert "PagedUser-204" not in users_page.text
+        assert "trên tổng <strong>205</strong> khách hàng" in users_page.text
+        assert "Trang <strong>2/3</strong>" in users_page.text
+
+        orders_page = client.get("/admin/orders?page=2")
+        assert orders_page.status_code == 200
+        assert "<code>O5</code>" in orders_page.text
+        assert "<code>O105</code>" not in orders_page.text
+        assert "trên tổng <strong>105</strong> đơn hàng" in orders_page.text
+
+        payments_page = client.get("/admin/payments?deposit_page=2")
+        assert payments_page.status_code == 200
+        assert "PAGEDEP005" in payments_page.text
+        assert "PAGEDEP105" not in payments_page.text
+        assert "trên tổng <strong>105</strong> yêu cầu thanh toán" in payments_page.text
+
+        inventory_page = client.get("/admin/inventory?page=2")
+        assert inventory_page.status_code == 200
+        assert "trên tổng <strong>105</strong> mục kho" in inventory_page.text
+
+    asyncio.run(engine.dispose())
 
 
 def test_dashboard_login_catalog_inventory_and_balance(tmp_path) -> None:
@@ -148,7 +261,7 @@ def test_dashboard_login_catalog_inventory_and_balance(tmp_path) -> None:
 
         broadcasts_page = client.get("/admin/broadcasts")
         assert broadcasts_page.status_code == 200
-        assert "100 lần gửi gần nhất" in broadcasts_page.text
+        assert "Toàn bộ lịch sử gửi" in broadcasts_page.text
         assert "Message 123" in broadcasts_page.text
         assert "Sale API tự động" in broadcasts_page.text
 

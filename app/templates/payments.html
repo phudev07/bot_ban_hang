@@ -1,4 +1,5 @@
 {% extends "base.html" %}
+{% from "_pagination.html" import render_pager %}
 {% block content %}
 <section class="metric-grid payment-metrics">
   <article class="metric accent"><span>Tiền nhận hôm nay</span><strong>{{ stats.received_today|vnd }}</strong><small>Giao dịch webhook thành công</small></article>
@@ -31,6 +32,7 @@
     </tr>
     {% else %}<tr><td colspan="7" class="empty">Không có yêu cầu thanh toán phù hợp.</td></tr>{% endfor %}
   </tbody></table></div>
+  {{ render_pager(deposit_pager, 'yêu cầu thanh toán') }}
 </section>
 
 <section class="panel">
@@ -40,6 +42,7 @@
     <tr class="{{ 'audit-row-suspicious' if item.credit_status != 'credited' else '' }}"><td><strong><code>{{ item.provider_tx_id }}</code></strong><small>Internal #{{ item.id }}</small></td><td><strong>{{ row.user.full_name }}</strong><small>@{{ row.user.username or '—' }} · {{ row.user.telegram_id }}</small></td><td><code>{{ row.deposit.code }}</code><small>#{{ row.deposit.id }}</small></td><td><strong>{{ item.amount|vnd }}</strong></td><td><span class="status {{ 'on' if item.credit_status == 'credited' else 'off' }}">{{ item.credit_status }}</span></td><td>{{ item.created_at|localtime }}</td></tr>
     {% else %}<tr><td colspan="6" class="empty">Chưa có giao dịch ngân hàng.</td></tr>{% endfor %}
   </tbody></table></div>
+  {{ render_pager(transaction_pager, 'giao dịch ngân hàng') }}
 </section>
 
 <section class="panel">
@@ -49,5 +52,6 @@
     <tr><td><strong>{{ row.user.full_name }}</strong><small>@{{ row.user.username or '—' }}</small><code>{{ row.user.telegram_id }}</code></td><td><strong>{{ item.amount|vnd }}</strong></td><td>{{ item.admin_username }}</td><td>{{ item.reason }}</td><td>{{ item.created_at|localtime }}</td></tr>
     {% else %}<tr><td colspan="5" class="empty">Chưa có điều chỉnh thủ công.</td></tr>{% endfor %}
   </tbody></table></div>
+  {{ render_pager(adjustment_pager, 'điều chỉnh số dư') }}
 </section>
 {% endblock %}

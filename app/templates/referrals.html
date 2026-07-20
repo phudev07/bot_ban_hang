@@ -1,4 +1,5 @@
 {% extends "base.html" %}
+{% from "_pagination.html" import render_pager %}
 {% block content %}
 <section class="page-intro referral-intro">
   <div><span>REFERRAL ENGINE</span><h2>Hoa hồng {{ commission_percent }}% trên mọi đơn thành công.</h2><p>Hoa hồng tính trên số tiền thực trả sau giảm giá, cộng thẳng vào ví và chỉ ghi một lần cho mỗi mã đơn shop.</p></div>
@@ -14,12 +15,13 @@
 
 <div class="split-layout referral-layout">
   <section class="panel">
-    <div class="panel-head"><div><span>REWARD LEDGER</span><h2>Hoa hồng gần nhất</h2></div><small>Tối đa 300 giao dịch</small></div>
+    <div class="panel-head"><div><span>REWARD LEDGER</span><h2>Toàn bộ lịch sử hoa hồng</h2></div><small>100 giao dịch mỗi trang</small></div>
     <div class="table-wrap"><table><thead><tr><th>Mã đơn</th><th>Người giới thiệu</th><th>Người mua</th><th>Giá trị đơn</th><th>Hoa hồng</th><th>Kênh</th><th>Thời gian</th></tr></thead><tbody>
     {% for row in rewards %}{% set reward = row.reward %}
       <tr><td><a class="text-link" href="/admin/orders?q={{ reward.shop_order_code }}"><code>{{ reward.shop_order_code }}</code></a></td><td><strong>{{ row.referrer.full_name }}</strong><small>{{ row.referrer.telegram_id }}</small></td><td><strong>{{ row.referred.full_name }}</strong><small>{{ row.referred.telegram_id }}</small></td><td>{{ reward.order_amount|vnd }}</td><td><strong class="profit-text">+{{ reward.commission_amount|vnd }}</strong></td><td><span class="status {{ 'wait' if reward.sales_channel == 'api' else 'on' }}">{{ reward.sales_channel }}</span></td><td>{{ reward.created_at|localtime }}</td></tr>
     {% else %}<tr><td colspan="7" class="empty">Chưa có đơn giới thiệu phát sinh hoa hồng.</td></tr>{% endfor %}
     </tbody></table></div>
+    {{ render_pager(pager, 'giao dịch hoa hồng') }}
   </section>
 
   <section class="panel">

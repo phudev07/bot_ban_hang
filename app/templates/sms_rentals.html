@@ -1,4 +1,5 @@
 {% extends "base.html" %}
+{% from "_pagination.html" import render_pager %}
 {% block content %}
 <section class="page-intro sms-intro">
   <div>
@@ -34,7 +35,7 @@
 </section>
 
 <section class="panel">
-  <div class="panel-head"><div><span>SMS RENTAL LEDGER</span><h2>Danh sách lượt thuê gần nhất</h2></div><small>Tối đa 300 dòng · thời gian Việt Nam</small></div>
+  <div class="panel-head"><div><span>SMS RENTAL LEDGER</span><h2>Toàn bộ lịch sử thuê số</h2></div><small>100 dòng mỗi trang · thời gian Việt Nam</small></div>
   <div class="table-wrap"><table class="sms-rental-table"><thead><tr><th>Đơn thuê</th><th>Người dùng</th><th>Số điện thoại</th><th>OTP</th><th>Tiền</th><th>Trạng thái</th><th>Thời gian</th></tr></thead><tbody>
     {% for row in rentals %}{% set item = row.rental %}
     <tr>
@@ -48,5 +49,6 @@
     </tr>
     {% else %}<tr><td colspan="7" class="empty">Chưa có lượt thuê số SMS nào trong bộ lọc này.</td></tr>{% endfor %}
   </tbody></table></div>
+  {{ render_pager(pager, 'lượt thuê số') }}
 </section>
 {% endblock %}

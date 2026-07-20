@@ -1,5 +1,6 @@
 import hmac
 import re
+from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from urllib.parse import urlencode
@@ -54,6 +55,51 @@ templates.env.filters["vnd"] = format_vnd
 
 
 LOCAL_TIMEZONE = ZoneInfo("Asia/Bangkok")
+ADMIN_PAGE_SIZE = 100
+
+
+@dataclass(frozen=True)
+class AdminPager:
+    page: int
+    total_pages: int
+    total_items: int
+    start_item: int
+    end_item: int
+    previous_url: str | None
+    next_url: str | None
+
+    @property
+    def offset(self) -> int:
+        return (self.page - 1) * ADMIN_PAGE_SIZE
+
+
+def admin_pager(
+    request: Request,
+    total_items: int,
+    requested_page: int,
+    *,
+    page_parameter: str = "page",
+) -> AdminPager:
+    total = max(0, int(total_items))
+    total_pages = max(1, (total + ADMIN_PAGE_SIZE - 1) // ADMIN_PAGE_SIZE)
+    page = min(max(1, int(requested_page)), total_pages)
+
+    def page_url(target_page: int) -> str:
+        parameters = dict(request.query_params)
+        parameters[page_parameter] = str(target_page)
+        return f"{request.url.path}?{urlencode(parameters)}"
+
+    start_item = (page - 1) * ADMIN_PAGE_SIZE + 1 if total else 0
+    end_item = min(page * ADMIN_PAGE_SIZE, total)
+    return AdminPager(
+        page=page,
+        total_pages=total_pages,
+        total_items=total,
+        start_item=start_item,
+        end_item=end_item,
+        previous_url=page_url(page - 1) if page > 1 else None,
+        next_url=page_url(page + 1) if page < total_pages else None,
+    )
 
 
 def local_datetime(value: datetime | None) -> str:
@@ -1675,20 +1721,31 @@ def create_dashboard_router(
         return RedirectResponse("/admin/discounts", status_code=303)
 
     @router.get("/admin/inventory", response_class=HTMLResponse)
-    async def inventory_page(request: Request) -> Response:
+    async def inventory_page(request: Request, page: int = 1) -> Response:
         if not is_admin(request):
             return redirect_to_login()
         async with session_factory() as session:
             products = await product_rows(session)
+            inventory_conditions = (
+                Product.fulfillment_source.in_(SELLABLE_FULFILLMENT_SOURCES),
+                Product.product_type == "account",
+            )
+            inventory_count = int(
+                await session.scalar(
+                    select(func.count(InventoryItem.id))
+                    .join(Product, Product.id == InventoryItem.product_id)
+                    .where(*inventory_conditions)
+                )
+                or 0
+            )
+            pager = admin_pager(request, inventory_count, page)
             inventory_rows = await session.execute(
                 select(InventoryItem, Product)
                 .join(Product, Product.id == InventoryItem.product_id)
-                .where(
-                    Product.fulfillment_source.in_(SELLABLE_FULFILLMENT_SOURCES),
-                    Product.product_type == "account",
-                )
+                .where(*inventory_conditions)
                 .order_by(InventoryItem.id.desc())
-                .limit(100)
+                .offset(pager.offset)
+                .limit(ADMIN_PAGE_SIZE)
             )
             recent_items = [{"item": item, "product": product} for item, product in inventory_rows]
         return templates.TemplateResponse(
@@ -1701,6 +1758,7 @@ def create_dashboard_router(
                 products=products,
                 import_products=products,
                 recent_items=recent_items,
+                pager=pager,
             ),
         )
 
@@ -1765,9 +1823,30 @@ def create_dashboard_router(
         return RedirectResponse("/admin/inventory", status_code=303)
 
     @router.get("/admin/users", response_class=HTMLResponse)
-    async def users_page(request: Request, q: str = "", status: str = "all") -> Response:
+    async def users_page(
+        request: Request,
+        q: str = "",
+        status: str = "all",
+        page: int = 1,
+    ) -> Response:
         if not is_admin(request):
             return redirect_to_login()
+        user_conditions = []
+        if q.strip():
+            needle = f"%{q.strip()}%"
+            user_conditions.append(
+                or_(
+                    User.username.ilike(needle),
+                    User.full_name.ilike(needle),
+                    cast(User.telegram_id, String).ilike(needle),
+                )
+            )
+        if status == "blocked":
+            user_conditions.append(User.is_blocked.is_(True))
+        elif status == "started":
+            user_conditions.append(User.has_started.is_(True))
+        elif status == "inactive":
+            user_conditions.append(User.has_started.is_(False))
         async with session_factory() as session:
             order_stats = (
                 select(
@@ -1785,10 +1864,24 @@ def create_dashboard_router(
                     func.coalesce(func.sum(PaymentTransaction.amount), 0).label("deposited"),
                     func.max(PaymentTransaction.created_at).label("last_deposit_at"),
                 )
-                .where(PaymentTransaction.credit_status == "credited")
+                .join(Deposit, Deposit.id == PaymentTransaction.deposit_id)
+                .where(
+                    PaymentTransaction.credit_status == "credited",
+                    Deposit.payment_kind == "wallet",
+                )
                 .group_by(PaymentTransaction.user_id)
                 .subquery()
             )
+            user_count_statement = select(
+                func.count(User.telegram_id),
+                func.coalesce(func.sum(User.balance), 0),
+            )
+            if user_conditions:
+                user_count_statement = user_count_statement.where(*user_conditions)
+            user_count, filtered_wallet_total = (
+                await session.execute(user_count_statement)
+            ).one()
+            pager = admin_pager(request, int(user_count), page)
             statement = (
                 select(
                     User,
@@ -1801,23 +1894,11 @@ def create_dashboard_router(
                 .outerjoin(order_stats, order_stats.c.user_id == User.telegram_id)
                 .outerjoin(deposit_stats, deposit_stats.c.user_id == User.telegram_id)
                 .order_by(User.created_at.desc())
-                .limit(200)
+                .offset(pager.offset)
+                .limit(ADMIN_PAGE_SIZE)
             )
-            if q.strip():
-                needle = f"%{q.strip()}%"
-                statement = statement.where(
-                    or_(
-                        User.username.ilike(needle),
-                        User.full_name.ilike(needle),
-                        cast(User.telegram_id, String).ilike(needle),
-                    )
-                )
-            if status == "blocked":
-                statement = statement.where(User.is_blocked.is_(True))
-            elif status == "started":
-                statement = statement.where(User.has_started.is_(True))
-            elif status == "inactive":
-                statement = statement.where(User.has_started.is_(False))
+            if user_conditions:
+                statement = statement.where(*user_conditions)
             user_rows = [
                 {
                     "user": user,
@@ -1840,11 +1921,18 @@ def create_dashboard_router(
                 users=user_rows,
                 query=q,
                 status=status,
+                pager=pager,
+                filtered_wallet_total=int(filtered_wallet_total),
             ),
         )
 
     @router.get("/admin/broadcasts", response_class=HTMLResponse)
-    async def broadcasts_page(request: Request) -> Response:
+    async def broadcasts_page(
+        request: Request,
+        broadcast_page: int = 1,
+        sale_page: int = 1,
+        stock_page: int = 1,
+    ) -> Response:
         if not is_admin(request):
             return redirect_to_login()
         async with session_factory() as session:
@@ -1869,13 +1957,28 @@ def create_dashboard_router(
                 )
                 or 0
             )
+            broadcast_pager = admin_pager(
+                request,
+                broadcast_count,
+                broadcast_page,
+                page_parameter="broadcast_page",
+            )
             broadcasts = list(
                 await session.scalars(
-                    select(BroadcastLog).order_by(BroadcastLog.id.desc()).limit(100)
+                    select(BroadcastLog)
+                    .order_by(BroadcastLog.id.desc())
+                    .offset(broadcast_pager.offset)
+                    .limit(ADMIN_PAGE_SIZE)
                 )
             )
             sale_alert_count = int(
                 await session.scalar(select(func.count(ProductPriceAlert.id))) or 0
+            )
+            sale_pager = admin_pager(
+                request,
+                sale_alert_count,
+                sale_page,
+                page_parameter="sale_page",
             )
             sale_alerts = [
                 {"alert": alert, "product": product}
@@ -1884,12 +1987,19 @@ def create_dashboard_router(
                         select(ProductPriceAlert, Product)
                         .join(Product, Product.id == ProductPriceAlert.product_id)
                         .order_by(ProductPriceAlert.id.desc())
-                        .limit(100)
+                        .offset(sale_pager.offset)
+                        .limit(ADMIN_PAGE_SIZE)
                     )
                 ).all()
             ]
             stock_alert_count = int(
                 await session.scalar(select(func.count(ProductStockAlert.id))) or 0
+            )
+            stock_pager = admin_pager(
+                request,
+                stock_alert_count,
+                stock_page,
+                page_parameter="stock_page",
             )
             stock_alerts = [
                 {"alert": alert, "product": product}
@@ -1898,7 +2008,8 @@ def create_dashboard_router(
                         select(ProductStockAlert, Product)
                         .join(Product, Product.id == ProductStockAlert.product_id)
                         .order_by(ProductStockAlert.id.desc())
-                        .limit(100)
+                        .offset(stock_pager.offset)
+                        .limit(ADMIN_PAGE_SIZE)
                     )
                 ).all()
             ]
@@ -1914,10 +2025,13 @@ def create_dashboard_router(
                 delivered_count=delivered_count,
                 failed_count=failed_count,
                 broadcasts=broadcasts,
+                broadcast_pager=broadcast_pager,
                 sale_alert_count=sale_alert_count,
                 sale_alerts=sale_alerts,
+                sale_pager=sale_pager,
                 stock_alert_count=stock_alert_count,
                 stock_alerts=stock_alerts,
+                stock_pager=stock_pager,
             ),
         )
 
@@ -1981,6 +2095,7 @@ def create_dashboard_router(
         source: str = "all",
         channel: str = "all",
         period: str = "all",
+        page: int = 1,
     ) -> Response:
         if not is_admin(request):
             return redirect_to_login()
@@ -2025,21 +2140,6 @@ def create_dashboard_router(
                     .distinct()
                 )
                 matching_keys = matching_statement.subquery()
-            statement = (
-                select(Order, Product, User)
-                .join(Product, Product.id == Order.product_id)
-                .join(User, User.telegram_id == Order.user_id)
-                .order_by(Order.id.desc())
-                .limit(30_000)
-            )
-            if conditions:
-                statement = statement.where(*conditions)
-            if matching_keys is not None:
-                statement = statement.where(
-                    order_group_key().in_(select(matching_keys.c.group_key))
-                )
-            rows = await session.execute(statement)
-            orders = group_order_rows(rows, limit=300)
             summary_statement = (
                 select(
                     purchase_order_count(),
@@ -2061,6 +2161,34 @@ def create_dashboard_router(
             order_count, revenue, cost, discount, customer_count = (
                 await session.execute(summary_statement)
             ).one()
+            pager = admin_pager(request, int(order_count), page)
+            paged_keys_statement = (
+                select(
+                    order_group_key().label("group_key"),
+                    func.max(Order.id).label("latest_order_id"),
+                )
+                .select_from(Order)
+                .join(Product, Product.id == Order.product_id)
+                .join(User, User.telegram_id == Order.user_id)
+                .where(*conditions)
+                .group_by(order_group_key())
+                .order_by(func.max(Order.id).desc())
+                .offset(pager.offset)
+                .limit(ADMIN_PAGE_SIZE)
+            )
+            if matching_keys is not None:
+                paged_keys_statement = paged_keys_statement.where(
+                    order_group_key().in_(select(matching_keys.c.group_key))
+                )
+            paged_keys = paged_keys_statement.subquery()
+            rows = await session.execute(
+                select(Order, Product, User)
+                .join(Product, Product.id == Order.product_id)
+                .join(User, User.telegram_id == Order.user_id)
+                .where(order_group_key().in_(select(paged_keys.c.group_key)))
+                .order_by(Order.id.desc())
+            )
+            orders = group_order_rows(rows)
             reward_keys = (
                 select(order_group_key())
                 .select_from(Order)
@@ -2094,6 +2222,7 @@ def create_dashboard_router(
                 source=source,
                 channel=channel,
                 period=period,
+                pager=pager,
                 summary={
                     "orders": int(order_count),
                     "revenue": int(revenue),
@@ -2215,6 +2344,7 @@ def create_dashboard_router(
         request: Request,
         q: str = "",
         status: str = "all",
+        page: int = 1,
     ) -> Response:
         if not is_admin(request):
             return redirect_to_login()
@@ -2275,8 +2405,6 @@ def create_dashboard_router(
                 .join(User, User.telegram_id == ApiClient.owner_user_id)
                 .outerjoin(order_stats, order_stats.c.api_client_id == ApiClient.id)
                 .outerjoin(request_stats, request_stats.c.api_client_id == ApiClient.id)
-                .order_by(request_stats.c.last_request_at.desc(), ApiClient.id.desc())
-                .limit(300)
             )
             if q.strip():
                 needle = f"%{q.strip()}%"
@@ -2308,6 +2436,19 @@ def create_dashboard_router(
                         func.coalesce(request_stats.c.recent_error_count, 0) > 0,
                     )
                 )
+            client_count = int(
+                await session.scalar(
+                    select(func.count()).select_from(statement.subquery())
+                )
+                or 0
+            )
+            pager = admin_pager(request, client_count, page)
+            statement = (
+                statement
+                .order_by(request_stats.c.last_request_at.desc(), ApiClient.id.desc())
+                .offset(pager.offset)
+                .limit(ADMIN_PAGE_SIZE)
+            )
             rows = [
                 {
                     "client": client,
@@ -2406,6 +2547,7 @@ def create_dashboard_router(
                 api_base_url=settings.shop_api_base_url,
                 query=q,
                 status=selected_status,
+                pager=pager,
             ),
         )
 
@@ -2419,6 +2561,7 @@ def create_dashboard_router(
         admin_blocked: str | None = Form(None),
         return_q: str = Form(""),
         return_status: str = Form("all"),
+        return_page: int = Form(1),
     ) -> RedirectResponse:
         if not is_admin(request):
             return redirect_to_login()
@@ -2437,7 +2580,13 @@ def create_dashboard_router(
             if return_status in {"all", "active", "paused", "blocked", "attention"}
             else "all"
         )
-        query_string = urlencode({"q": return_q.strip(), "status": selected_status})
+        query_string = urlencode(
+            {
+                "q": return_q.strip(),
+                "status": selected_status,
+                "page": max(1, return_page),
+            }
+        )
         return RedirectResponse(f"/admin/api-clients?{query_string}", status_code=303)
 
     @router.get("/admin/api-orders")
@@ -2447,12 +2596,16 @@ def create_dashboard_router(
         return RedirectResponse("/admin/orders?channel=api", status_code=303)
 
     @router.get("/admin/referrals", response_class=HTMLResponse)
-    async def referrals_page(request: Request) -> Response:
+    async def referrals_page(request: Request, page: int = 1) -> Response:
         if not is_admin(request):
             return redirect_to_login()
         referrer = aliased(User)
         referred = aliased(User)
         async with session_factory() as session:
+            reward_count = int(
+                await session.scalar(select(func.count(ReferralReward.id))) or 0
+            )
+            pager = admin_pager(request, reward_count, page)
             rewards = [
                 {"reward": reward, "referrer": source, "referred": target}
                 for reward, source, target in await session.execute(
@@ -2460,7 +2613,8 @@ def create_dashboard_router(
                     .join(referrer, referrer.telegram_id == ReferralReward.referrer_user_id)
                     .join(referred, referred.telegram_id == ReferralReward.referred_user_id)
                     .order_by(ReferralReward.id.desc())
-                    .limit(300)
+                    .offset(pager.offset)
+                    .limit(ADMIN_PAGE_SIZE)
                 )
             ]
             top_referrers = [
@@ -2511,6 +2665,7 @@ def create_dashboard_router(
                 top_referrers=top_referrers,
                 stats=stats,
                 commission_percent=settings.referral_commission_percent,
+                pager=pager,
             ),
         )
 
@@ -2519,6 +2674,9 @@ def create_dashboard_router(
         request: Request,
         q: str = "",
         status: str = "all",
+        deposit_page: int = 1,
+        transaction_page: int = 1,
+        adjustment_page: int = 1,
     ) -> Response:
         if not is_admin(request):
             return redirect_to_login()
@@ -2537,11 +2695,47 @@ def create_dashboard_router(
             deposit_conditions.append(Deposit.status == status)
         periods = dashboard_periods()
         async with session_factory() as session:
+            deposit_count_statement = (
+                select(func.count(Deposit.id))
+                .join(User, User.telegram_id == Deposit.user_id)
+            )
+            if deposit_conditions:
+                deposit_count_statement = deposit_count_statement.where(
+                    *deposit_conditions
+                )
+            deposit_count = int(
+                await session.scalar(deposit_count_statement) or 0
+            )
+            transaction_count = int(
+                await session.scalar(select(func.count(PaymentTransaction.id))) or 0
+            )
+            adjustment_count = int(
+                await session.scalar(select(func.count(BalanceAdjustment.id))) or 0
+            )
+            deposit_pager = admin_pager(
+                request,
+                deposit_count,
+                deposit_page,
+                page_parameter="deposit_page",
+            )
+            transaction_pager = admin_pager(
+                request,
+                transaction_count,
+                transaction_page,
+                page_parameter="transaction_page",
+            )
+            adjustment_pager = admin_pager(
+                request,
+                adjustment_count,
+                adjustment_page,
+                page_parameter="adjustment_page",
+            )
             deposit_statement = (
                 select(Deposit, User)
                 .join(User, User.telegram_id == Deposit.user_id)
                 .order_by(Deposit.id.desc())
-                .limit(200)
+                .offset(deposit_pager.offset)
+                .limit(ADMIN_PAGE_SIZE)
             )
             if deposit_conditions:
                 deposit_statement = deposit_statement.where(*deposit_conditions)
@@ -2556,7 +2750,8 @@ def create_dashboard_router(
                     .join(User, User.telegram_id == PaymentTransaction.user_id)
                     .join(Deposit, Deposit.id == PaymentTransaction.deposit_id)
                     .order_by(PaymentTransaction.id.desc())
-                    .limit(200)
+                    .offset(transaction_pager.offset)
+                    .limit(ADMIN_PAGE_SIZE)
                 )
             ]
             adjustments = [
@@ -2565,7 +2760,8 @@ def create_dashboard_router(
                     select(BalanceAdjustment, User)
                     .join(User, User.telegram_id == BalanceAdjustment.user_id)
                     .order_by(BalanceAdjustment.id.desc())
-                    .limit(150)
+                    .offset(adjustment_pager.offset)
+                    .limit(ADMIN_PAGE_SIZE)
                 )
             ]
             received_total = int(
@@ -2627,6 +2823,9 @@ def create_dashboard_router(
                 adjustments=adjustments,
                 query=q,
                 status=status,
+                deposit_pager=deposit_pager,
+                transaction_pager=transaction_pager,
+                adjustment_pager=adjustment_pager,
                 stats={
                     "received_total": received_total,
                     "received_today": received_today,
@@ -2643,6 +2842,7 @@ def create_dashboard_router(
         request: Request,
         status: str = "all",
         q: str = "",
+        page: int = 1,
     ) -> Response:
         if not is_admin(request):
             return redirect_to_login()
@@ -2652,33 +2852,49 @@ def create_dashboard_router(
             else "all"
         )
         search = q.strip()[:100]
+        rental_conditions = []
+        if selected_status == "pending":
+            rental_conditions.append(
+                SmsRental.status.in_(("requesting", "pending"))
+            )
+        elif selected_status != "all":
+            rental_conditions.append(SmsRental.status == selected_status)
+        if search:
+            pattern = f"%{search}%"
+            rental_conditions.append(
+                or_(
+                    cast(SmsRental.id, String).ilike(pattern),
+                    cast(SmsRental.user_id, String).ilike(pattern),
+                    SmsRental.shop_order_code.ilike(pattern),
+                    SmsRental.provider_order_id.ilike(pattern),
+                    SmsRental.phone_number.ilike(pattern),
+                    SmsRental.otp_code.ilike(pattern),
+                    User.full_name.ilike(pattern),
+                    User.username.ilike(pattern),
+                )
+            )
         async with session_factory() as session:
+            rental_count_statement = (
+                select(func.count(SmsRental.id))
+                .join(User, User.telegram_id == SmsRental.user_id)
+            )
+            if rental_conditions:
+                rental_count_statement = rental_count_statement.where(
+                    *rental_conditions
+                )
+            rental_count = int(
+                await session.scalar(rental_count_statement) or 0
+            )
+            pager = admin_pager(request, rental_count, page)
             statement = (
                 select(SmsRental, User)
                 .join(User, User.telegram_id == SmsRental.user_id)
                 .order_by(SmsRental.id.desc())
-                .limit(300)
+                .offset(pager.offset)
+                .limit(ADMIN_PAGE_SIZE)
             )
-            if selected_status == "pending":
-                statement = statement.where(
-                    SmsRental.status.in_(("requesting", "pending"))
-                )
-            elif selected_status != "all":
-                statement = statement.where(SmsRental.status == selected_status)
-            if search:
-                pattern = f"%{search}%"
-                statement = statement.where(
-                    or_(
-                        cast(SmsRental.id, String).ilike(pattern),
-                        cast(SmsRental.user_id, String).ilike(pattern),
-                        SmsRental.shop_order_code.ilike(pattern),
-                        SmsRental.provider_order_id.ilike(pattern),
-                        SmsRental.phone_number.ilike(pattern),
-                        SmsRental.otp_code.ilike(pattern),
-                        User.full_name.ilike(pattern),
-                        User.username.ilike(pattern),
-                    )
-                )
+            if rental_conditions:
+                statement = statement.where(*rental_conditions)
             rentals = [
                 {"rental": rental, "user": user}
                 for rental, user in await session.execute(statement)
@@ -2748,6 +2964,7 @@ def create_dashboard_router(
                 rentals=rentals,
                 selected_status=selected_status,
                 search=search,
+                pager=pager,
                 availability=availability,
                 stats={
                     "total": total,
@@ -2770,6 +2987,8 @@ def create_dashboard_router(
         request: Request,
         provider: str = PROVIDER,
         kind: str = "all",
+        transaction_page: int = 1,
+        attempt_page: int = 1,
     ) -> Response:
         if not is_admin(request):
             return redirect_to_login()
@@ -2786,14 +3005,48 @@ def create_dashboard_router(
         )
         async with session_factory() as session:
             state = await session.get(SupplierBalanceState, selected_provider)
+            transaction_conditions = [
+                SupplierBalanceTransaction.provider == selected_provider
+            ]
+            if selected_kind != "all":
+                transaction_conditions.append(
+                    SupplierBalanceTransaction.kind == selected_kind
+                )
+            transaction_count = int(
+                await session.scalar(
+                    select(func.count(SupplierBalanceTransaction.id)).where(
+                        *transaction_conditions
+                    )
+                )
+                or 0
+            )
+            attempt_count = int(
+                await session.scalar(
+                    select(func.count(SupplierPurchaseAttempt.id)).where(
+                        SupplierPurchaseAttempt.provider == selected_provider
+                    )
+                )
+                or 0
+            )
+            transaction_pager = admin_pager(
+                request,
+                transaction_count,
+                transaction_page,
+                page_parameter="transaction_page",
+            )
+            attempt_pager = admin_pager(
+                request,
+                attempt_count,
+                attempt_page,
+                page_parameter="attempt_page",
+            )
             statement = (
                 select(SupplierBalanceTransaction)
-                .where(SupplierBalanceTransaction.provider == selected_provider)
+                .where(*transaction_conditions)
                 .order_by(SupplierBalanceTransaction.id.desc())
-                .limit(300)
+                .offset(transaction_pager.offset)
+                .limit(ADMIN_PAGE_SIZE)
             )
-            if selected_kind != "all":
-                statement = statement.where(SupplierBalanceTransaction.kind == selected_kind)
             transactions = list(await session.scalars(statement))
             purchase_attempts = (
                 await session.execute(
@@ -2801,7 +3054,8 @@ def create_dashboard_router(
                     .outerjoin(Product, Product.id == SupplierPurchaseAttempt.product_id)
                     .where(SupplierPurchaseAttempt.provider == selected_provider)
                     .order_by(SupplierPurchaseAttempt.id.desc())
-                    .limit(100)
+                    .offset(attempt_pager.offset)
+                    .limit(ADMIN_PAGE_SIZE)
                 )
             ).all()
             suspicious_count, suspicious_sum = (
@@ -2848,6 +3102,8 @@ def create_dashboard_router(
                 provider_label=provider_label,
                 supplier_connected=selected_client is not None,
                 purchase_attempts=purchase_attempts,
+                transaction_pager=transaction_pager,
+                attempt_pager=attempt_pager,
                 stats={
                     "current_balance": state.last_balance if state else None,
                     "last_checked": state.checked_at if state else None,
