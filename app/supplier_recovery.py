@@ -12,7 +12,13 @@ from app.models import (
     SupplierBalanceTransaction,
     SupplierRecoveryRequest,
 )
-from app.suppliers import SumistoreClient, supplier_balance_guard
+from app.suppliers import (
+    SupplierError,
+    SupplierOrderSummary,
+    SupplierPurchase,
+    SumistoreClient,
+    supplier_balance_guard,
+)
 from app.utils import SecretCipher
 
 
@@ -26,6 +32,14 @@ class PendingRecoveryResult:
     matched_orders: int = 0
     inserted_accounts: int = 0
     linked_audits: int = 0
+    queued_orphans: int = 0
+
+
+@dataclass(frozen=True)
+class OrphanedOrder:
+    summary: SupplierOrderSummary
+    purchase: SupplierPurchase
+    product_id: int
 
 
 def _as_utc(value: datetime) -> datetime:
@@ -230,6 +244,196 @@ async def _link_recovered_audits(
     return linked
 
 
+async def _queue_orphaned_audit_orders(
+    session_factory: async_sessionmaker[AsyncSession],
+    client: SumistoreClient,
+    summaries: list[SupplierOrderSummary],
+    known_codes: set[str],
+    now: datetime,
+) -> tuple[int, ...]:
+    async with session_factory() as session:
+        audits = list(
+            await session.scalars(
+                select(SupplierBalanceTransaction)
+                .where(
+                    SupplierBalanceTransaction.provider == "sumistore",
+                    SupplierBalanceTransaction.kind == "suspicious",
+                    SupplierBalanceTransaction.created_at >= now - RECOVERY_WINDOW,
+                )
+                .order_by(SupplierBalanceTransaction.id)
+            )
+        )
+        products = {
+            product.supplier_product_id: product
+            for product in await session.scalars(
+                select(Product).where(
+                    Product.fulfillment_source == "sumistore",
+                    Product.supplier_product_id.is_not(None),
+                )
+            )
+            if product.supplier_product_id
+        }
+
+    queued_ids: list[int] = []
+    purchase_cache: dict[str, SupplierPurchase] = {}
+    for audit in audits:
+        if audit.period_started_at is None or audit.created_at is None:
+            continue
+        period_started_at = _as_utc(audit.period_started_at)
+        audit_created_at = _as_utc(audit.created_at)
+        source_candidates = [
+            summary
+            for summary in summaries
+            if summary.order_code not in known_codes
+            and summary.product_id in products
+            and period_started_at - SOURCE_CLOCK_SKEW
+            <= summary.created_at
+            <= audit_created_at + SOURCE_CLOCK_SKEW
+        ]
+        if not source_candidates:
+            continue
+
+        candidates: list[OrphanedOrder] = []
+        invalid_candidate = False
+        for summary in source_candidates:
+            try:
+                purchase = purchase_cache.get(summary.order_code)
+                if purchase is None:
+                    purchase = await client.fetch_order(summary.order_code)
+                    purchase_cache[summary.order_code] = purchase
+            except SupplierError:
+                invalid_candidate = True
+                break
+            if (
+                (
+                    purchase.product_id
+                    and purchase.product_id != summary.product_id
+                )
+                or len(purchase.accounts) != summary.quantity
+                or purchase.unit_price <= 0
+            ):
+                invalid_candidate = True
+                break
+            candidates.append(
+                OrphanedOrder(
+                    summary=summary,
+                    purchase=purchase,
+                    product_id=products[summary.product_id].id,
+                )
+            )
+        if invalid_candidate or not candidates:
+            continue
+        if (
+            sum(
+                candidate.purchase.unit_price * len(candidate.purchase.accounts)
+                for candidate in candidates
+            )
+            != abs(audit.amount)
+        ):
+            continue
+
+        async with session_factory() as session:
+            async with session.begin():
+                locked_audit = await session.scalar(
+                    select(SupplierBalanceTransaction)
+                    .where(SupplierBalanceTransaction.id == audit.id)
+                    .with_for_update()
+                )
+                if locked_audit is None or locked_audit.kind != "suspicious":
+                    continue
+                current_known_codes = await _known_supplier_order_codes(session)
+                if any(
+                    candidate.summary.order_code in current_known_codes
+                    for candidate in candidates
+                ):
+                    continue
+                for candidate in candidates:
+                    request = SupplierRecoveryRequest(
+                        provider="sumistore",
+                        request_key=_request_key(
+                            f"audit-{audit.id}-{candidate.summary.order_code}"
+                        ),
+                        product_id=candidate.product_id,
+                        supplier_product_id=candidate.summary.product_id,
+                        quantity=candidate.summary.quantity,
+                        status="pending",
+                        error_code="MISSING_LOCAL_COMMIT",
+                        supplier_order_code=candidate.summary.order_code,
+                        unit_price=candidate.purchase.unit_price,
+                        total_cost=(
+                            candidate.purchase.unit_price
+                            * len(candidate.purchase.accounts)
+                        ),
+                        started_at=candidate.summary.created_at,
+                        expires_at=now + RECOVERY_WINDOW,
+                        supplier_created_at=candidate.summary.created_at,
+                    )
+                    session.add(request)
+                    await session.flush()
+                    queued_ids.append(request.id)
+                    known_codes.add(candidate.summary.order_code)
+    return tuple(queued_ids)
+
+
+async def _recover_requests(
+    session_factory: async_sessionmaker[AsyncSession],
+    client: SumistoreClient,
+    cipher: SecretCipher,
+    recoveries: list[SupplierRecoveryRequest],
+    summaries: list[SupplierOrderSummary],
+    known_codes: set[str],
+) -> tuple[int, int]:
+    matched_orders = 0
+    inserted_accounts = 0
+    for recovery in recoveries:
+        started_at = _as_utc(recovery.started_at)
+        expires_at = _as_utc(recovery.expires_at)
+        if recovery.supplier_order_code:
+            candidate = next(
+                (
+                    order
+                    for order in summaries
+                    if order.order_code == recovery.supplier_order_code
+                ),
+                None,
+            )
+        else:
+            candidate = next(
+                (
+                    order
+                    for order in summaries
+                    if order.order_code not in known_codes
+                    and order.product_id == recovery.supplier_product_id
+                    and order.quantity == recovery.quantity
+                    and started_at - SOURCE_CLOCK_SKEW
+                    <= order.created_at
+                    <= expires_at
+                ),
+                None,
+            )
+        if candidate is None:
+            continue
+        purchase = await client.fetch_order(candidate.order_code)
+        if purchase.product_id and purchase.product_id != recovery.supplier_product_id:
+            continue
+        if len(purchase.accounts) != recovery.quantity:
+            continue
+        if purchase.unit_price <= 0:
+            continue
+        inserted_accounts += await _store_recovered_order(
+            session_factory,
+            cipher,
+            recovery_id=recovery.id,
+            supplier_order_code=candidate.order_code,
+            supplier_created_at=candidate.created_at,
+            unit_price=purchase.unit_price,
+            accounts=purchase.accounts,
+        )
+        known_codes.add(candidate.order_code)
+        matched_orders += 1
+    return matched_orders, inserted_accounts
+
+
 async def recover_pending_sumistore_orders(
     session_factory: async_sessionmaker[AsyncSession],
     client: SumistoreClient,
@@ -250,56 +454,63 @@ async def recover_pending_sumistore_orders(
                 )
             )
             known_codes = await _known_supplier_order_codes(session)
-        if not pending:
-            linked = await _link_recovered_audits(session_factory)
-            return PendingRecoveryResult(linked_audits=linked)
+        has_suspicious = False
+        async with session_factory() as session:
+            has_suspicious = bool(
+                await session.scalar(
+                    select(SupplierBalanceTransaction.id)
+                    .where(
+                        SupplierBalanceTransaction.provider == "sumistore",
+                        SupplierBalanceTransaction.kind == "suspicious",
+                        SupplierBalanceTransaction.created_at >= now - RECOVERY_WINDOW,
+                    )
+                    .limit(1)
+                )
+            )
+        if not pending and not has_suspicious:
+            return PendingRecoveryResult()
 
         summaries = sorted(await client.fetch_orders(), key=lambda item: item.created_at)
-        matched_orders = 0
-        inserted_accounts = 0
-        for recovery in pending:
-            started_at = _as_utc(recovery.started_at)
-            expires_at = _as_utc(recovery.expires_at)
-            candidate = next(
-                (
-                    order
-                    for order in summaries
-                    if order.order_code not in known_codes
-                    and order.product_id == recovery.supplier_product_id
-                    and order.quantity == recovery.quantity
-                    and started_at - SOURCE_CLOCK_SKEW
-                    <= order.created_at
-                    <= expires_at
-                ),
-                None,
-            )
-            if candidate is None:
-                continue
-            purchase = await client.fetch_order(candidate.order_code)
-            if (
-                purchase.product_id
-                and purchase.product_id != recovery.supplier_product_id
-            ):
-                continue
-            if len(purchase.accounts) != recovery.quantity:
-                continue
-            if purchase.unit_price <= 0:
-                continue
-            inserted_accounts += await _store_recovered_order(
+        matched_orders, inserted_accounts = await _recover_requests(
+            session_factory,
+            client,
+            cipher,
+            pending,
+            summaries,
+            known_codes,
+        )
+        linked = await _link_recovered_audits(session_factory)
+        queued_ids = await _queue_orphaned_audit_orders(
+            session_factory,
+            client,
+            summaries,
+            known_codes,
+            now,
+        )
+        if queued_ids:
+            async with session_factory() as session:
+                orphan_recoveries = list(
+                    await session.scalars(
+                        select(SupplierRecoveryRequest)
+                        .where(SupplierRecoveryRequest.id.in_(queued_ids))
+                        .order_by(SupplierRecoveryRequest.id)
+                    )
+                )
+            orphan_matched, orphan_inserted = await _recover_requests(
                 session_factory,
+                client,
                 cipher,
-                recovery_id=recovery.id,
-                supplier_order_code=candidate.order_code,
-                supplier_created_at=candidate.created_at,
-                unit_price=purchase.unit_price,
-                accounts=purchase.accounts,
+                orphan_recoveries,
+                summaries,
+                known_codes,
             )
-            known_codes.add(candidate.order_code)
-            matched_orders += 1
+            matched_orders += orphan_matched
+            inserted_accounts += orphan_inserted
+            linked += await _link_recovered_audits(session_factory)
 
-    linked = await _link_recovered_audits(session_factory)
     return PendingRecoveryResult(
         matched_orders=matched_orders,
         inserted_accounts=inserted_accounts,
         linked_audits=linked,
+        queued_orphans=len(queued_ids),
     )

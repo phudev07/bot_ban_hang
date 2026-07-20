@@ -485,12 +485,14 @@ async def supplier_recovery_worker(
                 client,
                 cipher,
             )
-            if result.matched_orders or result.linked_audits:
+            if result.matched_orders or result.linked_audits or result.queued_orphans:
                 logging.getLogger(__name__).warning(
-                    "Recovered delayed Sumi orders: orders=%s accounts=%s audits=%s",
+                    "Recovered delayed Sumi orders: orders=%s accounts=%s audits=%s "
+                    "orphan_requests=%s",
                     result.matched_orders,
                     result.inserted_accounts,
                     result.linked_audits,
+                    result.queued_orphans,
                 )
         except Exception:
             logging.getLogger(__name__).exception(
