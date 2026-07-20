@@ -162,6 +162,54 @@ async def buy_supplier_product(
     return purchase
 
 
+async def preserve_supplier_purchase_for_resale(
+    session: AsyncSession,
+    product: Product,
+    purchase: SupplierPurchase,
+    cipher: SecretCipher,
+    unit_cost: int,
+) -> str:
+    """Keep an already-paid supplier order sellable when a flash price becomes unsafe."""
+    existing_indices: set[int] = set()
+    if purchase.order_code:
+        existing_indices = set(
+            await session.scalars(
+                select(InventoryItem.supplier_item_index).where(
+                    InventoryItem.supplier_order_code == purchase.order_code,
+                    InventoryItem.supplier_item_index.is_not(None),
+                )
+            )
+        )
+    inserted = 0
+    for item_index, secret_value in enumerate(purchase.accounts):
+        if item_index in existing_indices:
+            continue
+        session.add(
+            InventoryItem(
+                product_id=product.id,
+                encrypted_secret=cipher.encrypt(secret_value),
+                cost_amount=unit_cost,
+                supplier_order_code=purchase.order_code or None,
+                supplier_item_index=item_index,
+                status="available",
+            )
+        )
+        inserted += 1
+    recovery_code = f"R{secrets.token_hex(5).upper()}"
+    if inserted:
+        record_supplier_purchase(
+            session,
+            amount=unit_cost * inserted,
+            supplier_order_code=purchase.order_code or None,
+            shop_order_code=recovery_code,
+            product_id=product.id,
+            quantity=inserted,
+            provider=purchase.provider,
+        )
+    await session.flush()
+    return recovery_code
+
+
 async def _execute_supplier_purchase(
     session: AsyncSession,
     client: ExternalSupplierClient,
@@ -398,13 +446,17 @@ async def product_pricing(
     quantity: int = 1,
     lock_coupon: bool = False,
     lock_flash_sale: bool = False,
+    expected_flash_sale_id: int | None = None,
 ) -> ProductPricing | None:
     flash_sale = await active_flash_sale(
         session,
         product.id,
         quantity=1,
         for_update=lock_flash_sale,
+        campaign_id=expected_flash_sale_id,
     )
+    if expected_flash_sale_id is not None and flash_sale is None:
+        return None
     if flash_sale is not None:
         return ProductPricing(
             original_unit_price=product.price,
@@ -505,6 +557,7 @@ class PurchaseResult:
     discount_amount: int = 0
     coupon_code: str | None = None
     quantity_discount_percent: int = 0
+    flash_sale_id: int | None = None
 
     @property
     def order(self) -> Order | None:
@@ -607,6 +660,7 @@ async def purchase_product(
     referral_commission_percent: int = 5,
     on_fulfillment_started: FulfillmentStartedCallback | None = None,
     supplier_idempotency_key: str | None = None,
+    expected_flash_sale_id: int | None = None,
 ) -> PurchaseResult:
     async with session_factory() as session:
         fulfillment_source = await session.scalar(
@@ -635,6 +689,7 @@ async def purchase_product(
                 referral_commission_percent=referral_commission_percent,
                 on_fulfillment_started=on_fulfillment_started,
                 supplier_idempotency_key=supplier_idempotency_key,
+                expected_flash_sale_id=expected_flash_sale_id,
             )
     return await _purchase_product(
         session_factory,
@@ -652,6 +707,7 @@ async def purchase_product(
         referral_commission_percent=referral_commission_percent,
         on_fulfillment_started=on_fulfillment_started,
         supplier_idempotency_key=supplier_idempotency_key,
+        expected_flash_sale_id=expected_flash_sale_id,
     )
 
 
@@ -672,6 +728,7 @@ async def _purchase_product(
     referral_commission_percent: int,
     on_fulfillment_started: FulfillmentStartedCallback | None,
     supplier_idempotency_key: str | None,
+    expected_flash_sale_id: int | None,
 ) -> PurchaseResult:
     async with session_factory() as session:
         async with session.begin():
@@ -725,9 +782,18 @@ async def _purchase_product(
                 quantity=quantity,
                 lock_coupon=bool(coupon_code or coupon_id is not None),
                 lock_flash_sale=True,
+                expected_flash_sale_id=expected_flash_sale_id,
             )
             if pricing is None:
-                return PurchaseResult(False, "invalid_coupon")
+                return PurchaseResult(
+                    False,
+                    (
+                        "flash_sale_unavailable"
+                        if expected_flash_sale_id is not None
+                        else "invalid_coupon"
+                    ),
+                    flash_sale_id=expected_flash_sale_id,
+                )
             if (
                 pricing.flash_sale is not None
                 and flash_sale_remaining(pricing.flash_sale) < quantity
@@ -743,6 +809,7 @@ async def _purchase_product(
                     discount_amount=total_discount,
                     coupon_code=pricing.coupon.code if pricing.coupon else None,
                     quantity_discount_percent=pricing.quantity_discount_percent,
+                    flash_sale_id=(pricing.flash_sale.id if pricing.flash_sale else None),
                 )
 
             if product.fulfillment_source in EXTERNAL_FULFILLMENT_SOURCES:
@@ -840,9 +907,13 @@ async def _purchase_product(
 
                 now = datetime.now(UTC)
                 batch_code = f"B{secrets.token_hex(5).upper()}"
-                if (
+                if supplier_purchase.unit_price > 0 and (
                     supplier_purchase.provider == "sumistore"
-                    and supplier_purchase.unit_price > 0
+                    or (
+                        pricing.flash_sale is not None
+                        and supplier_purchase.unit_price
+                        > pricing.flash_sale.sale_price
+                    )
                 ):
                     await apply_supplier_price(
                         session,
@@ -855,6 +926,31 @@ async def _purchase_product(
                     or product.supplier_price
                     or 0,
                 )
+                if (
+                    pricing.flash_sale is not None
+                    and cost_unit_price > pricing.flash_sale.sale_price
+                ):
+                    recovery_code = await preserve_supplier_purchase_for_resale(
+                        session,
+                        product,
+                        supplier_purchase,
+                        cipher,
+                        cost_unit_price,
+                    )
+                    logger.warning(
+                        "Flash sale stopped after supplier cost increased during purchase: "
+                        "campaign=%s product=%s sale_price=%s cost=%s recovery=%s",
+                        pricing.flash_sale.id,
+                        product.id,
+                        pricing.flash_sale.sale_price,
+                        cost_unit_price,
+                        recovery_code,
+                    )
+                    return PurchaseResult(
+                        False,
+                        "flash_sale_unavailable",
+                        flash_sale_id=pricing.flash_sale.id,
+                    )
                 product.external_stock = max(0, product.external_stock - quantity)
                 orders = []
                 secret_values = []
@@ -1423,38 +1519,67 @@ async def _process_sepay_payment(
                                         or product.supplier_price
                                         or 0,
                                     )
-                                    if (
+                                    if supplier_purchase.unit_price > 0 and (
                                         supplier_purchase.provider == "sumistore"
-                                        and supplier_purchase.unit_price > 0
+                                        or (
+                                            deposit_campaign is not None
+                                            and supplier_purchase.unit_price
+                                            > deposit_campaign.sale_price
+                                        )
                                     ):
                                         await apply_supplier_price(
                                             session,
                                             product,
                                             supplier_purchase.unit_price,
                                         )
-                                    product.external_stock = max(
-                                        0,
-                                        product.external_stock - deposit.quantity,
-                                    )
-                                    items = [
-                                        InventoryItem(
-                                            product_id=product.id,
-                                            encrypted_secret=cipher.encrypt(secret_value),
-                                            cost_amount=supplier_unit_cost,
-                                            supplier_order_code=(
-                                                supplier_purchase.order_code or None
-                                            ),
-                                            supplier_item_index=item_index,
-                                            status="sold",
-                                            sold_at=now,
+                                    if (
+                                        deposit_campaign is not None
+                                        and supplier_unit_cost
+                                        > deposit_campaign.sale_price
+                                    ):
+                                        recovery_code = (
+                                            await preserve_supplier_purchase_for_resale(
+                                                session,
+                                                product,
+                                                supplier_purchase,
+                                                cipher,
+                                                supplier_unit_cost,
+                                            )
                                         )
-                                        for item_index, secret_value in enumerate(
-                                            supplier_purchase.accounts
+                                        flash_sale_can_fulfill = False
+                                        logger.warning(
+                                            "Flash QR purchase moved to inventory after supplier "
+                                            "cost increase: campaign=%s deposit=%s cost=%s "
+                                            "recovery=%s",
+                                            deposit_campaign.id,
+                                            deposit.code,
+                                            supplier_unit_cost,
+                                            recovery_code,
                                         )
-                                    ]
-                                    supplier_purchase_made = True
-                                    session.add_all(items)
-                                    await session.flush()
+                                    else:
+                                        product.external_stock = max(
+                                            0,
+                                            product.external_stock - deposit.quantity,
+                                        )
+                                        items = [
+                                            InventoryItem(
+                                                product_id=product.id,
+                                                encrypted_secret=cipher.encrypt(secret_value),
+                                                cost_amount=supplier_unit_cost,
+                                                supplier_order_code=(
+                                                    supplier_purchase.order_code or None
+                                                ),
+                                                supplier_item_index=item_index,
+                                                status="sold",
+                                                sold_at=now,
+                                            )
+                                            for item_index, secret_value in enumerate(
+                                                supplier_purchase.accounts
+                                            )
+                                        ]
+                                        supplier_purchase_made = True
+                                        session.add_all(items)
+                                        await session.flush()
                         else:
                             items = list(
                                 await session.scalars(

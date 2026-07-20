@@ -213,6 +213,7 @@ def test_warehouse_api_purchases_from_shared_wallet_and_is_idempotent(tmp_path) 
         assert "Idempotency-Key" in docs.text
         assert "https://token.vietshare.site/v1" in docs.text
         assert "Tạo QR nạp ví" not in docs.text
+        assert "flash_sale_id" in docs.text
 
         docs_redirect = client.get("/v1/docs", follow_redirects=False)
         assert docs_redirect.status_code == 307
@@ -233,6 +234,7 @@ def test_warehouse_api_purchases_from_shared_wallet_and_is_idempotent(tmp_path) 
         assert products.status_code == 200
         assert products.json()["count"] == 1
         assert products.json()["products"][0]["stock"] == 2
+        assert products.json()["products"][0]["flash_sale_id"] is None
 
         for path in (f"/v1/products/{sms_product_id}", f"/v1/stock/{sms_product_id}"):
             blocked_stock = client.get(
@@ -581,7 +583,12 @@ def test_stale_processing_idempotency_request_can_be_retried(tmp_path) -> None:
             )
             request_hash = hashlib.sha256(
                 json.dumps(
-                    {"coupon_code": None, "product_id": product.id, "quantity": 1},
+                    {
+                        "coupon_code": None,
+                        "flash_sale_id": None,
+                        "product_id": product.id,
+                        "quantity": 1,
+                    },
                     sort_keys=True,
                     separators=(",", ":"),
                 ).encode()

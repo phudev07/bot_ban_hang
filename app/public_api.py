@@ -79,6 +79,7 @@ class ApiOrderBody(BaseModel):
     product_id: int
     quantity: int = Field(default=1, ge=1, le=100)
     coupon_code: str | None = Field(default=None, max_length=64)
+    flash_sale_id: int | None = Field(default=None, ge=1)
 
 
 @dataclass(frozen=True)
@@ -353,6 +354,7 @@ def create_public_api_router(
                         "name": product.name_vi,
                         "description": product.description_vi,
                         "price": flash_sale.sale_price if flash_sale else product.price,
+                        "flash_sale_id": flash_sale.id if flash_sale else None,
                         "stock": stock,
                         "allow_quantity": product.allow_quantity,
                         "max_quantity": product.max_quantity,
@@ -384,6 +386,7 @@ def create_public_api_router(
                 "name": product.name_vi,
                 "description": product.description_vi,
                 "price": flash_sale.sale_price if flash_sale else product.price,
+                "flash_sale_id": flash_sale.id if flash_sale else None,
                 "stock": stock,
                 "allow_quantity": product.allow_quantity,
                 "max_quantity": product.max_quantity,
@@ -507,6 +510,7 @@ def create_public_api_router(
                 supplier_idempotency_key=(
                     f"shop-api-{principal.client.id}-{order_request.id}"
                 ),
+                expected_flash_sale_id=body.flash_sale_id,
             )
         except Exception:
             logger.exception("Shop API order %s needs supplier review after an exception", order_request.id)
@@ -558,6 +562,7 @@ def create_public_api_router(
                     "out_of_stock": 409,
                     "supplier_unavailable": 503,
                     "invalid_coupon": 400,
+                    "flash_sale_unavailable": 409,
                     "invalid_quantity": 400,
                     "not_found": 404,
                 }

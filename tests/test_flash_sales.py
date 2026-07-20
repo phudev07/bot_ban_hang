@@ -30,11 +30,13 @@ from app.models import (
     Product,
     ProductAlertDelivery,
     QuantityDiscount,
+    SupplierBalanceTransaction,
     User,
 )
 from app.payment_expiry import expire_pending_deposits
 from app.price_alerts import apply_supplier_price
 from app.services import create_deposit, process_sepay_payment, product_pricing, purchase_product
+from app.suppliers import SupplierPurchase, SupplierSnapshot
 from app.utils import SecretCipher
 
 
@@ -84,6 +86,57 @@ async def seed_local_sale(
         session.add(campaign)
         await session.commit()
         return product.id, user.telegram_id, campaign.id
+
+
+class ConcurrentFlashSupplier:
+    provider = "sumistore"
+
+    def __init__(
+        self,
+        *,
+        unit_price: int = 15_000,
+        snapshot_unit_price: int | None = None,
+        stock: int = 20,
+    ) -> None:
+        self.balance_lock = asyncio.Lock()
+        self.unit_price = unit_price
+        self.snapshot_unit_price = snapshot_unit_price or unit_price
+        self.stock = stock
+        self.balance = unit_price * stock
+        self.buy_count = 0
+        self.in_flight = 0
+        self.max_in_flight = 0
+
+    async def fetch_snapshot(self, product_id: str) -> SupplierSnapshot:
+        return SupplierSnapshot(
+            product_id=product_id,
+            name="API Flash",
+            description="Concurrent flash supplier",
+            unit_price=self.snapshot_unit_price,
+            source_stock=self.stock,
+            owner_balance=self.balance,
+        )
+
+    async def buy(self, product_id: str, quantity: int) -> SupplierPurchase:
+        self.in_flight += 1
+        self.max_in_flight = max(self.max_in_flight, self.in_flight)
+        try:
+            await asyncio.sleep(0.005)
+            self.buy_count += 1
+            self.stock -= quantity
+            self.balance -= self.unit_price * quantity
+            return SupplierPurchase(
+                order_code=f"FLASH-{self.buy_count}",
+                unit_price=self.unit_price,
+                accounts=tuple(
+                    f"flash-{self.buy_count}-{index}|password"
+                    for index in range(quantity)
+                ),
+                product_id=product_id,
+                provider=self.provider,
+            )
+        finally:
+            self.in_flight -= 1
 
 
 def test_flash_price_does_not_stack_and_returns_to_normal_after_quota() -> None:
@@ -194,6 +247,165 @@ def test_flash_quota_rejects_oversell_before_inventory_or_balance_changes() -> N
     asyncio.run(scenario())
 
 
+def test_simultaneous_api_flash_buyers_never_fall_back_to_normal_price() -> None:
+    async def scenario() -> None:
+        engine, sessions = await make_database()
+        cipher = SecretCipher(Fernet.generate_key().decode())
+        supplier = ConcurrentFlashSupplier()
+        async with sessions() as session:
+            category = Category(name_vi="API", name_en="API")
+            session.add(category)
+            await session.flush()
+            product = Product(
+                category_id=category.id,
+                name_vi="API Flash",
+                name_en="API Flash",
+                price=20_000,
+                allow_quantity=True,
+                max_quantity=10,
+                fulfillment_source="sumistore",
+                supplier_product_id="SP-CONCURRENT-FLASH",
+                supplier_price=15_000,
+                supplier_markup=5_000,
+                supplier_synced_at=datetime.now(UTC),
+                external_stock=20,
+            )
+            session.add(product)
+            await session.flush()
+            campaign = FlashSaleCampaign(
+                product_id=product.id,
+                original_price=20_000,
+                sale_price=17_000,
+                total_quantity=3,
+                message_text="Concurrent API sale",
+            )
+            session.add(campaign)
+            session.add_all(
+                User(
+                    telegram_id=20_000 + index,
+                    full_name=f"Flash buyer {index}",
+                    balance=20_000,
+                )
+                for index in range(100)
+            )
+            await session.commit()
+            product_id = product.id
+            campaign_id = campaign.id
+
+        results = await asyncio.gather(
+            *(
+                purchase_product(
+                    sessions,
+                    20_000 + index,
+                    product_id,
+                    cipher,
+                    supplier_client=supplier,  # type: ignore[arg-type]
+                    supplier_idempotency_key=f"flash-concurrent-{index}",
+                    expected_flash_sale_id=campaign_id,
+                )
+                for index in range(100)
+            )
+        )
+
+        completed = [result for result in results if result.ok]
+        rejected = [result for result in results if not result.ok]
+        assert len(completed) == 3
+        assert len(rejected) == 97
+        assert {result.message for result in rejected} == {"flash_sale_unavailable"}
+        assert all(result.total_amount == 17_000 for result in completed)
+        assert supplier.buy_count == 3
+        assert supplier.max_in_flight == 1
+
+        async with sessions() as session:
+            campaign = await session.get(FlashSaleCampaign, campaign_id)
+            orders = list(await session.scalars(select(Order).order_by(Order.id)))
+            users = list(await session.scalars(select(User).order_by(User.telegram_id)))
+            assert campaign is not None
+            assert campaign.sold_quantity == 3
+            assert campaign.reserved_quantity == 0
+            assert campaign.status == "completed"
+            assert len(orders) == 3
+            assert {order.amount for order in orders} == {17_000}
+            assert sorted(user.balance for user in users) == [3_000] * 3 + [20_000] * 97
+        await engine.dispose()
+
+    asyncio.run(scenario())
+
+
+def test_supplier_cost_spike_preserves_accounts_and_does_not_charge_flash_buyer() -> None:
+    async def scenario() -> None:
+        engine, sessions = await make_database()
+        cipher = SecretCipher(Fernet.generate_key().decode())
+        supplier = ConcurrentFlashSupplier(
+            unit_price=13_000,
+            snapshot_unit_price=10_000,
+            stock=1,
+        )
+        async with sessions() as session:
+            category = Category(name_vi="API", name_en="API")
+            session.add(category)
+            await session.flush()
+            product = Product(
+                category_id=category.id,
+                name_vi="API Cost Spike",
+                name_en="API Cost Spike",
+                price=15_000,
+                fulfillment_source="sumistore",
+                supplier_product_id="SP-COST-SPIKE",
+                supplier_price=10_000,
+                supplier_markup=5_000,
+                supplier_synced_at=datetime.now(UTC),
+                external_stock=1,
+            )
+            user = User(telegram_id=30_001, full_name="Protected buyer", balance=20_000)
+            session.add_all([product, user])
+            await session.flush()
+            campaign = FlashSaleCampaign(
+                product_id=product.id,
+                original_price=15_000,
+                sale_price=12_000,
+                total_quantity=1,
+                message_text="Cost guard sale",
+            )
+            session.add(campaign)
+            await session.commit()
+            product_id = product.id
+            campaign_id = campaign.id
+
+        result = await purchase_product(
+            sessions,
+            user.telegram_id,
+            product_id,
+            cipher,
+            supplier_client=supplier,  # type: ignore[arg-type]
+            expected_flash_sale_id=campaign_id,
+        )
+
+        assert result.ok is False
+        assert result.message == "flash_sale_unavailable"
+        async with sessions() as session:
+            protected_user = await session.get(User, user.telegram_id)
+            campaign = await session.get(FlashSaleCampaign, campaign_id)
+            product = await session.get(Product, product_id)
+            item = await session.scalar(select(InventoryItem))
+            order = await session.scalar(select(Order))
+            supplier_transaction = await session.scalar(select(SupplierBalanceTransaction))
+            assert protected_user is not None and protected_user.balance == 20_000
+            assert campaign is not None and campaign.status == "cost_exceeded"
+            assert campaign.sold_quantity == 0
+            assert product is not None and product.supplier_price == 13_000
+            assert product.price == 18_000
+            assert item is not None and item.status == "available"
+            assert cipher.decrypt(item.encrypted_secret).startswith("flash-1-")
+            assert order is None
+            assert supplier_transaction is not None
+            assert supplier_transaction.amount == -13_000
+            assert supplier_transaction.shop_order_code.startswith("R")
+        await engine.dispose()
+
+    asyncio.run(scenario())
+
+
 def test_pending_qr_reserves_once_and_expiry_reopens_flash_sale() -> None:
     async def scenario() -> None:
         engine, sessions = await make_database()
@@ -288,6 +500,90 @@ def test_paid_qr_moves_flash_reservation_to_sold() -> None:
             assert campaign.sold_quantity == 1
             assert campaign.status == "completed"
             assert order is not None and order.flash_sale_id == campaign_id
+        await engine.dispose()
+
+    asyncio.run(scenario())
+
+
+def test_flash_qr_cost_spike_refunds_wallet_and_preserves_supplier_account() -> None:
+    async def scenario() -> None:
+        engine, sessions = await make_database()
+        cipher = SecretCipher(Fernet.generate_key().decode())
+        supplier = ConcurrentFlashSupplier(
+            unit_price=13_000,
+            snapshot_unit_price=10_000,
+            stock=1,
+        )
+        async with sessions() as session:
+            category = Category(name_vi="API", name_en="API")
+            session.add(category)
+            await session.flush()
+            product = Product(
+                category_id=category.id,
+                name_vi="Flash QR Cost Spike",
+                name_en="Flash QR Cost Spike",
+                price=15_000,
+                fulfillment_source="sumistore",
+                supplier_product_id="SP-QR-COST-SPIKE",
+                supplier_price=10_000,
+                supplier_markup=5_000,
+                supplier_synced_at=datetime.now(UTC),
+                external_stock=1,
+            )
+            user = User(telegram_id=31_001, full_name="QR buyer", balance=0)
+            session.add_all([product, user])
+            await session.flush()
+            campaign = FlashSaleCampaign(
+                product_id=product.id,
+                original_price=15_000,
+                sale_price=12_000,
+                total_quantity=1,
+                message_text="QR cost guard",
+            )
+            session.add(campaign)
+            await session.flush()
+            await session.commit()
+            product_id = product.id
+            campaign_id = campaign.id
+
+        async with sessions() as session:
+            deposit = await create_deposit(
+                session,
+                user.telegram_id,
+                12_000,
+                payment_kind="direct_purchase",
+                product_id=product_id,
+                flash_sale_id=campaign_id,
+                flash_sale_quantity=1,
+            )
+            deposit_code = deposit.code
+
+        result = await process_sepay_payment(
+            sessions,
+            {
+                "id": "FLASH-QR-COST-SPIKE",
+                "transferType": "in",
+                "transferAmount": 12_000,
+                "content": deposit_code,
+            },
+            cipher=cipher,
+            supplier_client=supplier,  # type: ignore[arg-type]
+        )
+
+        assert result.status == "direct_purchase_fallback"
+        assert result.balance == 12_000
+        async with sessions() as session:
+            user_after = await session.get(User, user.telegram_id)
+            campaign = await session.get(FlashSaleCampaign, campaign_id)
+            deposit = await session.scalar(select(Deposit))
+            item = await session.scalar(select(InventoryItem))
+            assert user_after is not None and user_after.balance == 12_000
+            assert campaign is not None and campaign.status == "cost_exceeded"
+            assert campaign.reserved_quantity == 0
+            assert campaign.sold_quantity == 0
+            assert deposit is not None and deposit.flash_sale_quantity == 0
+            assert item is not None and item.status == "available"
+            assert await session.scalar(select(Order)) is None
         await engine.dispose()
 
     asyncio.run(scenario())

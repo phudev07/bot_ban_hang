@@ -389,6 +389,7 @@ signature = hmac_sha256(API_SECRET, canonical)</pre>
       "name": "Tài khoản mẫu",
       "description": "Thông tin bảo hành và định dạng tài khoản",
       "price": 25000,
+      "flash_sale_id": null,
       "stock": 18,
       "allow_quantity": true,
       "max_quantity": 10
@@ -400,6 +401,7 @@ signature = hmac_sha256(API_SECRET, canonical)</pre>
             <tbody>
               <tr><td><code>id</code></td><td>integer</td><td>ID dùng cho <code>POST /v1/orders</code>.</td></tr>
               <tr><td><code>price</code></td><td>integer</td><td>Giá bán hiện tại cho một tài khoản, đơn vị VND.</td></tr>
+              <tr><td><code>flash_sale_id</code></td><td>integer/null</td><td>Nếu có Flash Sale, gửi lại ID này khi đặt đơn để khóa đúng chiến dịch và không bị chuyển sang giá thường.</td></tr>
               <tr><td><code>stock</code></td><td>integer</td><td>Tồn khả dụng tại lúc truy vấn. Khi mua hệ thống kiểm tra lại lần cuối.</td></tr>
               <tr><td><code>allow_quantity</code></td><td>boolean</td><td>Có cho phép mua nhiều tài khoản trong một đơn hay không.</td></tr>
               <tr><td><code>max_quantity</code></td><td>integer</td><td>Số lượng tối đa trong một request.</td></tr>
@@ -417,6 +419,7 @@ signature = hmac_sha256(API_SECRET, canonical)</pre>
               <tr><td><code>product_id</code></td><td class="required">Có</td><td>integer</td><td>ID sản phẩm từ catalog.</td></tr>
               <tr><td><code>quantity</code></td><td>Không</td><td>integer</td><td>Mặc định 1; tối đa theo sản phẩm và không quá 100.</td></tr>
               <tr><td><code>coupon_code</code></td><td>Không</td><td>string</td><td>Mã giảm giá dành riêng cho sản phẩm, tối đa 64 ký tự.</td></tr>
+              <tr><td><code>flash_sale_id</code></td><td>Không</td><td>integer</td><td>ID từ catalog. Nên gửi khi khác null để đơn thất bại an toàn nếu Flash Sale vừa hết hoặc giá vốn tăng.</td></tr>
             </tbody>
           </table>
           <p style="margin-top:16px"><strong>Header riêng bắt buộc:</strong> <code>Idempotency-Key</code> dài 8-128 ký tự.</p>
@@ -424,7 +427,7 @@ signature = hmac_sha256(API_SECRET, canonical)</pre>
 Idempotency-Key: reseller-order-20260718-00001
 Content-Type: application/json
 
-{"product_id":7,"quantity":2,"coupon_code":"SALE10"}</pre></div>
+{"product_id":7,"quantity":2,"flash_sale_id":123}</pre></div>
           <div class="code-wrap"><button class="copy" data-copy-target="order-response">Sao chép</button><pre id="order-response">{
   "success": true,
   "order": {
@@ -501,10 +504,14 @@ def call_api(method, endpoint, payload=None, idempotency_key=None):
 
 
 catalog = call_api("GET", "/products")
+product = catalog["products"][0]
+payload = {"product_id": product["id"], "quantity": 1}
+if product.get("flash_sale_id"):
+    payload["flash_sale_id"] = product["flash_sale_id"]
 order = call_api(
     "POST",
     "/orders",
-    {"product_id": catalog["products"][0]["id"], "quantity": 1},
+    payload,
     idempotency_key=f"my-shop-{secrets.token_hex(12)}",
 )
 print(order)</pre></div>
@@ -547,10 +554,14 @@ async function callApi(method, endpoint, payload = null, idempotencyKey = null) 
   return data;
 }
 
+const catalog = await callApi("GET", "/products");
+const product = catalog.products[0];
+const payload = {product_id: product.id, quantity: 1};
+if (product.flash_sale_id) payload.flash_sale_id = product.flash_sale_id;
 const order = await callApi(
   "POST",
   "/orders",
-  {product_id: 7, quantity: 1},
+  payload,
   `my-shop-${crypto.randomUUID()}`,
 );
 console.log(order);</pre></div>

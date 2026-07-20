@@ -177,8 +177,11 @@ def product_detail(
     stock: int,
     *,
     allow_coupon: bool = True,
+    flash_sale_id: int | None = None,
 ) -> InlineKeyboardMarkup:
     buy_callback = f"qtymenu:{product.id}" if product.allow_quantity else f"buy:{product.id}:1"
+    if flash_sale_id is not None:
+        buy_callback += f":flash:{flash_sale_id}"
     rows = []
     if stock > 0:
         rows.append([InlineKeyboardButton(text=tr(language, "buy"), callback_data=buy_callback)])
@@ -204,23 +207,30 @@ def quantity_menu(
     language: str,
     stock: int,
     unit_price: int | None = None,
+    flash_sale_id: int | None = None,
 ) -> InlineKeyboardMarkup:
     builder = InlineKeyboardBuilder()
     maximum = min(product.max_quantity, max(0, stock))
     suggestions = [value for value in (1, 2, 5, 10) if value <= maximum]
     display_price = product.price if unit_price is None else unit_price
     for quantity in suggestions:
+        callback_data = f"buy:{product.id}:{quantity}"
+        if flash_sale_id is not None:
+            callback_data += f":flash:{flash_sale_id}"
         builder.button(
             text=f"{quantity} × {format_vnd(display_price)}",
-            callback_data=f"buy:{product.id}:{quantity}",
+            callback_data=callback_data,
         )
     builder.adjust(2)
     custom_label = "✍️ Nhập số lượng" if language == "vi" else "✍️ Custom quantity"
     if maximum > 0:
+        custom_callback = f"customqty:{product.id}"
+        if flash_sale_id is not None:
+            custom_callback += f":flash:{flash_sale_id}"
         builder.row(
             InlineKeyboardButton(
                 text=custom_label,
-                callback_data=f"customqty:{product.id}",
+                callback_data=custom_callback,
             )
         )
     builder.row(
@@ -270,11 +280,14 @@ def purchase_payment_options(
     quantity: int,
     language: str,
     coupon_id: int | None = None,
+    flash_sale_id: int | None = None,
 ) -> InlineKeyboardMarkup:
     direct_label = "💳 Thanh toán QR cho đơn này" if language == "vi" else "💳 Pay this order by QR"
     direct_callback = f"directpay:{product_id}:{quantity}"
     if coupon_id is not None:
         direct_callback += f":{coupon_id}"
+    elif flash_sale_id is not None:
+        direct_callback += f":flash:{flash_sale_id}"
     return InlineKeyboardMarkup(
         inline_keyboard=[
             [

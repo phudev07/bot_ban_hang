@@ -50,6 +50,7 @@ async def active_flash_sale(
     *,
     quantity: int = 1,
     for_update: bool = False,
+    campaign_id: int | None = None,
 ) -> FlashSaleCampaign | None:
     statement = (
         select(FlashSaleCampaign)
@@ -66,6 +67,8 @@ async def active_flash_sale(
         .order_by(FlashSaleCampaign.id.desc())
         .limit(1)
     )
+    if campaign_id is not None:
+        statement = statement.where(FlashSaleCampaign.id == campaign_id)
     if for_update:
         statement = statement.with_for_update()
     campaign = await session.scalar(statement)

@@ -2,6 +2,7 @@ from app.keyboards import (
     main_menu,
     order_history_menu,
     product_detail,
+    purchase_payment_options,
     quantity_menu,
     warehouse_api_menu,
 )
@@ -64,6 +65,31 @@ def test_quantity_buttons_do_not_exceed_available_stock() -> None:
     assert "buy:10:5" not in callbacks
     assert "buy:10:10" not in callbacks
     assert "customqty:10" in callbacks
+
+
+def test_flash_sale_callbacks_keep_the_campaign_identity() -> None:
+    detail = product_detail(make_product(), "vi", stock=3, flash_sale_id=77)
+    detail_callbacks = [
+        button.callback_data for row in detail.inline_keyboard for button in row
+    ]
+    assert "qtymenu:10:flash:77" in detail_callbacks
+
+    quantities = quantity_menu(
+        make_product(),
+        "vi",
+        stock=3,
+        unit_price=15_000,
+        flash_sale_id=77,
+    )
+    quantity_callbacks = [
+        button.callback_data for row in quantities.inline_keyboard for button in row
+    ]
+    assert "buy:10:1:flash:77" in quantity_callbacks
+    assert "buy:10:2:flash:77" in quantity_callbacks
+    assert "customqty:10:flash:77" in quantity_callbacks
+
+    payment = purchase_payment_options(10, 2, "vi", flash_sale_id=77)
+    assert payment.inline_keyboard[0][0].callback_data == "directpay:10:2:flash:77"
 
 
 def test_product_detail_offers_product_specific_discount_code() -> None:

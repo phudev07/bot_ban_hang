@@ -68,7 +68,7 @@ from app.sms_rentals import (
     sms_availability,
 )
 from app.states import DepositStates, PurchaseStates
-from app.suppliers import SumistoreClient
+from app.suppliers import EXTERNAL_FULFILLMENT_SOURCES, SumistoreClient
 from app.utils import SecretCipher, build_sepay_qr_url, format_vnd, parse_vnd
 
 
@@ -721,6 +721,11 @@ def create_router(
                     user.language,
                     stock,
                     allow_coupon=not bool(pricing and pricing.flash_sale),
+                    flash_sale_id=(
+                        pricing.flash_sale.id
+                        if pricing is not None and pricing.flash_sale is not None
+                        else None
+                    ),
                 ),
             )
         await callback.answer()
@@ -734,17 +739,25 @@ def create_router(
         session_factory: async_sessionmaker[AsyncSession],
         coupon_id: int | None = None,
         supplier_request_key: str | None = None,
+        expected_flash_sale_id: int | None = None,
     ) -> str:
         fulfillment_message: Message | None = None
 
         async def show_fulfillment_started(_user_id: int, language: str) -> None:
             nonlocal fulfillment_message
+            if fulfillment_message is not None:
+                return
             fulfillment_message = await target.answer(
                 "⏳ <b>Đang lấy hàng...</b>\nBạn vui lòng chờ trong giây lát."
                 if language == "vi"
                 else "⏳ <b>Getting your product...</b>\nPlease wait a moment."
             )
 
+        fulfillment_source = await session.scalar(
+            select(Product.fulfillment_source).where(Product.id == product_id)
+        )
+        if fulfillment_source in EXTERNAL_FULFILLMENT_SOURCES:
+            await show_fulfillment_started(user.telegram_id, user.language)
         try:
             result = await purchase_product(
                 session_factory,
@@ -756,8 +769,11 @@ def create_router(
                 lehai_client=lehai_client,
                 coupon_id=coupon_id,
                 referral_commission_percent=settings.referral_commission_percent,
-                on_fulfillment_started=show_fulfillment_started,
+                on_fulfillment_started=(
+                    None if fulfillment_message is not None else show_fulfillment_started
+                ),
                 supplier_idempotency_key=supplier_request_key,
+                expected_flash_sale_id=expected_flash_sale_id,
             )
         finally:
             if fulfillment_message is not None:
@@ -772,6 +788,9 @@ def create_router(
             "invalid_quantity": "Số lượng không hợp lệ.",
             "supplier_unavailable": "Nguồn hàng đang tạm gián đoạn. Vui lòng thử lại sau.",
             "invalid_coupon": "Mã giảm giá không hợp lệ, đã hết hạn hoặc hết lượt sử dụng.",
+            "flash_sale_unavailable": (
+                "Suất Flash Sale vừa hết hoặc giá vốn đã tăng. Bạn chưa bị trừ tiền."
+            ),
         }
         messages_en = {
             "out_of_stock": "This product is out of stock.",
@@ -780,6 +799,9 @@ def create_router(
             "invalid_quantity": "Invalid quantity.",
             "supplier_unavailable": "The supplier is temporarily unavailable. Please try again.",
             "invalid_coupon": "This discount code is invalid, expired, or fully used.",
+            "flash_sale_unavailable": (
+                "The Flash Sale allocation ended or supplier cost increased. You were not charged."
+            ),
         }
         if not result.ok:
             if result.message == "insufficient":
@@ -836,6 +858,7 @@ def create_router(
                             quantity,
                             user.language,
                             coupon_id,
+                            result.flash_sale_id,
                         ),
                     )
                 return result.message
@@ -1004,7 +1027,11 @@ def create_router(
     @router.callback_query(F.data.startswith("qtymenu:"))
     async def choose_purchase_quantity(callback: CallbackQuery, session: AsyncSession) -> None:
         user = await get_or_create_user(callback, session)
-        product_id = int(callback.data.split(":", 1)[1])
+        parts = callback.data.split(":")
+        product_id = int(parts[1])
+        expected_flash_sale_id = (
+            int(parts[3]) if len(parts) >= 4 and parts[2] == "flash" else None
+        )
         product = await session.get(Product, product_id)
         if product is None or not product.active:
             await callback.answer("Sản phẩm không tồn tại.", show_alert=True)
@@ -1016,7 +1043,17 @@ def create_router(
             lehai_client=lehai_client,
             refresh_external=True,
         )
-        pricing = await product_pricing(session, product)
+        pricing = await product_pricing(
+            session,
+            product,
+            expected_flash_sale_id=expected_flash_sale_id,
+        )
+        if pricing is None and expected_flash_sale_id is not None:
+            await callback.answer(
+                "Suất Flash Sale vừa hết hoặc giá vốn đã tăng.",
+                show_alert=True,
+            )
+            return
         display_price = pricing.final_unit_price if pricing is not None else product.price
         menu_stock = stock
         if pricing is not None and pricing.flash_sale is not None:
@@ -1056,6 +1093,7 @@ def create_router(
                     user.language,
                     menu_stock,
                     display_price,
+                    expected_flash_sale_id,
                 ),
             )
         await callback.answer()
@@ -1067,7 +1105,11 @@ def create_router(
         state: FSMContext,
     ) -> None:
         user = await get_or_create_user(callback, session)
-        product_id = int(callback.data.split(":", 1)[1])
+        parts = callback.data.split(":")
+        product_id = int(parts[1])
+        expected_flash_sale_id = (
+            int(parts[3]) if len(parts) >= 4 and parts[2] == "flash" else None
+        )
         product = await session.get(Product, product_id)
         if product is None or not product.active or not product.allow_quantity:
             await callback.answer("Sản phẩm không hợp lệ.", show_alert=True)
@@ -1082,7 +1124,17 @@ def create_router(
         if stock <= 0:
             await callback.answer("Sản phẩm đã hết hàng.", show_alert=True)
             return
-        pricing = await product_pricing(session, product)
+        pricing = await product_pricing(
+            session,
+            product,
+            expected_flash_sale_id=expected_flash_sale_id,
+        )
+        if pricing is None and expected_flash_sale_id is not None:
+            await callback.answer(
+                "Suất Flash Sale vừa hết hoặc giá vốn đã tăng.",
+                show_alert=True,
+            )
+            return
         flash_limit = (
             flash_sale_remaining(pricing.flash_sale)
             if pricing is not None and pricing.flash_sale is not None
@@ -1090,7 +1142,11 @@ def create_router(
         )
         maximum = min(product.max_quantity, stock, flash_limit)
         await state.set_state(PurchaseStates.waiting_for_quantity)
-        await state.update_data(product_id=product.id, maximum_quantity=maximum)
+        await state.update_data(
+            product_id=product.id,
+            maximum_quantity=maximum,
+            expected_flash_sale_id=expected_flash_sale_id,
+        )
         prompt = (
             f"Nhập số lượng từ 1 đến {maximum}."
             if user.language == "vi"
@@ -1111,6 +1167,7 @@ def create_router(
         data = await state.get_data()
         product_id = int(data.get("product_id", 0))
         maximum_quantity = int(data.get("maximum_quantity", 0))
+        expected_flash_sale_id = data.get("expected_flash_sale_id")
         product = await session.get(Product, product_id)
         try:
             quantity = int((message.text or "").strip())
@@ -1129,6 +1186,11 @@ def create_router(
             session,
             session_factory,
             supplier_request_key=f"tg-message-{message.chat.id}-{message.message_id}",
+            expected_flash_sale_id=(
+                int(expected_flash_sale_id)
+                if expected_flash_sale_id is not None
+                else None
+            ),
         )
 
     @router.callback_query(F.data.startswith("customcouponqty:"))
@@ -1216,6 +1278,16 @@ def create_router(
         parts = callback.data.split(":")
         product_id = int(parts[1])
         quantity = int(parts[2]) if len(parts) > 2 else 1
+        expected_flash_sale_id = (
+            int(parts[4])
+            if len(parts) >= 5 and parts[3] == "flash"
+            else None
+        )
+        await callback.answer(
+            "Đang xử lý đơn hàng..."
+            if user.language == "vi"
+            else "Processing your order..."
+        )
         if callback.message:
             await complete_product_purchase(
                 callback.message,
@@ -1225,8 +1297,8 @@ def create_router(
                 session,
                 session_factory,
                 supplier_request_key=f"tg-callback-{callback.id}",
+                expected_flash_sale_id=expected_flash_sale_id,
             )
-        await callback.answer()
 
     @router.callback_query(F.data.startswith("buycoupon:"))
     async def buy_product_with_coupon(
@@ -1236,6 +1308,11 @@ def create_router(
     ) -> None:
         user = await get_or_create_user(callback, session)
         _, product_id_text, quantity_text, coupon_id_text = callback.data.split(":")
+        await callback.answer(
+            "Đang xử lý đơn hàng..."
+            if user.language == "vi"
+            else "Processing your order..."
+        )
         if callback.message:
             await complete_product_purchase(
                 callback.message,
@@ -1247,7 +1324,6 @@ def create_router(
                 int(coupon_id_text),
                 supplier_request_key=f"tg-callback-{callback.id}",
             )
-        await callback.answer()
 
     @router.callback_query(F.data.startswith("directpay:"))
     async def direct_product_payment(
@@ -1261,7 +1337,13 @@ def create_router(
         parts = callback.data.split(":")
         product_id = int(parts[1])
         quantity = int(parts[2]) if len(parts) > 2 else 1
-        coupon_id = int(parts[3]) if len(parts) > 3 else None
+        coupon_id = None
+        expected_flash_sale_id = None
+        if len(parts) > 3:
+            if parts[3] == "flash" and len(parts) > 4:
+                expected_flash_sale_id = int(parts[4])
+            else:
+                coupon_id = int(parts[3])
         product = await session.get(Product, product_id)
         if product is None or not product.active:
             await callback.answer("Sản phẩm không tồn tại.", show_alert=True)
@@ -1290,8 +1372,15 @@ def create_router(
             product,
             coupon_id=coupon_id,
             quantity=quantity,
+            expected_flash_sale_id=expected_flash_sale_id,
         )
         if pricing is None:
+            if expected_flash_sale_id is not None:
+                await callback.answer(
+                    "Suất Flash Sale vừa hết hoặc giá vốn đã tăng.",
+                    show_alert=True,
+                )
+                return
             await callback.answer("Mã giảm giá không còn hiệu lực.", show_alert=True)
             return
         total_amount = pricing.final_unit_price * quantity
