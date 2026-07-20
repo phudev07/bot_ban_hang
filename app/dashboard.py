@@ -33,6 +33,7 @@ from app.models import (
     SmsRental,
     SupplierBalanceState,
     SupplierBalanceTransaction,
+    SupplierPurchaseAttempt,
     User,
 )
 from app.rentsim import RentSimClient
@@ -2794,6 +2795,15 @@ def create_dashboard_router(
             if selected_kind != "all":
                 statement = statement.where(SupplierBalanceTransaction.kind == selected_kind)
             transactions = list(await session.scalars(statement))
+            purchase_attempts = (
+                await session.execute(
+                    select(SupplierPurchaseAttempt, Product)
+                    .outerjoin(Product, Product.id == SupplierPurchaseAttempt.product_id)
+                    .where(SupplierPurchaseAttempt.provider == selected_provider)
+                    .order_by(SupplierPurchaseAttempt.id.desc())
+                    .limit(100)
+                )
+            ).all()
             suspicious_count, suspicious_sum = (
                 await session.execute(
                     select(
@@ -2837,6 +2847,7 @@ def create_dashboard_router(
                 selected_provider=selected_provider,
                 provider_label=provider_label,
                 supplier_connected=selected_client is not None,
+                purchase_attempts=purchase_attempts,
                 stats={
                     "current_balance": state.last_balance if state else None,
                     "last_checked": state.checked_at if state else None,

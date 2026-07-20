@@ -101,4 +101,35 @@
     </table>
   </div>
 </section>
+
+<section class="panel">
+  <div class="panel-head">
+    <div><span>SUPPLIER REQUEST TRACE</span><h2>Lịch sử gọi mua gần đây</h2></div>
+    <small>Dùng request key và mã lỗi này khi gửi nhà cung cấp hỗ trợ</small>
+  </div>
+  <div class="table-wrap">
+    <table class="audit-table">
+      <thead><tr><th>Trạng thái</th><th>Sản phẩm</th><th>Idempotency key</th><th>Mã đơn nguồn</th><th>Lỗi gần nhất</th><th>Thời gian</th></tr></thead>
+      <tbody>
+      {% for attempt, product in purchase_attempts %}
+        <tr>
+          <td>
+            {% if attempt.status == 'succeeded' %}<span class="status on">Thành công</span>
+            {% elif attempt.status == 'failed' %}<span class="status off">Thất bại</span>
+            {% else %}<span class="status wait">Đang xử lý</span>{% endif %}
+            <small>Attempt #{{ attempt.id }} · SL {{ attempt.quantity }}</small>
+          </td>
+          <td><strong>{{ product.name_vi if product else attempt.supplier_product_id }}</strong><small><code>{{ attempt.supplier_product_id }}</code></small></td>
+          <td><code>{{ attempt.request_key }}</code></td>
+          <td><code>{{ attempt.supplier_order_code or '—' }}</code></td>
+          <td><strong>{{ attempt.error_code or '—' }}</strong><small>{{ attempt.error_detail or 'Không có lỗi' }}</small></td>
+          <td><strong>{{ attempt.started_at|localtime }}</strong>{% if attempt.completed_at %}<small>Xong {{ attempt.completed_at|localtime }}</small>{% endif %}</td>
+        </tr>
+      {% else %}
+        <tr><td colspan="6" class="empty">Chưa có lần gọi mua nào được ghi nhận.</td></tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</section>
 {% endblock %}

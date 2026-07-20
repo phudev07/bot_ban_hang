@@ -214,6 +214,7 @@ def test_dashboard_login_catalog_inventory_and_balance(tmp_path) -> None:
         assert 'name="provider" value="lehai"' in lehai_audit_page.text
         assert "/admin/supplier-audit?provider=lehai" in lehai_audit_page.text
         assert "/admin/supplier-audit?provider=lehai&kind=refunded" in lehai_audit_page.text
+        assert "Lịch sử gọi mua gần đây" in lehai_audit_page.text
 
         sms_page = client.get("/admin/sms-rentals")
         assert sms_page.status_code == 200

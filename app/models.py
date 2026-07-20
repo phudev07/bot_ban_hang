@@ -480,6 +480,39 @@ class SupplierRecoveryRequest(Base):
     )
 
 
+class SupplierPurchaseAttempt(Base):
+    __tablename__ = "supplier_purchase_attempts"
+    __table_args__ = (
+        UniqueConstraint(
+            "provider",
+            "request_key",
+            name="uq_supplier_purchase_attempt_request",
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    provider: Mapped[str] = mapped_column(String(32), index=True)
+    request_key: Mapped[str] = mapped_column(String(128), index=True)
+    product_id: Mapped[int | None] = mapped_column(
+        ForeignKey("products.id", ondelete="SET NULL"), nullable=True, index=True
+    )
+    supplier_product_id: Mapped[str] = mapped_column(String(64), index=True)
+    quantity: Mapped[int]
+    status: Mapped[str] = mapped_column(String(24), default="processing", index=True)
+    error_code: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    error_detail: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    supplier_order_code: Mapped[str | None] = mapped_column(
+        String(64), nullable=True, index=True
+    )
+    started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
+    completed_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+
+
 class BroadcastLog(Base):
     __tablename__ = "broadcast_logs"
 

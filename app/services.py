@@ -22,6 +22,7 @@ from app.models import (
     QuantityDiscount,
     SmsRental,
     SupplierBalanceTransaction,
+    SupplierPurchaseAttempt,
     SupplierRecoveryRequest,
     User,
 )
@@ -85,6 +86,72 @@ async def reserve_available_inventory(
 
 
 async def buy_supplier_product(
+    session: AsyncSession,
+    client: ExternalSupplierClient,
+    product_id: str,
+    quantity: int,
+    *,
+    idempotency_key: str | None = None,
+) -> SupplierPurchase:
+    provider = getattr(client, "provider", "sumistore")
+    request_key = idempotency_key or f"shop-{secrets.token_hex(16)}"
+    product_db_id = await session.scalar(
+        select(Product.id).where(
+            Product.fulfillment_source == provider,
+            Product.supplier_product_id == product_id,
+        )
+    )
+    attempt = await session.scalar(
+        select(SupplierPurchaseAttempt).where(
+            SupplierPurchaseAttempt.provider == provider,
+            SupplierPurchaseAttempt.request_key == request_key,
+        )
+    )
+    started_at = datetime.now(UTC)
+    if attempt is None:
+        attempt = SupplierPurchaseAttempt(
+            provider=provider,
+            request_key=request_key,
+            product_id=product_db_id,
+            supplier_product_id=product_id,
+            quantity=quantity,
+            status="processing",
+            started_at=started_at,
+        )
+        session.add(attempt)
+    else:
+        attempt.product_id = product_db_id or attempt.product_id
+        attempt.supplier_product_id = product_id
+        attempt.quantity = quantity
+        attempt.status = "processing"
+        attempt.error_code = None
+        attempt.error_detail = None
+        attempt.started_at = started_at
+        attempt.completed_at = None
+    await session.flush()
+    try:
+        purchase = await _execute_supplier_purchase(
+            session,
+            client,
+            product_id,
+            quantity,
+            idempotency_key=request_key,
+        )
+    except SupplierError as exc:
+        attempt.status = "failed"
+        attempt.error_code = exc.code
+        attempt.error_detail = str(exc)[:500]
+        attempt.completed_at = datetime.now(UTC)
+        await session.flush()
+        raise
+    attempt.status = "succeeded"
+    attempt.supplier_order_code = purchase.order_code or None
+    attempt.completed_at = datetime.now(UTC)
+    await session.flush()
+    return purchase
+
+
+async def _execute_supplier_purchase(
     session: AsyncSession,
     client: ExternalSupplierClient,
     product_id: str,

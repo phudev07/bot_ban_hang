@@ -2,6 +2,7 @@ import asyncio
 import json
 
 import httpx
+import pytest
 from cryptography.fernet import Fernet
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
@@ -15,7 +16,15 @@ from app.lehai_suppliers import (
     refresh_lehai_product,
     sync_lehai_products,
 )
-from app.models import Category, Deposit, Order, Product, SupplierBalanceTransaction, User
+from app.models import (
+    Category,
+    Deposit,
+    Order,
+    Product,
+    SupplierBalanceTransaction,
+    SupplierPurchaseAttempt,
+    User,
+)
 from app.services import buy_supplier_product, process_sepay_payment, purchase_product
 from app.suppliers import SupplierError, SupplierPurchase, SupplierSnapshot
 from app.utils import SecretCipher
@@ -212,6 +221,52 @@ def test_lehai_balance_mismatch_retries_with_same_idempotency_key() -> None:
             )
             assert purchase.accounts == ("https://offer.test/retried",)
             assert supplier.calls == ["tg-callback-retry", "tg-callback-retry"]
+            attempt = await session.scalar(select(SupplierPurchaseAttempt))
+            assert attempt is not None
+            assert attempt.provider == "lehai"
+            assert attempt.request_key == "tg-callback-retry"
+            assert attempt.status == "succeeded"
+            assert attempt.supplier_order_code == "LHP-RETRY-OK"
+            assert attempt.error_code is None
+        await engine.dispose()
+
+    asyncio.run(scenario())
+
+
+def test_lehai_failed_purchase_keeps_request_key_and_error_for_support() -> None:
+    class FailedSupplier:
+        provider = "lehai"
+
+        async def buy(
+            self,
+            product_id: str,
+            quantity: int,
+            *,
+            idempotency_key: str | None = None,
+        ) -> SupplierPurchase:
+            raise SupplierError("SUPPLIER_HTTP_500", "provider temporarily failed")
+
+    async def scenario() -> None:
+        engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+        async with engine.begin() as connection:
+            await connection.run_sync(Base.metadata.create_all)
+        sessions = async_sessionmaker(engine, expire_on_commit=False)
+        async with sessions() as session:
+            with pytest.raises(SupplierError):
+                await buy_supplier_product(
+                    session,
+                    FailedSupplier(),  # type: ignore[arg-type]
+                    "cdk_ggpro_18m",
+                    1,
+                    idempotency_key="support-trace-001",
+                )
+            attempt = await session.scalar(select(SupplierPurchaseAttempt))
+            assert attempt is not None
+            assert attempt.request_key == "support-trace-001"
+            assert attempt.status == "failed"
+            assert attempt.error_code == "SUPPLIER_HTTP_500"
+            assert attempt.error_detail == "provider temporarily failed"
+            assert attempt.supplier_order_code is None
         await engine.dispose()
 
     asyncio.run(scenario())
