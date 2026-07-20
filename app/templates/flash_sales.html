@@ -38,8 +38,8 @@
         <small id="flash-stock-hint">Không được vượt tồn kho hiện tại.</small>
       </label>
       <label class="wide">Nội dung thông báo
-        <textarea name="message_text" id="flash-message" rows="9" maxlength="4096" placeholder="Để trống để bot tự tạo nội dung theo sản phẩm."></textarea>
-        <small>Có thể chỉnh toàn bộ nội dung và dùng HTML Telegram. Khi kèm ảnh, caption tối đa 1.024 ký tự.</small>
+        <textarea name="message_text" id="flash-message" rows="9" maxlength="4096" placeholder="Chọn sản phẩm để bot tự tạo nội dung."></textarea>
+        <small>Bot tự điền mẫu theo sản phẩm đã chọn; bạn có thể sửa hoặc thêm nội dung. Khi kèm ảnh, caption tối đa 1.024 ký tự.</small>
       </label>
       <label class="wide flash-image-field">Ảnh thông báo (không bắt buộc)
         <input type="file" name="image" id="flash-image" accept="image/*">
@@ -135,11 +135,15 @@
       stockHint.textContent = `Kho hiện tại ${option.dataset.stock} sản phẩm.`;
       quantity.max = option.dataset.stock;
     }
-    const content = message.value.trim() || defaultMessage();
-    messagePreview.textContent = content;
-    if (!messageEdited && product.value) message.placeholder = defaultMessage();
+    if (!messageEdited) {
+      message.value = product.value ? defaultMessage() : '';
+    }
+    messagePreview.textContent = message.value.trim() || defaultMessage();
   };
-  product.addEventListener('change', refresh);
+  product.addEventListener('change', () => {
+    messageEdited = false;
+    refresh();
+  });
   price.addEventListener('input', refresh);
   quantity.addEventListener('input', refresh);
   message.addEventListener('input', () => { messageEdited = true; refresh(); });
