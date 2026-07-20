@@ -669,6 +669,7 @@ def create_router(
             supplier_client,
             lehai_client=lehai_client,
             refresh_external=True,
+            refresh_max_age_seconds=settings.supplier_ui_cache_seconds,
         )
         pricing = await product_pricing(session, product)
         display_price = pricing.final_unit_price if pricing is not None else product.price
@@ -969,6 +970,7 @@ def create_router(
             supplier_client,
             lehai_client=lehai_client,
             refresh_external=True,
+            refresh_max_age_seconds=settings.supplier_ui_cache_seconds,
         )
         pricing = await product_pricing(
             session,
@@ -1042,6 +1044,7 @@ def create_router(
             supplier_client,
             lehai_client=lehai_client,
             refresh_external=True,
+            refresh_max_age_seconds=settings.supplier_ui_cache_seconds,
         )
         pricing = await product_pricing(
             session,
@@ -1120,6 +1123,7 @@ def create_router(
             supplier_client,
             lehai_client=lehai_client,
             refresh_external=True,
+            refresh_max_age_seconds=settings.supplier_ui_cache_seconds,
         )
         if stock <= 0:
             await callback.answer("Sản phẩm đã hết hàng.", show_alert=True)
@@ -1215,6 +1219,7 @@ def create_router(
             supplier_client,
             lehai_client=lehai_client,
             refresh_external=True,
+            refresh_max_age_seconds=settings.supplier_ui_cache_seconds,
         )
         maximum = min(product.max_quantity, stock)
         if maximum <= 0:
@@ -1359,9 +1364,10 @@ def create_router(
                 session,
                 product.id,
                 supplier_client,
-                lehai_client=lehai_client,
-                refresh_external=True,
-            )
+            lehai_client=lehai_client,
+            refresh_external=True,
+            refresh_max_age_seconds=settings.supplier_ui_cache_seconds,
+        )
             < quantity
         ):
             await callback.answer("Sản phẩm vừa hết hàng.", show_alert=True)

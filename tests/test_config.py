@@ -74,6 +74,12 @@ def test_enabled_sumistore_requires_api_id() -> None:
         sumistore_api_id="TAPI-test-only",
     )
     assert settings.sumistore_markup == 5_000
+    assert settings.supplier_ui_cache_seconds == 10
+
+    with pytest.raises(ValidationError):
+        base_settings(supplier_ui_cache_seconds=0)
+    with pytest.raises(ValidationError):
+        base_settings(supplier_ui_cache_seconds=61)
 
 
 def test_sumistore_supports_multiple_product_ids() -> None:

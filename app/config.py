@@ -56,6 +56,7 @@ class Settings(BaseSettings):
     sumistore_timeout_seconds: float = 15
     sumistore_sync_seconds: int = 60
     sumistore_audit_seconds: int = 30
+    supplier_ui_cache_seconds: int = 10
 
     lehai_enabled: bool = False
     lehai_base_url: str = "https://api.lehaipremium.me"
@@ -139,6 +140,8 @@ class Settings(BaseSettings):
             raise ValueError("Sumistore price configuration is invalid")
         if self.sumistore_audit_seconds < 10:
             raise ValueError("Sumistore audit interval must be at least 10 seconds")
+        if not 1 <= self.supplier_ui_cache_seconds <= 60:
+            raise ValueError("Supplier UI cache must be between 1 and 60 seconds")
         if self.lehai_enabled and not self.lehai_api_key.get_secret_value():
             raise ValueError("Le Hai Premium is enabled but buyer API key is missing")
         if self.lehai_markup < 0 or self.lehai_timeout_seconds <= 0:

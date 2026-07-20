@@ -1,6 +1,7 @@
 import asyncio
 import logging
 import secrets
+import time
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 
@@ -22,6 +23,9 @@ from app.suppliers import (
     SupplierError,
     SupplierPurchase,
     SupplierSnapshot,
+    clear_supplier_refresh_failure,
+    mark_supplier_refresh_failure,
+    supplier_refresh_is_backed_off,
 )
 
 
@@ -102,13 +106,37 @@ class LeHaiPremiumClient:
         base_url: str,
         api_key: str,
         timeout_seconds: float = 15,
+        snapshot_cache_seconds: int = 5,
         transport: httpx.AsyncBaseTransport | None = None,
     ) -> None:
         self.base_url = base_url.rstrip("/")
         self.api_key = api_key
         self.timeout_seconds = timeout_seconds
+        self.snapshot_cache_seconds = max(1, snapshot_cache_seconds)
         self.transport = transport
         self.balance_lock = asyncio.Lock()
+        self.refresh_backoff_until: dict[str, float] = {}
+        self._http_client: httpx.AsyncClient | None = None
+        self._snapshot_lock = asyncio.Lock()
+        self._snapshots: dict[str, SupplierSnapshot] = {}
+        self._snapshot_at = 0.0
+
+    def _http(self) -> httpx.AsyncClient:
+        if self._http_client is None or self._http_client.is_closed:
+            self._http_client = httpx.AsyncClient(
+                timeout=self.timeout_seconds,
+                transport=self.transport,
+                limits=httpx.Limits(
+                    max_connections=20,
+                    max_keepalive_connections=10,
+                    keepalive_expiry=30,
+                ),
+            )
+        return self._http_client
+
+    async def aclose(self) -> None:
+        if self._http_client is not None and not self._http_client.is_closed:
+            await self._http_client.aclose()
 
     @staticmethod
     def _payload_error(payload: object, fallback: str) -> SupplierError:
@@ -135,28 +163,20 @@ class LeHaiPremiumClient:
 
     async def _get(self, path: str) -> dict[str, object]:
         try:
-            async with httpx.AsyncClient(
-                timeout=self.timeout_seconds,
-                transport=self.transport,
-            ) as client:
-                response = await client.get(
-                    f"{self.base_url}/{path.lstrip('/')}",
-                    params={"key": self.api_key},
-                )
+            response = await self._http().get(
+                f"{self.base_url}/{path.lstrip('/')}",
+                params={"key": self.api_key},
+            )
         except httpx.HTTPError as exc:
             raise SupplierError("SUPPLIER_UNAVAILABLE", type(exc).__name__) from exc
         return self._decode_response(response)
 
     async def _post(self, path: str, body: dict[str, object]) -> dict[str, object]:
         try:
-            async with httpx.AsyncClient(
-                timeout=self.timeout_seconds,
-                transport=self.transport,
-            ) as client:
-                response = await client.post(
-                    f"{self.base_url}/{path.lstrip('/')}",
-                    json=body,
-                )
+            response = await self._http().post(
+                f"{self.base_url}/{path.lstrip('/')}",
+                json=body,
+            )
         except httpx.HTTPError as exc:
             raise SupplierError("SUPPLIER_UNAVAILABLE", type(exc).__name__) from exc
         return self._decode_response(response)
@@ -212,21 +232,40 @@ class LeHaiPremiumClient:
             raise SupplierError("SUPPLIER_INVALID_RESPONSE") from exc
 
     async def fetch_snapshot(self, product_id: str) -> SupplierSnapshot:
-        products, balance = await asyncio.gather(
-            self.fetch_products(),
-            self.fetch_balance(),
-        )
-        product = next((item for item in products if item.product_id == product_id), None)
-        if product is None:
-            raise SupplierError("SUPPLIER_PRODUCT_MISSING")
-        return SupplierSnapshot(
-            product_id=product.product_id,
-            name=product.name,
-            description=product.description,
-            unit_price=product.unit_price,
-            source_stock=product.stock,
-            owner_balance=max(0, balance),
-        )
+        now = time.monotonic()
+        if now - self._snapshot_at < self.snapshot_cache_seconds:
+            snapshot = self._snapshots.get(product_id)
+            if snapshot is None:
+                raise SupplierError("SUPPLIER_PRODUCT_MISSING")
+            return snapshot
+        async with self._snapshot_lock:
+            now = time.monotonic()
+            if now - self._snapshot_at >= self.snapshot_cache_seconds:
+                products, balance = await asyncio.gather(
+                    self.fetch_products(),
+                    self.fetch_balance(),
+                )
+                owner_balance = max(0, balance)
+                self._snapshots = {
+                    product.product_id: SupplierSnapshot(
+                        product_id=product.product_id,
+                        name=product.name,
+                        description=product.description,
+                        unit_price=product.unit_price,
+                        source_stock=product.stock,
+                        owner_balance=owner_balance,
+                    )
+                    for product in products
+                }
+                self._snapshot_at = now
+            snapshot = self._snapshots.get(product_id)
+            if snapshot is None:
+                raise SupplierError("SUPPLIER_PRODUCT_MISSING")
+            return snapshot
+
+    def invalidate_snapshot_cache(self) -> None:
+        self._snapshot_at = 0.0
+        self._snapshots = {}
 
     async def buy(
         self,
@@ -245,6 +284,7 @@ class LeHaiPremiumClient:
                 "idempotency_key": request_key,
             },
         )
+        self.invalidate_snapshot_cache()
         delivered = payload.get("deliveredAccounts") or payload.get("delivered_accounts")
         if not isinstance(delivered, list):
             raise SupplierError("SUPPLIER_DELIVERY_INCOMPLETE")
@@ -341,6 +381,7 @@ def create_lehai_client(settings: Settings) -> LeHaiPremiumClient | None:
         settings.lehai_base_url,
         api_key,
         settings.lehai_timeout_seconds,
+        settings.supplier_ui_cache_seconds,
     )
 
 
@@ -439,13 +480,22 @@ async def refresh_lehai_product(
         product.external_stock = recovered_stock
         await session.flush()
         return product.external_stock
+    if supplier_refresh_is_backed_off(client, product.supplier_product_id):
+        product.external_stock = max(0, product.external_stock, recovered_stock)
+        return product.external_stock
     try:
         snapshot = await client.fetch_snapshot(product.supplier_product_id)
     except SupplierError as exc:
         # Do not turn a temporary API/network error into a false sold-out
         # state. The purchase path will still ask the provider for the truth.
         product.external_stock = max(0, product.external_stock, recovered_stock)
-        if exc.code in DEFINITIVE_PRODUCT_UNAVAILABLE_CODES:
+        definitive = exc.code in DEFINITIVE_PRODUCT_UNAVAILABLE_CODES
+        mark_supplier_refresh_failure(
+            client,
+            product.supplier_product_id,
+            definitive=definitive,
+        )
+        if definitive:
             product.external_stock = recovered_stock
             await apply_supplier_stock(session, product, 0)
             product.supplier_synced_at = datetime.now(UTC)
@@ -456,6 +506,7 @@ async def refresh_lehai_product(
             exc.code,
         )
         return product.external_stock
+    clear_supplier_refresh_failure(client, product.supplier_product_id)
     previous_owner_balance = product.supplier_owner_balance
     current_owner_balance = max(0, snapshot.owner_balance)
     balance_increased = (

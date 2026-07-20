@@ -79,17 +79,31 @@ class RentSimClient:
         self._snapshot_lock = asyncio.Lock()
         self._snapshot: RentSimSnapshot | None = None
         self._snapshot_at = 0.0
+        self._http_client: httpx.AsyncClient | None = None
+
+    def _http(self) -> httpx.AsyncClient:
+        if self._http_client is None or self._http_client.is_closed:
+            self._http_client = httpx.AsyncClient(
+                timeout=self.timeout_seconds,
+                transport=self.transport,
+                limits=httpx.Limits(
+                    max_connections=10,
+                    max_keepalive_connections=5,
+                    keepalive_expiry=30,
+                ),
+            )
+        return self._http_client
+
+    async def aclose(self) -> None:
+        if self._http_client is not None and not self._http_client.is_closed:
+            await self._http_client.aclose()
 
     async def _get(self, path: str, *, params: dict[str, str] | None = None) -> dict[str, object]:
         try:
-            async with httpx.AsyncClient(
-                timeout=self.timeout_seconds,
-                transport=self.transport,
-            ) as client:
-                response = await client.get(
-                    f"{self.base_url}/{path.lstrip('/')}",
-                    params=params,
-                )
+            response = await self._http().get(
+                f"{self.base_url}/{path.lstrip('/')}",
+                params=params,
+            )
         except httpx.HTTPError as exc:
             raise RentSimError("PROVIDER_UNAVAILABLE", type(exc).__name__) from exc
         try:

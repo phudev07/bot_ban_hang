@@ -501,6 +501,24 @@ async def initialize_database(engine, session_factory, seed_demo_data: bool) -> 
         )
         await connection.execute(
             text(
+                "CREATE INDEX IF NOT EXISTS ix_sms_rentals_status_last_checked "
+                "ON sms_rentals (status, last_checked_at, id)"
+            )
+        )
+        await connection.execute(
+            text(
+                "CREATE INDEX IF NOT EXISTS ix_sms_rentals_status_requested "
+                "ON sms_rentals (status, requested_at, id)"
+            )
+        )
+        await connection.execute(
+            text(
+                "CREATE INDEX IF NOT EXISTS ix_sms_rentals_user_requested "
+                "ON sms_rentals (user_id, requested_at, id)"
+            )
+        )
+        await connection.execute(
+            text(
                 "ALTER TABLE orders ADD COLUMN IF NOT EXISTS "
                 "sales_channel VARCHAR(16) NOT NULL DEFAULT 'telegram'"
             )
@@ -1100,6 +1118,9 @@ async def main() -> None:
         server.should_exit = True
         await api_task
         await storage.close()
+        for external_client in (supplier_client, lehai_client, rentsim_client):
+            if external_client is not None:
+                await external_client.aclose()
         if deposit_notification_bot is not None:
             await deposit_notification_bot.session.close()
         await bot.session.close()

@@ -1,6 +1,16 @@
 from datetime import datetime
 
-from sqlalchemy import BigInteger, Boolean, DateTime, ForeignKey, String, Text, UniqueConstraint, func
+from sqlalchemy import (
+    BigInteger,
+    Boolean,
+    DateTime,
+    ForeignKey,
+    Index,
+    String,
+    Text,
+    UniqueConstraint,
+    func,
+)
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.database import Base
@@ -398,6 +408,11 @@ class BalanceAdjustment(Base):
 
 class SmsRental(Base):
     __tablename__ = "sms_rentals"
+    __table_args__ = (
+        Index("ix_sms_rentals_status_last_checked", "status", "last_checked_at", "id"),
+        Index("ix_sms_rentals_status_requested", "status", "requested_at", "id"),
+        Index("ix_sms_rentals_user_requested", "user_id", "requested_at", "id"),
+    )
 
     id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
     user_id: Mapped[int] = mapped_column(

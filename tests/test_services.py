@@ -1,4 +1,5 @@
 import asyncio
+from datetime import UTC, datetime, timedelta
 from cryptography.fernet import Fernet
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
@@ -17,6 +18,7 @@ from app.models import (
     User,
 )
 from app.services import (
+    available_stock,
     order_bundle,
     process_sepay_payment,
     product_pricing,
@@ -58,6 +60,91 @@ class FakeSupplier:
             unit_price=15_000,
             accounts=tuple(f"chatgpt{index}:password" for index in range(1, quantity + 1)),
         )
+
+
+def test_external_stock_ui_refresh_uses_short_cache() -> None:
+    class CountingSupplier:
+        provider = "sumistore"
+
+        def __init__(self) -> None:
+            self.calls = 0
+
+        async def fetch_snapshot(self, product_id: str) -> SupplierSnapshot:
+            self.calls += 1
+            return SupplierSnapshot(
+                product_id=product_id,
+                name="Cached product",
+                description="",
+                unit_price=15_000,
+                source_stock=8,
+                owner_balance=150_000,
+            )
+
+    async def scenario() -> None:
+        engine, sessions = await make_database()
+        supplier = CountingSupplier()
+        async with sessions() as session:
+            category = Category(name_vi="API", name_en="API")
+            session.add(category)
+            await session.flush()
+            product = Product(
+                category_id=category.id,
+                name_vi="Cached product",
+                name_en="Cached product",
+                price=20_000,
+                fulfillment_source="sumistore",
+                supplier_product_id="SP-CACHED",
+                supplier_price=15_000,
+                supplier_markup=5_000,
+                external_stock=7,
+                supplier_synced_at=datetime.now(UTC),
+            )
+            session.add(product)
+            await session.commit()
+            product_id = product.id
+
+        async with sessions() as session:
+            assert (
+                await available_stock(
+                    session,
+                    product_id,
+                    supplier,  # type: ignore[arg-type]
+                    refresh_external=True,
+                    refresh_max_age_seconds=10,
+                )
+                == 7
+            )
+            assert supplier.calls == 0
+            product = await session.get(Product, product_id)
+            assert product is not None
+            product.supplier_synced_at = datetime.now(UTC) - timedelta(seconds=11)
+            await session.commit()
+
+        async with sessions() as session:
+            assert (
+                await available_stock(
+                    session,
+                    product_id,
+                    supplier,  # type: ignore[arg-type]
+                    refresh_external=True,
+                    refresh_max_age_seconds=10,
+                )
+                == 8
+            )
+            assert (
+                await available_stock(
+                    session,
+                    product_id,
+                    supplier,  # type: ignore[arg-type]
+                    refresh_external=True,
+                    refresh_max_age_seconds=10,
+                )
+                == 8
+            )
+            assert supplier.calls == 1
+        await engine.dispose()
+
+    asyncio.run(scenario())
 
 
 class TimeoutRecoveringSupplier(FakeSupplier):

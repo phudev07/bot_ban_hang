@@ -85,6 +85,38 @@ def test_lehai_snapshot_limits_stock_by_wallet_balance() -> None:
     asyncio.run(scenario())
 
 
+def test_lehai_snapshot_cache_reuses_product_list_and_connection() -> None:
+    requests: list[str] = []
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request.url.path)
+        if request.url.path.endswith("/balance"):
+            return httpx.Response(200, json={"success": True, "balance": 200_000})
+        return httpx.Response(200, json=product_payload())
+
+    async def scenario() -> None:
+        client = LeHaiPremiumClient(
+            "https://supplier.test",
+            "tgb_test",
+            snapshot_cache_seconds=10,
+            transport=httpx.MockTransport(handler),
+        )
+        pixel = await client.fetch_snapshot("cdk_pixel")
+        jio = await client.fetch_snapshot("cdk_ggpro_18m")
+        first_http_client = client._http_client
+
+        assert pixel.unit_price == 25_000
+        assert jio.unit_price == 27_000
+        assert len(requests) == 2
+        assert first_http_client is not None
+        assert client._http_client is first_http_client
+
+        await client.aclose()
+        assert first_http_client.is_closed
+
+    asyncio.run(scenario())
+
+
 def test_lehai_temporary_refresh_failure_keeps_last_known_stock() -> None:
     class UnavailableSupplier:
         async def fetch_snapshot(self, product_id: str) -> SupplierSnapshot:
@@ -122,6 +154,61 @@ def test_lehai_temporary_refresh_failure_keeps_last_known_stock() -> None:
             assert stock == 6
             assert product.external_stock == 6
             assert product.supplier_available_stock == 6
+        await engine.dispose()
+
+    asyncio.run(scenario())
+
+
+def test_lehai_missing_product_uses_refresh_backoff() -> None:
+    request_count = 0
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal request_count
+        request_count += 1
+        if request.url.path.endswith("/balance"):
+            return httpx.Response(200, json={"success": True, "balance": 100_000})
+        payload = product_payload()
+        payload["products"] = [
+            product
+            for product in payload["products"]
+            if product["_id"] != "cdk_ggpro_18m"
+        ]
+        return httpx.Response(200, json=payload)
+
+    async def scenario() -> None:
+        engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+        async with engine.begin() as connection:
+            await connection.run_sync(Base.metadata.create_all)
+        sessions = async_sessionmaker(engine, expire_on_commit=False)
+        client = LeHaiPremiumClient(
+            "https://supplier.test",
+            "tgb_test",
+            snapshot_cache_seconds=1,
+            transport=httpx.MockTransport(handler),
+        )
+        async with sessions() as session:
+            category = Category(name_vi=CATEGORY_VI, name_en=CATEGORY_VI)
+            session.add(category)
+            await session.flush()
+            product = Product(
+                category_id=category.id,
+                name_vi="Missing Jio",
+                name_en="Missing Jio",
+                price=35_000,
+                fulfillment_source="lehai",
+                supplier_product_id="cdk_ggpro_18m",
+                external_stock=4,
+            )
+            session.add(product)
+            await session.flush()
+
+            assert await refresh_lehai_product(session, product, client) == 0
+            assert request_count == 2
+            client.invalidate_snapshot_cache()
+            assert await refresh_lehai_product(session, product, client) == 0
+            assert request_count == 2
+
+        await client.aclose()
         await engine.dispose()
 
     asyncio.run(scenario())

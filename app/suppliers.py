@@ -32,6 +32,39 @@ DEFINITIVE_PRODUCT_UNAVAILABLE_CODES = {
 }
 SUMISTORE_RECOVERY_ATTEMPTS = 20
 SUMISTORE_RECOVERY_DELAY_SECONDS = 2.0
+TRANSIENT_REFRESH_BACKOFF_SECONDS = 5.0
+DEFINITIVE_REFRESH_BACKOFF_SECONDS = 300.0
+
+
+def supplier_refresh_is_backed_off(client: object, product_id: str) -> bool:
+    backoffs = getattr(client, "refresh_backoff_until", None)
+    return bool(
+        isinstance(backoffs, dict)
+        and float(backoffs.get(product_id, 0.0)) > time.monotonic()
+    )
+
+
+def mark_supplier_refresh_failure(
+    client: object,
+    product_id: str,
+    *,
+    definitive: bool,
+) -> None:
+    backoffs = getattr(client, "refresh_backoff_until", None)
+    if not isinstance(backoffs, dict):
+        return
+    delay = (
+        DEFINITIVE_REFRESH_BACKOFF_SECONDS
+        if definitive
+        else TRANSIENT_REFRESH_BACKOFF_SECONDS
+    )
+    backoffs[product_id] = time.monotonic() + delay
+
+
+def clear_supplier_refresh_failure(client: object, product_id: str) -> None:
+    backoffs = getattr(client, "refresh_backoff_until", None)
+    if isinstance(backoffs, dict):
+        backoffs.pop(product_id, None)
 
 
 SUMISTORE_PRODUCT_SEEDS: dict[str, dict[str, object]] = {
@@ -136,6 +169,25 @@ class SumistoreClient:
         self.timeout_seconds = timeout_seconds
         self.transport = transport
         self.balance_lock = asyncio.Lock()
+        self.refresh_backoff_until: dict[str, float] = {}
+        self._http_client: httpx.AsyncClient | None = None
+
+    def _http(self) -> httpx.AsyncClient:
+        if self._http_client is None or self._http_client.is_closed:
+            self._http_client = httpx.AsyncClient(
+                timeout=self.timeout_seconds,
+                transport=self.transport,
+                limits=httpx.Limits(
+                    max_connections=20,
+                    max_keepalive_connections=10,
+                    keepalive_expiry=30,
+                ),
+            )
+        return self._http_client
+
+    async def aclose(self) -> None:
+        if self._http_client is not None and not self._http_client.is_closed:
+            await self._http_client.aclose()
 
     def _headers(self) -> dict[str, str]:
         return {"X-Tele-API-ID": self.api_id}
@@ -151,14 +203,10 @@ class SumistoreClient:
 
     async def _get(self, path: str) -> dict[str, object]:
         try:
-            async with httpx.AsyncClient(
-                timeout=self.timeout_seconds,
-                transport=self.transport,
-            ) as client:
-                response = await client.get(
-                    f"{self.base_url}/{path.lstrip('/')}",
-                    headers=self._headers(),
-                )
+            response = await self._http().get(
+                f"{self.base_url}/{path.lstrip('/')}",
+                headers=self._headers(),
+            )
         except httpx.HTTPError as exc:
             raise SupplierError("SUPPLIER_UNAVAILABLE", str(exc)) from exc
         try:
@@ -238,15 +286,11 @@ class SumistoreClient:
             "X-Signature": signature,
         }
         try:
-            async with httpx.AsyncClient(
-                timeout=self.timeout_seconds,
-                transport=self.transport,
-            ) as client:
-                response = await client.post(
-                    f"{self.base_url}/tele-product/buy",
-                    headers=headers,
-                    content=body.encode(),
-                )
+            response = await self._http().post(
+                f"{self.base_url}/tele-product/buy",
+                headers=headers,
+                content=body.encode(),
+            )
         except httpx.HTTPError as exc:
             raise SupplierError("SUPPLIER_UNAVAILABLE", str(exc)) from exc
         try:
@@ -508,6 +552,9 @@ async def refresh_external_product(
         product.external_stock = recovered_stock
         await session.flush()
         return product.external_stock
+    if supplier_refresh_is_backed_off(client, product.supplier_product_id):
+        product.external_stock = max(0, product.external_stock, recovered_stock)
+        return product.external_stock
     try:
         snapshot = await client.fetch_snapshot(product.supplier_product_id)
     except SupplierError as exc:
@@ -515,7 +562,13 @@ async def refresh_external_product(
         # Clearing it here makes a healthy product look sold out and blocks a
         # purchase before the provider can return its real result.
         product.external_stock = max(0, product.external_stock, recovered_stock)
-        if exc.code in DEFINITIVE_PRODUCT_UNAVAILABLE_CODES:
+        definitive = exc.code in DEFINITIVE_PRODUCT_UNAVAILABLE_CODES
+        mark_supplier_refresh_failure(
+            client,
+            product.supplier_product_id,
+            definitive=definitive,
+        )
+        if definitive:
             product.external_stock = recovered_stock
             await apply_supplier_stock(session, product, 0)
             product.supplier_synced_at = datetime.now(UTC)
@@ -526,6 +579,7 @@ async def refresh_external_product(
             exc.code,
         )
         return product.external_stock
+    clear_supplier_refresh_failure(client, product.supplier_product_id)
     previous_owner_balance = product.supplier_owner_balance
     current_owner_balance = max(0, snapshot.owner_balance)
     balance_increased = (

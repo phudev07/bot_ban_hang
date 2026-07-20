@@ -388,12 +388,37 @@ async def available_stock(
     *,
     lehai_client: LeHaiPremiumClient | None = None,
     refresh_external: bool = False,
+    refresh_max_age_seconds: int = 0,
 ) -> int:
     product = await session.get(Product, product_id)
     if product is None:
         return 0
     if product.fulfillment_source in EXTERNAL_FULFILLMENT_SOURCES:
         if refresh_external:
+            max_age = max(0, refresh_max_age_seconds)
+            synced_at = _as_utc(product.supplier_synced_at)
+            if (
+                max_age > 0
+                and synced_at is not None
+                and synced_at > datetime.now(UTC) - timedelta(seconds=max_age)
+            ):
+                return max(0, product.external_stock)
+            if max_age > 0:
+                locked_product = await session.scalar(
+                    select(Product)
+                    .where(Product.id == product_id)
+                    .with_for_update(skip_locked=True)
+                    .execution_options(populate_existing=True)
+                )
+                if locked_product is None:
+                    return max(0, product.external_stock)
+                product = locked_product
+                synced_at = _as_utc(product.supplier_synced_at)
+                if (
+                    synced_at is not None
+                    and synced_at > datetime.now(UTC) - timedelta(seconds=max_age)
+                ):
+                    return max(0, product.external_stock)
             await refresh_product_from_supplier(
                 session,
                 product,
