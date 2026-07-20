@@ -296,7 +296,8 @@ def create_router(
         await state.clear()
         user = await get_or_create_user(callback, session)
         if callback.message:
-            await callback.message.edit_text(
+            await edit_or_send_text(
+                callback.message,
                 home_text(user, settings),
                 reply_markup=main_menu(user.language, sms_enabled=rentsim_client is not None),
                 disable_web_page_preview=True,

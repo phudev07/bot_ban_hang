@@ -42,6 +42,7 @@ from app.supplier_recovery import recover_pending_sumistore_orders
 from app.suppliers import (
     ExternalSupplierClient,
     SumistoreClient,
+    SupplierError,
     create_sumistore_client,
     ensure_sumistore_product,
     sync_sumistore_products,
@@ -546,6 +547,12 @@ async def supplier_audit_worker(
                             "Could not notify admin %s about supplier balance anomaly",
                             admin_id,
                         )
+        except SupplierError as exc:
+            logging.getLogger(__name__).warning(
+                "Could not reconcile %s balance: code=%s",
+                provider_label,
+                exc.code,
+            )
         except Exception:
             logging.getLogger(__name__).exception("Could not reconcile supplier balance")
         await asyncio.sleep(max(10, interval_seconds))

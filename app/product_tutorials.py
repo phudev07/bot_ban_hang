@@ -5,6 +5,7 @@ from pathlib import Path
 from aiogram import Bot
 from aiogram.exceptions import TelegramBadRequest
 from aiogram.types import FSInputFile, LinkPreviewOptions, Message
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.models import TutorialMedia
@@ -82,7 +83,12 @@ async def _save_file_id(
             session.add(media)
         media.telegram_file_id = message.video.file_id
         media.telegram_file_unique_id = message.video.file_unique_id
-        await session.commit()
+        try:
+            await session.commit()
+        except IntegrityError:
+            # Two first-time buyers can upload the same tutorial concurrently.
+            # The winning row already contains a reusable Telegram file ID.
+            await session.rollback()
 
 
 async def _send_tutorial_video(
