@@ -5,7 +5,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 
 import httpx
-from sqlalchemy import func, select
+from sqlalchemy import delete, func, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.config import Settings
@@ -56,7 +56,7 @@ LEHAI_PRODUCT_SEEDS: dict[str, dict[str, object]] = {
         "fallback_price": 27_000,
     },
     "gptupi_kbh12k": {
-        "category_vi": "ChatGPT",
+        "category_vi": "🤖Tài Khoản ChatGPT cá nhân",
         "category_en": "ChatGPT",
         "category_position": 1,
         "name_vi": "BHF GPT PLUS GMAIL APPLE PAY",
@@ -315,12 +315,6 @@ async def ensure_lehai_products(
             return
 
         for product_id in product_ids:
-            product = next(
-                (item for item in existing_products if item.supplier_product_id == product_id),
-                None,
-            )
-            if product is not None:
-                continue
             seed = LEHAI_PRODUCT_SEEDS[product_id]
             category_vi = str(seed.get("category_vi") or CATEGORY_VI)
             category_en = str(seed.get("category_en") or category_vi)
@@ -335,6 +329,13 @@ async def ensure_lehai_products(
                 )
                 session.add(category)
                 await session.flush()
+            product = next(
+                (item for item in existing_products if item.supplier_product_id == product_id),
+                None,
+            )
+            if product is not None:
+                product.category_id = category.id
+                continue
             fallback_price = int(seed["fallback_price"])
             session.add(
                 Product(
@@ -354,6 +355,12 @@ async def ensure_lehai_products(
                     external_stock=0,
                 )
             )
+        await session.execute(
+            delete(Category).where(
+                Category.name_vi == "ChatGPT",
+                ~Category.products.any(),
+            )
+        )
         await session.commit()
 
 
