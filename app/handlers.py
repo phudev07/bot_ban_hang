@@ -39,6 +39,7 @@ from app.lehai_suppliers import LeHaiPremiumClient
 from app.models import ApiClient, Product, User
 from app.partner_services import ensure_api_client, referral_stats, rotate_api_secret
 from app.payment_expiry import register_deposit_message
+from app.product_tutorials import send_purchase_tutorials
 from app.rentsim import RentSimClient
 from app.services import (
     active_categories,
@@ -834,6 +835,13 @@ def create_router(
                     secrets=result.secrets,
                     language=user.language,
                 ),
+            )
+            await send_purchase_tutorials(
+                target.bot,
+                user.telegram_id,
+                result.orders[0].product.supplier_product_id,
+                user.language,
+                session_factory,
             )
         return result.message
 

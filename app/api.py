@@ -22,6 +22,7 @@ from app.keyboards import main_menu
 from app.lehai_suppliers import LeHaiPremiumClient
 from app.models import ApiRequestAudit
 from app.public_api import client_ip, create_public_api_docs_router, create_public_api_router
+from app.product_tutorials import send_purchase_tutorials
 from app.rate_limit import FixedWindowRateLimiter, RateLimitDecision, RateLimitRule
 from app.rentsim import RentSimClient
 from app.services import process_sepay_payment
@@ -409,6 +410,13 @@ def create_api(
                         secrets=secret_values,
                         language=result.language,
                     ),
+                )
+                await send_purchase_tutorials(
+                    bot,
+                    result.user_id,
+                    result.supplier_product_id,
+                    result.language,
+                    session_factory,
                 )
             except Exception:
                 logger.exception(

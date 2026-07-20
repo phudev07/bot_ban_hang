@@ -513,6 +513,19 @@ class SupplierPurchaseAttempt(Base):
     )
 
 
+class TutorialMedia(Base):
+    __tablename__ = "tutorial_media"
+
+    slug: Mapped[str] = mapped_column(String(64), primary_key=True)
+    telegram_file_id: Mapped[str | None] = mapped_column(Text, nullable=True)
+    telegram_file_unique_id: Mapped[str | None] = mapped_column(
+        String(255), nullable=True
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
+
+
 class BroadcastLog(Base):
     __tablename__ = "broadcast_logs"
 

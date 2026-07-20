@@ -1039,6 +1039,8 @@ class PaymentResult:
     status: str
     user_id: int | None = None
     amount: int = 0
+    product_id: int | None = None
+    supplier_product_id: str | None = None
     product_name_vi: str | None = None
     product_name_en: str | None = None
     encrypted_secrets: tuple[str, ...] = ()
@@ -1415,6 +1417,8 @@ async def _process_sepay_payment(
                         "direct_purchase_completed",
                         user.telegram_id,
                         amount,
+                        product_id=product.id,
+                        supplier_product_id=product.supplier_product_id,
                         product_name_vi=product.name_vi,
                         product_name_en=product.name_en,
                         encrypted_secrets=tuple(item.encrypted_secret for item in items),
