@@ -2830,7 +2830,7 @@ def create_dashboard_router(
                 await session.scalar(
                     select(func.coalesce(func.sum(SupplierBalanceTransaction.amount), 0)).where(
                         SupplierBalanceTransaction.provider == selected_provider,
-                        SupplierBalanceTransaction.kind.in_(("credit", "refund")),
+                        SupplierBalanceTransaction.kind == "credit",
                     )
                 )
                 or 0
