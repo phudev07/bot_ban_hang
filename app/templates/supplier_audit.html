@@ -56,6 +56,7 @@
       <a class="{{ 'active' if selected_kind == 'all' else '' }}" href="/admin/supplier-audit?provider={{ selected_provider }}">Tất cả</a>
       <a class="{{ 'active' if selected_kind == 'suspicious' else '' }}" href="/admin/supplier-audit?provider={{ selected_provider }}&kind=suspicious">Đáng ngờ</a>
       {% if selected_provider == 'sumistore' %}<a class="{{ 'active' if selected_kind == 'recovered' else '' }}" href="/admin/supplier-audit?provider=sumistore&kind=recovered">Đã thu hồi</a>{% endif %}
+      {% if selected_provider == 'lehai' %}<a class="{{ 'active' if selected_kind == 'refunded' else '' }}" href="/admin/supplier-audit?provider=lehai&kind=refunded">Đã hoàn</a>{% endif %}
       <a class="{{ 'active' if selected_kind == 'purchase' else '' }}" href="/admin/supplier-audit?provider={{ selected_provider }}&kind=purchase">Mua hợp lệ</a>
       <a class="{{ 'active' if selected_kind == 'credit' else '' }}" href="/admin/supplier-audit?provider={{ selected_provider }}&kind=credit">Tiền tăng</a>
     </nav>
@@ -76,6 +77,8 @@
           <td>
             {% if item.kind == 'suspicious' %}<span class="status off">Đáng ngờ</span>
             {% elif item.kind == 'recovered' %}<span class="status wait">Đã thu hồi</span>
+            {% elif item.kind == 'refunded' %}<span class="status on">Đã hoàn</span>
+            {% elif item.kind == 'refund' %}<span class="status on">Tiền hoàn</span>
             {% elif item.kind == 'purchase' %}<span class="status on">Mua hợp lệ</span>
             {% else %}<span class="status wait">Tiền tăng</span>{% endif %}
             <small>Log #{{ item.id }}</small>

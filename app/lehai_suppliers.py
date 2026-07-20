@@ -24,6 +24,9 @@ logger = logging.getLogger(__name__)
 
 LEHAI_PRODUCT_SEEDS: dict[str, dict[str, object]] = {
     "cdk_pixel": {
+        "category_vi": "Gemini / Veo3 / Antigravity",
+        "category_en": "Gemini / Veo3 / Antigravity",
+        "category_position": 2,
         "name_vi": "CDK GG Pixel 1Y",
         "name_en": "Google Pro Pixel 1 Year CDK",
         "description_vi": (
@@ -37,6 +40,9 @@ LEHAI_PRODUCT_SEEDS: dict[str, dict[str, object]] = {
         "fallback_price": 25_000,
     },
     "cdk_ggpro_18m": {
+        "category_vi": "Gemini / Veo3 / Antigravity",
+        "category_en": "Gemini / Veo3 / Antigravity",
+        "category_position": 2,
         "name_vi": "Link GG Pro Jio 18M",
         "name_en": "Google Pro Jio 18M Link",
         "description_vi": (
@@ -48,6 +54,24 @@ LEHAI_PRODUCT_SEEDS: dict[str, dict[str, object]] = {
             "card. Works with any account and supports five additional family members."
         ),
         "fallback_price": 27_000,
+    },
+    "gptupi_kbh12k": {
+        "category_vi": "ChatGPT",
+        "category_en": "ChatGPT",
+        "category_position": 1,
+        "name_vi": "BHF GPT PLUS GMAIL APPLE PAY",
+        "name_en": "BHF ChatGPT Plus Gmail Apple Pay",
+        "description_vi": (
+            "ChatGPT Plus 30 ngày, thanh toán Apple Pay bằng thẻ Việt, tài khoản Gmail. "
+            "Bảo hành đầy đủ trừ trường hợp sử dụng 9Router hoặc VPCS. "
+            "Định dạng: Mail GPT | Mật khẩu | Mã 2FA."
+        ),
+        "description_en": (
+            "ChatGPT Plus for 30 days on Gmail, activated with Apple Pay. "
+            "Full warranty except when used with 9Router or VPCS. "
+            "Format: GPT email | password | 2FA secret."
+        ),
+        "fallback_price": 130_000,
     },
 }
 
@@ -290,12 +314,6 @@ async def ensure_lehai_products(
             await session.commit()
             return
 
-        category = await session.scalar(select(Category).where(Category.name_vi == CATEGORY_VI))
-        if category is None:
-            category = Category(name_vi=CATEGORY_VI, name_en=CATEGORY_EN, position=2)
-            session.add(category)
-            await session.flush()
-
         for product_id in product_ids:
             product = next(
                 (item for item in existing_products if item.supplier_product_id == product_id),
@@ -304,6 +322,19 @@ async def ensure_lehai_products(
             if product is not None:
                 continue
             seed = LEHAI_PRODUCT_SEEDS[product_id]
+            category_vi = str(seed.get("category_vi") or CATEGORY_VI)
+            category_en = str(seed.get("category_en") or category_vi)
+            category = await session.scalar(
+                select(Category).where(Category.name_vi == category_vi)
+            )
+            if category is None:
+                category = Category(
+                    name_vi=category_vi,
+                    name_en=category_en,
+                    position=int(seed.get("category_position") or 2),
+                )
+                session.add(category)
+                await session.flush()
             fallback_price = int(seed["fallback_price"])
             session.add(
                 Product(

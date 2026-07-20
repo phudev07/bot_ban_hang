@@ -2779,7 +2779,8 @@ def create_dashboard_router(
         )
         selected_kind = (
             kind
-            if kind in {"all", "suspicious", "recovered", "purchase", "credit"}
+            if kind
+            in {"all", "suspicious", "recovered", "refunded", "purchase", "credit"}
             else "all"
         )
         async with session_factory() as session:
@@ -2819,7 +2820,7 @@ def create_dashboard_router(
                 await session.scalar(
                     select(func.coalesce(func.sum(SupplierBalanceTransaction.amount), 0)).where(
                         SupplierBalanceTransaction.provider == selected_provider,
-                        SupplierBalanceTransaction.kind == "credit",
+                        SupplierBalanceTransaction.kind.in_(("credit", "refund")),
                     )
                 )
                 or 0
@@ -2889,6 +2890,12 @@ def create_dashboard_router(
                 flash(
                     request,
                     f"Đã lưu số dư {provider_label} làm mốc đối soát ban đầu.",
+                )
+            elif result.refunded_amount > 0:
+                flash(
+                    request,
+                    f"Đã tự động đối chiếu khoản hoàn {format_vnd(result.refunded_amount)} "
+                    f"với {len(result.refunded_audit_ids)} giao dịch lỗi.",
                 )
             elif result.suspicious_amount < 0:
                 flash(

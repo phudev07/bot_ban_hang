@@ -34,7 +34,10 @@ from app.sms_rentals import (
     pending_sms_review_alerts,
     poll_pending_sms_rentals,
 )
-from app.supplier_audit import reconcile_supplier_balance
+from app.supplier_audit import (
+    reconcile_historical_supplier_refunds,
+    reconcile_supplier_balance,
+)
 from app.supplier_recovery import recover_pending_sumistore_orders
 from app.suppliers import (
     ExternalSupplierClient,
@@ -747,6 +750,12 @@ async def main() -> None:
     await ensure_lehai_products(session_factory, settings)
     lehai_client = create_lehai_client(settings)
     await sync_lehai_products(session_factory, lehai_client)
+    matched_refunds = await reconcile_historical_supplier_refunds(session_factory)
+    if matched_refunds:
+        logging.getLogger(__name__).warning(
+            "Matched historical Le Hai refunds: audits=%s",
+            matched_refunds,
+        )
     await backfill_stock_alert_messages(session_factory)
     rentsim_client = create_rentsim_client(settings)
     if supplier_client is not None:

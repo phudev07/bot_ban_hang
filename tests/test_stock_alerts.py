@@ -8,7 +8,7 @@ from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 from app.broadcasts import deliver_pending_stock_alerts
 from app.database import Base
 from app.models import Category, Product, ProductStockAlert, User
-from app.stock_alerts import apply_supplier_stock
+from app.stock_alerts import apply_supplier_stock, stock_alert_enabled
 
 
 async def make_database():
@@ -208,3 +208,34 @@ def test_non_alert_product_updates_stock_without_queueing_notification() -> None
         await engine.dispose()
 
     asyncio.run(scenario())
+
+
+def test_only_jio_is_featured_for_lehai_stock_notifications() -> None:
+    pixel = Product(
+        category_id=1,
+        name_vi="Pixel",
+        name_en="Pixel",
+        price=30_000,
+        fulfillment_source="lehai",
+        supplier_product_id="cdk_pixel",
+    )
+    jio = Product(
+        category_id=1,
+        name_vi="Jio 18M",
+        name_en="Jio 18M",
+        price=35_000,
+        fulfillment_source="lehai",
+        supplier_product_id="cdk_ggpro_18m",
+    )
+    bhf = Product(
+        category_id=1,
+        name_vi="BHF GPT Plus",
+        name_en="BHF GPT Plus",
+        price=135_000,
+        fulfillment_source="lehai",
+        supplier_product_id="gptupi_kbh12k",
+    )
+
+    assert stock_alert_enabled(pixel) is False
+    assert stock_alert_enabled(jio) is True
+    assert stock_alert_enabled(bhf) is False

@@ -1,6 +1,6 @@
 import logging
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
@@ -27,6 +27,8 @@ class SupplierReconcileResult:
     expected_purchase_debit: int = 0
     unexplained_delta: int = 0
     suspicious_transaction_id: int | None = None
+    refunded_amount: int = 0
+    refunded_audit_ids: tuple[int, ...] = ()
 
     @property
     def suspicious_amount(self) -> int:
@@ -132,6 +134,102 @@ def record_supplier_purchase(
     return transaction
 
 
+async def match_supplier_refund(
+    session: AsyncSession,
+    *,
+    provider: str,
+    amount: int,
+    refunded_at: datetime,
+) -> tuple[SupplierBalanceTransaction, ...]:
+    if provider != "lehai" or amount <= 0:
+        return ()
+    candidates = list(
+        await session.scalars(
+            select(SupplierBalanceTransaction)
+            .where(
+                SupplierBalanceTransaction.provider == provider,
+                SupplierBalanceTransaction.kind == "suspicious",
+                SupplierBalanceTransaction.amount < 0,
+                SupplierBalanceTransaction.created_at
+                >= refunded_at - timedelta(hours=48),
+                SupplierBalanceTransaction.created_at <= refunded_at,
+                SupplierBalanceTransaction.supplier_order_code.is_(None),
+                SupplierBalanceTransaction.shop_order_code.is_(None),
+            )
+            .order_by(SupplierBalanceTransaction.id.desc())
+            .with_for_update()
+        )
+    )
+    exact = next(
+        (transaction for transaction in candidates if abs(transaction.amount) == amount),
+        None,
+    )
+    if exact is not None:
+        matched = [exact]
+    else:
+        matched = []
+        remaining = amount
+        for transaction in candidates:
+            debit = abs(transaction.amount)
+            if debit <= remaining:
+                matched.append(transaction)
+                remaining -= debit
+            if remaining == 0:
+                break
+        if remaining != 0:
+            return ()
+
+    for transaction in matched:
+        transaction.kind = "refunded"
+        transaction.note = (
+            f"Đã đối soát: Lê Hải tự động hoàn {abs(transaction.amount):,}đ. "
+            f"Khoản hoàn được ghi nhận lúc {refunded_at.isoformat()}."
+        )
+    logger.info(
+        "Matched Le Hai refund: amount=%s audits=%s",
+        amount,
+        ",".join(str(transaction.id) for transaction in matched),
+    )
+    return tuple(matched)
+
+
+async def reconcile_historical_supplier_refunds(
+    session_factory: async_sessionmaker[AsyncSession],
+    *,
+    provider: str = "lehai",
+) -> int:
+    matched_count = 0
+    async with session_factory() as session:
+        async with session.begin():
+            credits = list(
+                await session.scalars(
+                    select(SupplierBalanceTransaction)
+                    .where(
+                        SupplierBalanceTransaction.provider == provider,
+                        SupplierBalanceTransaction.kind == "credit",
+                        SupplierBalanceTransaction.amount > 0,
+                    )
+                    .order_by(SupplierBalanceTransaction.id)
+                    .with_for_update()
+                )
+            )
+            for credit in credits:
+                matched = await match_supplier_refund(
+                    session,
+                    provider=provider,
+                    amount=credit.amount,
+                    refunded_at=credit.created_at,
+                )
+                if not matched:
+                    continue
+                credit.kind = "refund"
+                credit.note = "Lê Hải tự động hoàn tiền cho " + ", ".join(
+                    f"Log #{item.id}" for item in matched
+                )
+                matched_count += len(matched)
+    return matched_count
+
+
 async def reconcile_supplier_balance(
     session_factory: async_sessionmaker[AsyncSession],
     client: ExternalSupplierClient,
@@ -180,6 +278,7 @@ async def reconcile_supplier_balance(
                 observed_delta = current_balance - state.last_balance
                 unexplained_delta = observed_delta + expected_purchase_debit
                 transaction: SupplierBalanceTransaction | None = None
+                refunded: tuple[SupplierBalanceTransaction, ...] = ()
                 if unexplained_delta < 0:
                     transaction = SupplierBalanceTransaction(
                         provider=provider,
@@ -204,14 +303,27 @@ async def reconcile_supplier_balance(
                         current_balance,
                     )
                 elif unexplained_delta > 0:
+                    refunded = await match_supplier_refund(
+                        session,
+                        provider=provider,
+                        amount=unexplained_delta,
+                        refunded_at=checked_at,
+                    )
                     session.add(
                         SupplierBalanceTransaction(
                             provider=provider,
-                            kind="credit",
+                            kind="refund" if refunded else "credit",
                             amount=unexplained_delta,
                             balance_before=state.last_balance,
                             balance_after=current_balance,
-                            note=f"Số dư {provider_label} tăng ngoài các đơn mua của shop.",
+                            note=(
+                                "Lê Hải tự động hoàn tiền cho "
+                                + ", ".join(
+                                    f"Log #{item.id}" for item in refunded
+                                )
+                                if refunded
+                                else f"Số dư {provider_label} tăng ngoài các đơn mua của shop."
+                            ),
                             period_started_at=state.checked_at,
                             created_at=checked_at,
                         )
@@ -226,4 +338,6 @@ async def reconcile_supplier_balance(
                     expected_purchase_debit=expected_purchase_debit,
                     unexplained_delta=unexplained_delta,
                     suspicious_transaction_id=transaction.id if transaction else None,
+                    refunded_amount=unexplained_delta if refunded else 0,
+                    refunded_audit_ids=tuple(item.id for item in refunded),
                 )

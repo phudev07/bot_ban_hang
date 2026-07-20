@@ -4,12 +4,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.models import Product, ProductStockAlert
 
 
-# Only these three shop products are advertised as automatic "back in stock"
-# notifications. Other products remain sellable but stay quiet in Telegram.
+# Only these featured products send automatic "back in stock" notifications.
+# Pixel and the other API products remain sellable but stay quiet in Telegram.
 STOCK_ALERT_PRODUCT_IDS = frozenset(
     {
         "SP-GEF55PBV",  # GPT Plus
-        "cdk_pixel",  # CDK GG Pixel 1Y
         "cdk_ggpro_18m",  # Link GG Pro Jio 18M
     }
 )

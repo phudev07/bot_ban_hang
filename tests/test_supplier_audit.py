@@ -15,7 +15,11 @@ from app.models import (
     User,
 )
 from app.services import process_sepay_payment, purchase_product
-from app.supplier_audit import recover_supplier_order, reconcile_supplier_balance
+from app.supplier_audit import (
+    recover_supplier_order,
+    reconcile_historical_supplier_refunds,
+    reconcile_supplier_balance,
+)
 from app.suppliers import SupplierPurchase, SupplierSnapshot
 from app.utils import SecretCipher
 
@@ -178,6 +182,100 @@ def test_lehai_reconciliation_is_isolated_and_detects_unmatched_drop() -> None:
                 "suspicious",
             ]
             assert transactions[-1].amount == -5_000
+        await engine.dispose()
+
+    asyncio.run(scenario())
+
+
+def test_lehai_automatic_refund_resolves_matching_suspicious_debit() -> None:
+    async def scenario() -> None:
+        engine, sessions = await make_database()
+        supplier = ConcurrentSupplier(balance=173_000)
+
+        await reconcile_supplier_balance(
+            sessions,
+            supplier,  # type: ignore[arg-type]
+            provider="lehai",
+            provider_label="Le Hai Premium",
+        )
+        supplier.balance = 146_000
+        suspicious = await reconcile_supplier_balance(
+            sessions,
+            supplier,  # type: ignore[arg-type]
+            provider="lehai",
+            provider_label="Le Hai Premium",
+        )
+        assert suspicious.suspicious_amount == -27_000
+
+        supplier.balance = 173_000
+        refunded = await reconcile_supplier_balance(
+            sessions,
+            supplier,  # type: ignore[arg-type]
+            provider="lehai",
+            provider_label="Le Hai Premium",
+        )
+
+        assert refunded.refunded_amount == 27_000
+        assert refunded.refunded_audit_ids == (suspicious.suspicious_transaction_id,)
+        async with sessions() as session:
+            transactions = list(
+                await session.scalars(
+                    select(SupplierBalanceTransaction).order_by(
+                        SupplierBalanceTransaction.id
+                    )
+                )
+            )
+            assert [transaction.kind for transaction in transactions] == [
+                "refunded",
+                "refund",
+            ]
+            assert [transaction.amount for transaction in transactions] == [
+                -27_000,
+                27_000,
+            ]
+            assert "Log #" in transactions[-1].note
+        await engine.dispose()
+
+    asyncio.run(scenario())
+
+
+def test_historical_lehai_credit_is_backfilled_as_refund() -> None:
+    async def scenario() -> None:
+        engine, sessions = await make_database()
+        async with sessions() as session:
+            session.add_all(
+                [
+                    SupplierBalanceTransaction(
+                        provider="lehai",
+                        kind="suspicious",
+                        amount=-27_000,
+                        balance_before=173_000,
+                        balance_after=146_000,
+                    ),
+                    SupplierBalanceTransaction(
+                        provider="lehai",
+                        kind="credit",
+                        amount=27_000,
+                        balance_before=94_000,
+                        balance_after=121_000,
+                    ),
+                ]
+            )
+            await session.commit()
+
+        assert await reconcile_historical_supplier_refunds(sessions) == 1
+        async with sessions() as session:
+            transactions = list(
+                await session.scalars(
+                    select(SupplierBalanceTransaction).order_by(
+                        SupplierBalanceTransaction.id
+                    )
+                )
+            )
+            assert [transaction.kind for transaction in transactions] == [
+                "refunded",
+                "refund",
+            ]
         await engine.dispose()
 
     asyncio.run(scenario())
