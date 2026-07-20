@@ -493,6 +493,16 @@ def create_public_api_router(
 
         if not claimed:
             raise api_error(409, "REQUEST_IN_PROGRESS", "The original request is processing")
+        expected_flash_sale_id = body.flash_sale_id
+        if expected_flash_sale_id is None:
+            async with session_factory() as session:
+                current_flash_sale = await active_flash_sale(
+                    session,
+                    body.product_id,
+                    quantity=body.quantity,
+                )
+                if current_flash_sale is not None:
+                    expected_flash_sale_id = current_flash_sale.id
         try:
             result = await purchase_product(
                 session_factory,
@@ -510,7 +520,7 @@ def create_public_api_router(
                 supplier_idempotency_key=(
                     f"shop-api-{principal.client.id}-{order_request.id}"
                 ),
-                expected_flash_sale_id=body.flash_sale_id,
+                expected_flash_sale_id=expected_flash_sale_id,
             )
         except Exception:
             logger.exception("Shop API order %s needs supplier review after an exception", order_request.id)

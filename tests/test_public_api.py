@@ -14,7 +14,16 @@ from starlette.requests import Request
 from app.api import create_api
 from app.config import Settings
 from app.database import Base
-from app.models import ApiOrderRequest, Category, InventoryItem, Order, Product, ReferralReward, User
+from app.models import (
+    ApiOrderRequest,
+    Category,
+    FlashSaleCampaign,
+    InventoryItem,
+    Order,
+    Product,
+    ReferralReward,
+    User,
+)
 from app.partner_services import api_signature, ensure_api_client, rotate_api_secret
 from app.services import PurchaseResult
 from app.public_api import client_ip
@@ -360,6 +369,15 @@ def test_public_api_keeps_supplier_failure_in_review_and_retries_same_key(
             )
             session.add(product)
             await session.flush()
+            campaign = FlashSaleCampaign(
+                product_id=product.id,
+                original_price=32_000,
+                sale_price=30_000,
+                total_quantity=5,
+                message_text="API sale",
+            )
+            session.add(campaign)
+            await session.flush()
             api_client, api_secret = await ensure_api_client(
                 session,
                 user.telegram_id,
@@ -367,13 +385,28 @@ def test_public_api_keeps_supplier_failure_in_review_and_retries_same_key(
                 60,
             )
             await session.commit()
-        return engine, sessions, cipher, product.id, api_client.api_id, api_secret
+        return (
+            engine,
+            sessions,
+            cipher,
+            product.id,
+            campaign.id,
+            api_client.api_id,
+            api_secret,
+        )
 
-    engine, sessions, cipher, product_id, api_id, api_secret = asyncio.run(setup_database())
-    calls: list[str | None] = []
+    engine, sessions, cipher, product_id, campaign_id, api_id, api_secret = asyncio.run(
+        setup_database()
+    )
+    calls: list[tuple[str | None, int | None]] = []
 
     async def fake_purchase(*_args, **kwargs):
-        calls.append(kwargs.get("supplier_idempotency_key"))
+        calls.append(
+            (
+                kwargs.get("supplier_idempotency_key"),
+                kwargs.get("expected_flash_sale_id"),
+            )
+        )
         return PurchaseResult(False, "supplier_unavailable")
 
     monkeypatch.setattr("app.public_api.purchase_product", fake_purchase)
@@ -424,7 +457,8 @@ def test_public_api_keeps_supplier_failure_in_review_and_retries_same_key(
         assert second.json()["status"] == "review"
 
     assert len(calls) == 2 and calls[0] == calls[1]
-    assert calls[0] is not None and calls[0].startswith("shop-api-")
+    assert calls[0][0] is not None and calls[0][0].startswith("shop-api-")
+    assert calls[0][1] == campaign_id
 
     async def verify_database() -> None:
         async with sessions() as session:
