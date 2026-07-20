@@ -4,7 +4,7 @@
 <section class="panel filter-panel">
   <form class="filter-grid customer-filter" method="get">
     <label class="wide">Tìm khách hàng<input name="q" value="{{ query }}" placeholder="Telegram ID, tên hoặc username"></label>
-    <label>Nhóm khách<select name="status"><option value="all">Tất cả</option><option value="started" {{ 'selected' if status == 'started' else '' }}>Đang nhận bot</option><option value="inactive" {{ 'selected' if status == 'inactive' else '' }}>Không còn nhận bot</option><option value="blocked" {{ 'selected' if status == 'blocked' else '' }}>Bị khóa mua hàng</option></select></label>
+    <label>Nhóm khách<select name="status"><option value="all">Tất cả</option><option value="wallet" {{ 'selected' if status == 'wallet' else '' }}>Khách còn tiền trong ví</option><option value="started" {{ 'selected' if status == 'started' else '' }}>Đang nhận bot</option><option value="inactive" {{ 'selected' if status == 'inactive' else '' }}>Không còn nhận bot</option><option value="blocked" {{ 'selected' if status == 'blocked' else '' }}>Bị khóa mua hàng</option></select></label>
     <button class="button primary">Tìm khách</button>
     <a class="button quiet" href="/admin/users">Đặt lại</a>
   </form>

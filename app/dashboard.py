@@ -1847,6 +1847,8 @@ def create_dashboard_router(
             user_conditions.append(User.has_started.is_(True))
         elif status == "inactive":
             user_conditions.append(User.has_started.is_(False))
+        elif status == "wallet":
+            user_conditions.append(User.balance > 0)
         async with session_factory() as session:
             order_stats = (
                 select(

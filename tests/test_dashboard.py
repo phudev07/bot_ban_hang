@@ -129,6 +129,15 @@ def test_admin_core_ledgers_paginate_all_rows(tmp_path) -> None:
         assert "trên tổng <strong>205</strong> khách hàng" in users_page.text
         assert "Trang <strong>2/3</strong>" in users_page.text
 
+        wallet_users_page = client.get("/admin/users?status=wallet&page=2")
+        assert wallet_users_page.status_code == 200
+        assert "Khách còn tiền trong ví" in wallet_users_page.text
+        assert 'value="wallet" selected' in wallet_users_page.text
+        assert "PagedUser-104" in wallet_users_page.text
+        assert "PagedUser-000" not in wallet_users_page.text
+        assert "trên tổng <strong>204</strong> khách hàng" in wallet_users_page.text
+        assert "Tổng số dư trong bộ lọc: <strong>20.910đ</strong>" in wallet_users_page.text
+
         orders_page = client.get("/admin/orders?page=2")
         assert orders_page.status_code == 200
         assert "<code>O5</code>" in orders_page.text
