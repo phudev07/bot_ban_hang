@@ -5,9 +5,9 @@ from aiogram.exceptions import TelegramForbiddenError
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
-from app.broadcasts import deliver_pending_sale_alerts
+from app.broadcasts import deliver_pending_sale_alerts, recover_interrupted_product_alerts
 from app.database import Base
-from app.models import Category, Product, ProductPriceAlert, User
+from app.models import Category, Product, ProductAlertDelivery, ProductPriceAlert, User
 from app.price_alerts import apply_supplier_price
 
 
@@ -177,12 +177,105 @@ def test_pending_sale_is_sent_to_started_users_and_logged() -> None:
 
         async with sessions() as session:
             alert = await session.scalar(select(ProductPriceAlert))
+            deliveries = list(
+                await session.scalars(
+                    select(ProductAlertDelivery).order_by(ProductAlertDelivery.user_id)
+                )
+            )
             blocked = await session.get(User, 3)
             assert alert is not None and alert.status == "sent"
             assert alert.total_recipients == 3
             assert alert.delivered_count == 2
             assert alert.failed_count == 1
+            assert [delivery.status for delivery in deliveries] == ["sent", "sent", "failed"]
             assert blocked is not None and blocked.has_started is False
+        await engine.dispose()
+
+    asyncio.run(scenario())
+
+
+def test_sale_alert_resumes_without_resending_completed_recipients() -> None:
+    async def scenario() -> None:
+        engine, sessions = await make_database()
+        async with sessions() as session:
+            category = Category(name_vi="ChatGPT", name_en="ChatGPT")
+            session.add(category)
+            await session.flush()
+            product = Product(
+                category_id=category.id,
+                name_vi="GPT Plus",
+                name_en="GPT Plus",
+                price=14_000,
+                fulfillment_source="sumistore",
+                supplier_product_id="SP-GPT",
+                supplier_price=12_000,
+                external_stock=8,
+                supplier_synced_at=datetime.now(UTC),
+            )
+            session.add(product)
+            await session.flush()
+            alert = ProductPriceAlert(
+                product_id=product.id,
+                provider="sumistore",
+                supplier_price_before=15_000,
+                supplier_price_after=12_000,
+                sale_price_before=17_000,
+                sale_price_after=14_000,
+                status="sending",
+                total_recipients=3,
+                started_at=datetime.now(UTC),
+            )
+            session.add(alert)
+            session.add_all(
+                [
+                    User(telegram_id=1, full_name="Done", has_started=True),
+                    User(telegram_id=2, full_name="Interrupted", has_started=True),
+                    User(telegram_id=3, full_name="Pending", has_started=True),
+                ]
+            )
+            await session.flush()
+            session.add_all(
+                [
+                    ProductAlertDelivery(
+                        alert_type="sale",
+                        alert_id=alert.id,
+                        user_id=1,
+                        language="vi",
+                        status="sent",
+                    ),
+                    ProductAlertDelivery(
+                        alert_type="sale",
+                        alert_id=alert.id,
+                        user_id=2,
+                        language="vi",
+                        status="sending",
+                    ),
+                    ProductAlertDelivery(
+                        alert_type="sale",
+                        alert_id=alert.id,
+                        user_id=3,
+                        language="vi",
+                        status="pending",
+                    ),
+                ]
+            )
+            await session.commit()
+
+        await recover_interrupted_product_alerts(sessions)
+        bot = FakeSaleBot()
+        processed = await deliver_pending_sale_alerts(
+            sessions,
+            bot,  # type: ignore[arg-type]
+            throttle_seconds=0,
+        )
+
+        assert processed == 1
+        assert sorted(call[0] for call in bot.calls) == [2, 3]
+        async with sessions() as session:
+            alert = await session.scalar(select(ProductPriceAlert))
+            assert alert is not None and alert.status == "sent"
+            assert alert.delivered_count == 3
+            assert alert.failed_count == 0
         await engine.dispose()
 
     asyncio.run(scenario())

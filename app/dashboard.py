@@ -28,6 +28,7 @@ from app.models import (
     Order,
     PaymentTransaction,
     Product,
+    ProductAlertDelivery,
     ProductPriceAlert,
     ProductStockAlert,
     QuantityDiscount,
@@ -2053,18 +2054,15 @@ def create_dashboard_router(
                 sale_page,
                 page_parameter="sale_page",
             )
-            sale_alerts = [
-                {"alert": alert, "product": product}
-                for alert, product in (
-                    await session.execute(
-                        select(ProductPriceAlert, Product)
-                        .join(Product, Product.id == ProductPriceAlert.product_id)
-                        .order_by(ProductPriceAlert.id.desc())
-                        .offset(sale_pager.offset)
-                        .limit(ADMIN_PAGE_SIZE)
-                    )
-                ).all()
-            ]
+            sale_records = (
+                await session.execute(
+                    select(ProductPriceAlert, Product)
+                    .join(Product, Product.id == ProductPriceAlert.product_id)
+                    .order_by(ProductPriceAlert.id.desc())
+                    .offset(sale_pager.offset)
+                    .limit(ADMIN_PAGE_SIZE)
+                )
+            ).all()
             stock_alert_count = int(
                 await session.scalar(select(func.count(ProductStockAlert.id))) or 0
             )
@@ -2074,18 +2072,112 @@ def create_dashboard_router(
                 stock_page,
                 page_parameter="stock_page",
             )
-            stock_alerts = [
-                {"alert": alert, "product": product}
-                for alert, product in (
-                    await session.execute(
-                        select(ProductStockAlert, Product)
-                        .join(Product, Product.id == ProductStockAlert.product_id)
-                        .order_by(ProductStockAlert.id.desc())
-                        .offset(stock_pager.offset)
-                        .limit(ADMIN_PAGE_SIZE)
+            stock_records = (
+                await session.execute(
+                    select(ProductStockAlert, Product)
+                    .join(Product, Product.id == ProductStockAlert.product_id)
+                    .order_by(ProductStockAlert.id.desc())
+                    .offset(stock_pager.offset)
+                    .limit(ADMIN_PAGE_SIZE)
+                )
+            ).all()
+            alert_failures: dict[tuple[str, int], list[dict[str, object]]] = {}
+            sale_ids = [alert.id for alert, _product in sale_records]
+            stock_ids = [alert.id for alert, _product in stock_records]
+            alert_filters = []
+            if sale_ids:
+                alert_filters.append(
+                    (ProductAlertDelivery.alert_type == "sale")
+                    & ProductAlertDelivery.alert_id.in_(sale_ids)
+                )
+            if stock_ids:
+                alert_filters.append(
+                    (ProductAlertDelivery.alert_type == "stock")
+                    & ProductAlertDelivery.alert_id.in_(stock_ids)
+                )
+            if alert_filters:
+                for alert_type, alert_id, error, count in await session.execute(
+                    select(
+                        ProductAlertDelivery.alert_type,
+                        ProductAlertDelivery.alert_id,
+                        ProductAlertDelivery.last_error,
+                        func.count(ProductAlertDelivery.id),
                     )
-                ).all()
+                    .where(
+                        or_(*alert_filters),
+                        ProductAlertDelivery.status == "failed",
+                    )
+                    .group_by(
+                        ProductAlertDelivery.alert_type,
+                        ProductAlertDelivery.alert_id,
+                        ProductAlertDelivery.last_error,
+                    )
+                ):
+                    alert_failures.setdefault((str(alert_type), int(alert_id)), []).append(
+                        {
+                            "error": error or "Không rõ lỗi",
+                            "count": int(count),
+                        }
+                    )
+
+            def alert_row(alert, product, alert_type: str) -> dict[str, object]:
+                started_at = alert.started_at
+                completed_at = alert.completed_at
+                if started_at is not None and started_at.tzinfo is None:
+                    started_at = started_at.replace(tzinfo=UTC)
+                if completed_at is not None and completed_at.tzinfo is None:
+                    completed_at = completed_at.replace(tzinfo=UTC)
+                processed = alert.delivered_count + alert.failed_count
+                elapsed_seconds = 0
+                if started_at is not None:
+                    elapsed_seconds = max(
+                        0,
+                        int(((completed_at or now) - started_at).total_seconds()),
+                    )
+                if elapsed_seconds >= 60:
+                    minutes, seconds = divmod(elapsed_seconds, 60)
+                    duration = f"{minutes}p {seconds}s"
+                elif started_at is not None:
+                    duration = f"{elapsed_seconds}s"
+                else:
+                    duration = "—"
+                return {
+                    "alert": alert,
+                    "product": product,
+                    "processed": processed,
+                    "remaining": max(0, alert.total_recipients - processed),
+                    "speed": (
+                        round(processed / elapsed_seconds, 1)
+                        if elapsed_seconds > 0
+                        else 0
+                    ),
+                    "duration": duration,
+                    "failures": alert_failures.get((alert_type, alert.id), []),
+                }
+
+            sale_alerts = [
+                alert_row(alert, product, "sale") for alert, product in sale_records
             ]
+            stock_alerts = [
+                alert_row(alert, product, "stock") for alert, product in stock_records
+            ]
+            active_sale_alerts = int(
+                await session.scalar(
+                    select(func.count(ProductPriceAlert.id)).where(
+                        ProductPriceAlert.status.in_(("pending", "sending"))
+                    )
+                )
+                or 0
+            )
+            active_stock_alerts = int(
+                await session.scalar(
+                    select(func.count(ProductStockAlert.id)).where(
+                        ProductStockAlert.status.in_(("pending", "sending"))
+                    )
+                )
+                or 0
+            )
+            active_product_alerts = active_sale_alerts + active_stock_alerts
         return templates.TemplateResponse(
             request,
             "broadcasts.html",
@@ -2106,7 +2198,7 @@ def create_dashboard_router(
                 stock_alert_count=stock_alert_count,
                 stock_alerts=stock_alerts,
                 stock_pager=stock_pager,
-                auto_refresh=active_broadcasts > 0,
+                auto_refresh=active_broadcasts > 0 or active_product_alerts > 0,
             ),
         )
 

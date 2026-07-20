@@ -14,7 +14,12 @@ from sqlalchemy import select, text
 
 from app.admin import create_admin_router
 from app.api import create_api
-from app.broadcasts import backfill_stock_alert_messages, broadcast_worker, sale_alert_worker
+from app.broadcasts import (
+    BroadcastRateLimiter,
+    backfill_stock_alert_messages,
+    broadcast_worker,
+    sale_alert_worker,
+)
 from app.config import get_settings
 from app.database import Base, DatabaseSessionMiddleware, create_database
 from app.handlers import create_router
@@ -90,6 +95,31 @@ async def initialize_database(engine, session_factory, seed_demo_data: bool) -> 
             text(
                 "CREATE INDEX IF NOT EXISTS ix_broadcast_deliveries_campaign_status "
                 "ON broadcast_deliveries (broadcast_id, status, id)"
+            )
+        )
+        for table_name in ("product_price_alerts", "product_stock_alerts"):
+            await connection.execute(
+                text(
+                    f"ALTER TABLE {table_name} ADD COLUMN IF NOT EXISTS "
+                    "started_at TIMESTAMPTZ NULL"
+                )
+            )
+            await connection.execute(
+                text(
+                    f"ALTER TABLE {table_name} ADD COLUMN IF NOT EXISTS "
+                    "completed_at TIMESTAMPTZ NULL"
+                )
+            )
+            await connection.execute(
+                text(
+                    f"ALTER TABLE {table_name} ADD COLUMN IF NOT EXISTS "
+                    "last_error VARCHAR(500) NULL"
+                )
+            )
+        await connection.execute(
+            text(
+                "CREATE INDEX IF NOT EXISTS ix_product_alert_deliveries_alert_status "
+                "ON product_alert_deliveries (alert_type, alert_id, status, id)"
             )
         )
         await connection.execute(
@@ -895,11 +925,13 @@ async def main() -> None:
             settings.payment_expiry_sweep_seconds,
         )
     )
+    notification_limiter = BroadcastRateLimiter(settings.broadcast_rate_per_second)
     broadcast_task = asyncio.create_task(
         broadcast_worker(
             session_factory,
             bot,
             rate_per_second=settings.broadcast_rate_per_second,
+            limiter=notification_limiter,
             concurrency=settings.broadcast_concurrency,
             batch_size=settings.broadcast_batch_size,
         )
@@ -982,7 +1014,15 @@ async def main() -> None:
         else None
     )
     sale_alert_task = (
-        asyncio.create_task(sale_alert_worker(session_factory, bot))
+        asyncio.create_task(
+            sale_alert_worker(
+                session_factory,
+                bot,
+                limiter=notification_limiter,
+                concurrency=settings.broadcast_concurrency,
+                batch_size=settings.broadcast_batch_size,
+            )
+        )
         if supplier_client is not None or lehai_client is not None
         else None
     )

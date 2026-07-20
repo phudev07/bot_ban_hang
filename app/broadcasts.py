@@ -2,7 +2,7 @@ import asyncio
 import logging
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime
 
 from aiogram import Bot
 from aiogram.exceptions import TelegramBadRequest, TelegramForbiddenError, TelegramRetryAfter
@@ -14,6 +14,7 @@ from app.models import (
     BroadcastDelivery,
     BroadcastLog,
     Product,
+    ProductAlertDelivery,
     ProductPriceAlert,
     ProductStockAlert,
     User,
@@ -549,18 +550,19 @@ async def broadcast_worker(
     bot: Bot,
     *,
     rate_per_second: int = 20,
+    limiter: BroadcastRateLimiter | None = None,
     concurrency: int = 12,
     batch_size: int = 100,
     poll_seconds: float = 1.0,
 ) -> None:
-    limiter = BroadcastRateLimiter(rate_per_second)
+    controller = limiter or BroadcastRateLimiter(rate_per_second)
     await recover_interrupted_broadcasts(session_factory)
     while True:
         try:
             processed = await deliver_queued_broadcasts(
                 session_factory,
                 bot,
-                limiter,
+                controller,
                 concurrency=concurrency,
                 batch_size=batch_size,
             )
@@ -581,20 +583,208 @@ async def broadcast_worker(
             await asyncio.sleep(max(0.25, poll_seconds))
 
 
+async def recover_interrupted_product_alerts(
+    session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    async with session_factory() as session:
+        async with session.begin():
+            await session.execute(
+                update(ProductAlertDelivery)
+                .where(ProductAlertDelivery.status == "sending")
+                .values(status="pending")
+            )
+            await session.execute(
+                update(ProductPriceAlert)
+                .where(ProductPriceAlert.status == "sending")
+                .values(status="pending")
+            )
+            await session.execute(
+                update(ProductStockAlert)
+                .where(ProductStockAlert.status == "sending")
+                .values(status="pending")
+            )
+
+
+async def _ensure_product_alert_deliveries(
+    session: AsyncSession,
+    *,
+    alert_type: str,
+    alert_id: int,
+) -> int:
+    existing_count = int(
+        await session.scalar(
+            select(func.count(ProductAlertDelivery.id)).where(
+                ProductAlertDelivery.alert_type == alert_type,
+                ProductAlertDelivery.alert_id == alert_id,
+            )
+        )
+        or 0
+    )
+    if existing_count:
+        return existing_count
+    recipients = tuple(
+        (
+            await session.execute(
+                select(User.telegram_id, User.language)
+                .where(User.has_started.is_(True))
+                .order_by(User.telegram_id)
+            )
+        ).all()
+    )
+    session.add_all(
+        ProductAlertDelivery(
+            alert_type=alert_type,
+            alert_id=alert_id,
+            user_id=user_id,
+            language="en" if language == "en" else "vi",
+            status="pending",
+        )
+        for user_id, language in recipients
+    )
+    await session.flush()
+    return len(recipients)
+
+
+async def _claim_product_alert_delivery_batch(
+    session_factory: async_sessionmaker[AsyncSession],
+    *,
+    alert_type: str,
+    alert_id: int,
+    batch_size: int,
+) -> list[ProductAlertDelivery]:
+    async with session_factory() as session:
+        async with session.begin():
+            deliveries = list(
+                await session.scalars(
+                    select(ProductAlertDelivery)
+                    .where(
+                        ProductAlertDelivery.alert_type == alert_type,
+                        ProductAlertDelivery.alert_id == alert_id,
+                        ProductAlertDelivery.status == "pending",
+                    )
+                    .order_by(ProductAlertDelivery.id)
+                    .with_for_update(skip_locked=True)
+                    .limit(max(1, batch_size))
+                )
+            )
+            for delivery in deliveries:
+                delivery.status = "sending"
+                delivery.attempt_count += 1
+                delivery.last_error = None
+            await session.flush()
+            return deliveries
+
+
+async def _save_product_alert_delivery_result(
+    session_factory: async_sessionmaker[AsyncSession],
+    result: DeliveryResult,
+) -> None:
+    async with session_factory() as session:
+        async with session.begin():
+            delivery = await session.get(ProductAlertDelivery, result.delivery_id)
+            if delivery is None or delivery.status != "sending":
+                return
+            delivery.status = "sent" if result.delivered else "failed"
+            delivery.last_error = result.error
+            delivery.sent_at = datetime.now(UTC) if result.delivered else None
+            if result.inactive:
+                await session.execute(
+                    update(User)
+                    .where(User.telegram_id == result.user_id)
+                    .values(has_started=False)
+                )
+
+
+async def _sync_product_alert_progress(
+    session_factory: async_sessionmaker[AsyncSession],
+    *,
+    alert_type: str,
+    alert_id: int,
+) -> bool:
+    model = ProductPriceAlert if alert_type == "sale" else ProductStockAlert
+    async with session_factory() as session:
+        async with session.begin():
+            alert = await session.scalar(
+                select(model).where(model.id == alert_id).with_for_update()
+            )
+            if alert is None:
+                return True
+            total, sent, failed, unfinished = (
+                await session.execute(
+                    select(
+                        func.count(ProductAlertDelivery.id),
+                        func.count(ProductAlertDelivery.id).filter(
+                            ProductAlertDelivery.status == "sent"
+                        ),
+                        func.count(ProductAlertDelivery.id).filter(
+                            ProductAlertDelivery.status == "failed"
+                        ),
+                        func.count(ProductAlertDelivery.id).filter(
+                            ProductAlertDelivery.status.in_(("pending", "sending"))
+                        ),
+                    ).where(
+                        ProductAlertDelivery.alert_type == alert_type,
+                        ProductAlertDelivery.alert_id == alert_id,
+                    )
+                )
+            ).one()
+            alert.total_recipients = int(total)
+            alert.delivered_count = int(sent)
+            alert.failed_count = int(failed)
+            if int(unfinished) == 0:
+                completed_at = datetime.now(UTC)
+                alert.status = "sent"
+                alert.sent_at = completed_at
+                alert.completed_at = completed_at
+                return True
+            return False
+
+
+async def _deliver_product_alert(
+    session_factory: async_sessionmaker[AsyncSession],
+    *,
+    alert_type: str,
+    alert_id: int,
+    recipient_batch_size: int,
+    send_delivery: Callable[[ProductAlertDelivery], Awaitable[DeliveryResult]],
+) -> None:
+    while True:
+        deliveries = await _claim_product_alert_delivery_batch(
+            session_factory,
+            alert_type=alert_type,
+            alert_id=alert_id,
+            batch_size=recipient_batch_size,
+        )
+        if not deliveries:
+            await _sync_product_alert_progress(
+                session_factory,
+                alert_type=alert_type,
+                alert_id=alert_id,
+            )
+            return
+        tasks = [asyncio.create_task(send_delivery(delivery)) for delivery in deliveries]
+        try:
+            for completed in asyncio.as_completed(tasks):
+                result = await completed
+                await _save_product_alert_delivery_result(session_factory, result)
+        finally:
+            for task in tasks:
+                if not task.done():
+                    task.cancel()
+            await asyncio.gather(*tasks, return_exceptions=True)
+        if await _sync_product_alert_progress(
+            session_factory,
+            alert_type=alert_type,
+            alert_id=alert_id,
+        ):
+            return
+
+
 async def _claim_sale_alert(
     session_factory: async_sessionmaker[AsyncSession],
 ) -> SaleAlertPayload | None:
     now = datetime.now(UTC)
-    recovery_cutoff = now - timedelta(minutes=15)
     async with session_factory() as session:
-        await session.execute(
-            update(ProductPriceAlert)
-            .where(
-                ProductPriceAlert.status == "sending",
-                ProductPriceAlert.sent_at < recovery_cutoff,
-            )
-            .values(status="pending", sent_at=None)
-        )
         rows = list(
             (
                 await session.execute(
@@ -617,17 +807,15 @@ async def _claim_sale_alert(
             if product.external_stock <= 0:
                 continue
 
-            recipients = tuple(
-                (
-                    await session.execute(
-                        select(User.telegram_id, User.language)
-                        .where(User.has_started.is_(True))
-                        .order_by(User.telegram_id)
-                    )
-                ).all()
+            recipient_count = await _ensure_product_alert_deliveries(
+                session,
+                alert_type="sale",
+                alert_id=alert.id,
             )
             alert.status = "sending"
-            alert.sent_at = now
+            alert.started_at = alert.started_at or now
+            alert.total_recipients = recipient_count
+            alert.last_error = None
             payload = SaleAlertPayload(
                 alert_id=alert.id,
                 product_id=product.id,
@@ -636,7 +824,7 @@ async def _claim_sale_alert(
                 old_price=alert.sale_price_before,
                 new_price=alert.sale_price_after,
                 stock=product.external_stock,
-                recipients=recipients,
+                recipients=(),
             )
             await session.commit()
             return payload
@@ -648,13 +836,15 @@ async def _claim_sale_alert(
 async def _send_sale_alert(
     bot: Bot,
     payload: SaleAlertPayload,
-    user_id: int,
-    language: str,
-) -> bool:
-    normalized_language = "en" if language == "en" else "vi"
-    try:
-        await bot.send_message(
-            user_id,
+    delivery: ProductAlertDelivery,
+    limiter: BroadcastRateLimiter,
+    semaphore: asyncio.Semaphore,
+) -> DeliveryResult:
+    normalized_language = "en" if delivery.language == "en" else "vi"
+
+    async def operation() -> object:
+        return await bot.send_message(
+            delivery.user_id,
             sale_alert_text(payload, normalized_language),
             reply_markup=sale_purchase_keyboard(
                 payload.product_id,
@@ -662,18 +852,19 @@ async def _send_sale_alert(
                 normalized_language,
             ),
         )
-    except TelegramRetryAfter as exc:
-        await asyncio.sleep(float(exc.retry_after) + 0.2)
-        await bot.send_message(
-            user_id,
-            sale_alert_text(payload, normalized_language),
-            reply_markup=sale_purchase_keyboard(
-                payload.product_id,
-                payload.new_price,
-                normalized_language,
-            ),
-        )
-    return True
+
+    delivered, inactive, error = await _send_with_retry(
+        operation,
+        limiter,
+        semaphore,
+    )
+    return DeliveryResult(
+        delivery_id=delivery.id,
+        user_id=delivery.user_id,
+        delivered=delivered,
+        inactive=inactive,
+        error=error,
+    )
 
 
 async def deliver_pending_sale_alerts(
@@ -682,56 +873,33 @@ async def deliver_pending_sale_alerts(
     *,
     throttle_seconds: float = 0.05,
     batch_limit: int = 5,
+    limiter: BroadcastRateLimiter | None = None,
+    concurrency: int = 12,
+    recipient_batch_size: int = 100,
 ) -> int:
+    controller = limiter or BroadcastRateLimiter(
+        10_000 if throttle_seconds <= 0 else min(25, max(1, int(1 / throttle_seconds)))
+    )
+    semaphore = asyncio.Semaphore(max(1, concurrency))
     processed = 0
     while processed < batch_limit:
         payload = await _claim_sale_alert(session_factory)
         if payload is None:
             break
 
-        delivered = 0
-        failed = 0
-        inactive_ids: list[int] = []
-        for user_id, language in payload.recipients:
-            try:
-                await _send_sale_alert(bot, payload, user_id, language)
-            except (TelegramBadRequest, TelegramForbiddenError, TelegramRetryAfter) as exc:
-                failed += 1
-                if is_unreachable_error(exc):
-                    inactive_ids.append(user_id)
-            except Exception:
-                failed += 1
-                logger.exception("Unexpected automatic sale alert failure for user %s", user_id)
-            else:
-                delivered += 1
-            if throttle_seconds > 0:
-                await asyncio.sleep(throttle_seconds)
-
-        async with session_factory() as session:
-            if inactive_ids:
-                await session.execute(
-                    update(User)
-                    .where(User.telegram_id.in_(inactive_ids))
-                    .values(has_started=False)
-                )
-            await session.execute(
-                update(ProductPriceAlert)
-                .where(
-                    ProductPriceAlert.id == payload.alert_id,
-                    or_(
-                        ProductPriceAlert.status == "sending",
-                        ProductPriceAlert.status == "pending",
-                    ),
-                )
-                .values(
-                    status="sent",
-                    total_recipients=len(payload.recipients),
-                    delivered_count=delivered,
-                    failed_count=failed,
-                    sent_at=datetime.now(UTC),
-                )
+        await _deliver_product_alert(
+            session_factory,
+            alert_type="sale",
+            alert_id=payload.alert_id,
+            recipient_batch_size=recipient_batch_size,
+            send_delivery=lambda delivery: _send_sale_alert(
+                bot,
+                payload,
+                delivery,
+                controller,
+                semaphore,
             )
-            await session.commit()
+        )
         processed += 1
     return processed
 
@@ -740,16 +908,7 @@ async def _claim_stock_alert(
     session_factory: async_sessionmaker[AsyncSession],
 ) -> StockAlertPayload | None:
     now = datetime.now(UTC)
-    recovery_cutoff = now - timedelta(minutes=15)
     async with session_factory() as session:
-        await session.execute(
-            update(ProductStockAlert)
-            .where(
-                ProductStockAlert.status == "sending",
-                ProductStockAlert.sent_at < recovery_cutoff,
-            )
-            .values(status="pending", sent_at=None)
-        )
         rows = list(
             (
                 await session.execute(
@@ -771,19 +930,17 @@ async def _claim_stock_alert(
                 alert.status = "superseded"
                 continue
 
-            recipients = tuple(
-                (
-                    await session.execute(
-                        select(User.telegram_id, User.language)
-                        .where(User.has_started.is_(True))
-                        .order_by(User.telegram_id)
-                    )
-                ).all()
+            recipient_count = await _ensure_product_alert_deliveries(
+                session,
+                alert_type="stock",
+                alert_id=alert.id,
             )
             alert.status = "sending"
             alert.stock_after = product.external_stock
             alert.sale_price = product.price
-            alert.sent_at = now
+            alert.started_at = alert.started_at or now
+            alert.total_recipients = recipient_count
+            alert.last_error = None
             payload = StockAlertPayload(
                 alert_id=alert.id,
                 product_id=product.id,
@@ -791,7 +948,7 @@ async def _claim_stock_alert(
                 name_en=product.name_en,
                 price=product.price,
                 stock=product.external_stock,
-                recipients=recipients,
+                recipients=(),
             )
             # Snapshot the outgoing content so the admin history remains an
             # accurate audit trail even after the product name or price changes.
@@ -844,13 +1001,15 @@ async def backfill_stock_alert_messages(
 async def _send_stock_alert(
     bot: Bot,
     payload: StockAlertPayload,
-    user_id: int,
-    language: str,
-) -> bool:
-    normalized_language = "en" if language == "en" else "vi"
-    try:
-        await bot.send_message(
-            user_id,
+    delivery: ProductAlertDelivery,
+    limiter: BroadcastRateLimiter,
+    semaphore: asyncio.Semaphore,
+) -> DeliveryResult:
+    normalized_language = "en" if delivery.language == "en" else "vi"
+
+    async def operation() -> object:
+        return await bot.send_message(
+            delivery.user_id,
             stock_alert_text(payload, normalized_language),
             reply_markup=sale_purchase_keyboard(
                 payload.product_id,
@@ -858,18 +1017,19 @@ async def _send_stock_alert(
                 normalized_language,
             ),
         )
-    except TelegramRetryAfter as exc:
-        await asyncio.sleep(float(exc.retry_after) + 0.2)
-        await bot.send_message(
-            user_id,
-            stock_alert_text(payload, normalized_language),
-            reply_markup=sale_purchase_keyboard(
-                payload.product_id,
-                payload.price,
-                normalized_language,
-            ),
-        )
-    return True
+
+    delivered, inactive, error = await _send_with_retry(
+        operation,
+        limiter,
+        semaphore,
+    )
+    return DeliveryResult(
+        delivery_id=delivery.id,
+        user_id=delivery.user_id,
+        delivered=delivered,
+        inactive=inactive,
+        error=error,
+    )
 
 
 async def deliver_pending_stock_alerts(
@@ -878,56 +1038,33 @@ async def deliver_pending_stock_alerts(
     *,
     throttle_seconds: float = 0.05,
     batch_limit: int = 5,
+    limiter: BroadcastRateLimiter | None = None,
+    concurrency: int = 12,
+    recipient_batch_size: int = 100,
 ) -> int:
+    controller = limiter or BroadcastRateLimiter(
+        10_000 if throttle_seconds <= 0 else min(25, max(1, int(1 / throttle_seconds)))
+    )
+    semaphore = asyncio.Semaphore(max(1, concurrency))
     processed = 0
     while processed < batch_limit:
         payload = await _claim_stock_alert(session_factory)
         if payload is None:
             break
 
-        delivered = 0
-        failed = 0
-        inactive_ids: list[int] = []
-        for user_id, language in payload.recipients:
-            try:
-                await _send_stock_alert(bot, payload, user_id, language)
-            except (TelegramBadRequest, TelegramForbiddenError, TelegramRetryAfter) as exc:
-                failed += 1
-                if is_unreachable_error(exc):
-                    inactive_ids.append(user_id)
-            except Exception:
-                failed += 1
-                logger.exception("Unexpected back-in-stock alert failure for user %s", user_id)
-            else:
-                delivered += 1
-            if throttle_seconds > 0:
-                await asyncio.sleep(throttle_seconds)
-
-        async with session_factory() as session:
-            if inactive_ids:
-                await session.execute(
-                    update(User)
-                    .where(User.telegram_id.in_(inactive_ids))
-                    .values(has_started=False)
-                )
-            await session.execute(
-                update(ProductStockAlert)
-                .where(
-                    ProductStockAlert.id == payload.alert_id,
-                    or_(
-                        ProductStockAlert.status == "sending",
-                        ProductStockAlert.status == "pending",
-                    ),
-                )
-                .values(
-                    status="sent",
-                    total_recipients=len(payload.recipients),
-                    delivered_count=delivered,
-                    failed_count=failed,
-                    sent_at=datetime.now(UTC),
-                )
+        await _deliver_product_alert(
+            session_factory,
+            alert_type="stock",
+            alert_id=payload.alert_id,
+            recipient_batch_size=recipient_batch_size,
+            send_delivery=lambda delivery: _send_stock_alert(
+                bot,
+                payload,
+                delivery,
+                controller,
+                semaphore,
             )
-            await session.commit()
+        )
         processed += 1
     return processed
 
@@ -936,11 +1073,32 @@ async def sale_alert_worker(
     session_factory: async_sessionmaker[AsyncSession],
     bot: Bot,
     poll_seconds: int = 5,
+    *,
+    limiter: BroadcastRateLimiter | None = None,
+    concurrency: int = 12,
+    batch_size: int = 100,
 ) -> None:
+    controller = limiter or BroadcastRateLimiter(20)
+    await recover_interrupted_product_alerts(session_factory)
     while True:
         try:
-            await deliver_pending_sale_alerts(session_factory, bot)
-            await deliver_pending_stock_alerts(session_factory, bot)
+            await deliver_pending_sale_alerts(
+                session_factory,
+                bot,
+                limiter=controller,
+                concurrency=concurrency,
+                recipient_batch_size=batch_size,
+            )
+            await deliver_pending_stock_alerts(
+                session_factory,
+                bot,
+                limiter=controller,
+                concurrency=concurrency,
+                recipient_batch_size=batch_size,
+            )
+        except asyncio.CancelledError:
+            raise
         except Exception:
             logger.exception("Could not deliver automatic supplier product alerts")
+            await recover_interrupted_product_alerts(session_factory)
         await asyncio.sleep(max(2, poll_seconds))

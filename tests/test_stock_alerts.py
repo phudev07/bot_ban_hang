@@ -7,7 +7,7 @@ from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from app.broadcasts import deliver_pending_stock_alerts
 from app.database import Base
-from app.models import Category, Product, ProductStockAlert, User
+from app.models import Category, Product, ProductAlertDelivery, ProductStockAlert, User
 from app.stock_alerts import apply_supplier_stock, stock_alert_enabled
 
 
@@ -96,6 +96,11 @@ def test_stock_return_is_queued_once_and_sent_to_started_users() -> None:
             alerts = list(
                 await session.scalars(select(ProductStockAlert).order_by(ProductStockAlert.id))
             )
+            deliveries = list(
+                await session.scalars(
+                    select(ProductAlertDelivery).order_by(ProductAlertDelivery.user_id)
+                )
+            )
             blocked = await session.get(User, 3)
             assert len(alerts) == 1
             assert alerts[0].status == "sent"
@@ -106,6 +111,7 @@ def test_stock_return_is_queued_once_and_sent_to_started_users() -> None:
             assert alerts[0].failed_count == 1
             assert alerts[0].message_vi == bot.calls[0][1]
             assert alerts[0].message_en == bot.calls[1][1]
+            assert [delivery.status for delivery in deliveries] == ["sent", "sent", "failed"]
             assert blocked is not None and blocked.has_started is False
         await engine.dispose()
 
