@@ -2,14 +2,19 @@ import asyncio
 import logging
 import secrets
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 import httpx
 from sqlalchemy import delete, func, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.config import Settings
-from app.models import Category, InventoryItem, Product
+from app.models import (
+    Category,
+    InventoryItem,
+    Product,
+    SupplierBalanceTransaction,
+)
 from app.price_alerts import apply_supplier_price
 from app.stock_alerts import apply_supplier_stock
 from app.suppliers import (
@@ -77,6 +82,7 @@ LEHAI_PRODUCT_SEEDS: dict[str, dict[str, object]] = {
 
 CATEGORY_VI = "Gemini / Veo3 / Antigravity"
 CATEGORY_EN = "Gemini / Veo3 / Antigravity"
+REFUND_MATCH_WINDOW = timedelta(hours=48)
 
 
 @dataclass(frozen=True)
@@ -278,6 +284,55 @@ class LeHaiPremiumClient:
         )
 
 
+async def _balance_increase_is_api_refund(
+    session: AsyncSession,
+    balance_before: int,
+    balance_after: int,
+) -> bool:
+    increase = balance_after - balance_before
+    if increase <= 0:
+        return False
+
+    recorded_refund = await session.scalar(
+        select(SupplierBalanceTransaction.id).where(
+            SupplierBalanceTransaction.provider == "lehai",
+            SupplierBalanceTransaction.kind == "refund",
+            SupplierBalanceTransaction.amount == increase,
+            SupplierBalanceTransaction.balance_before == balance_before,
+            SupplierBalanceTransaction.balance_after == balance_after,
+        )
+    )
+    if recorded_refund is not None:
+        return True
+
+    candidates = list(
+        await session.scalars(
+            select(SupplierBalanceTransaction)
+            .where(
+                SupplierBalanceTransaction.provider == "lehai",
+                SupplierBalanceTransaction.kind == "suspicious",
+                SupplierBalanceTransaction.amount < 0,
+                SupplierBalanceTransaction.created_at
+                >= datetime.now(UTC) - REFUND_MATCH_WINDOW,
+                SupplierBalanceTransaction.supplier_order_code.is_(None),
+                SupplierBalanceTransaction.shop_order_code.is_(None),
+            )
+            .order_by(SupplierBalanceTransaction.id.desc())
+        )
+    )
+    if any(abs(transaction.amount) == increase for transaction in candidates):
+        return True
+
+    remaining = increase
+    for transaction in candidates:
+        debit = abs(transaction.amount)
+        if debit <= remaining:
+            remaining -= debit
+        if remaining == 0:
+            return True
+    return False
+
+
 def create_lehai_client(settings: Settings) -> LeHaiPremiumClient | None:
     api_key = settings.lehai_api_key.get_secret_value()
     if not settings.lehai_enabled or not api_key:
@@ -407,6 +462,14 @@ async def refresh_lehai_product(
         previous_owner_balance is not None
         and current_owner_balance > previous_owner_balance
     )
+    refund_increase = (
+        balance_increased
+        and await _balance_increase_is_api_refund(
+            session,
+            previous_owner_balance,
+            current_owner_balance,
+        )
+    )
     product.supplier_owner_balance = current_owner_balance
     product.external_stock = snapshot.effective_stock + recovered_stock
     await apply_supplier_price(session, product, snapshot.unit_price)
@@ -414,7 +477,7 @@ async def refresh_lehai_product(
         session,
         product,
         snapshot.effective_stock,
-        notify_on_increase=balance_increased,
+        notify_on_increase=balance_increased and not refund_increase,
     )
     product.supplier_synced_at = datetime.now(UTC)
     await session.flush()

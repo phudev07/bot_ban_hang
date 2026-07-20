@@ -1,5 +1,6 @@
 import asyncio
 import json
+from datetime import UTC, datetime
 
 import httpx
 import pytest
@@ -21,6 +22,7 @@ from app.models import (
     Deposit,
     Order,
     Product,
+    ProductStockAlert,
     SupplierBalanceTransaction,
     SupplierPurchaseAttempt,
     User,
@@ -120,6 +122,90 @@ def test_lehai_temporary_refresh_failure_keeps_last_known_stock() -> None:
             assert stock == 6
             assert product.external_stock == 6
             assert product.supplier_available_stock == 6
+        await engine.dispose()
+
+    asyncio.run(scenario())
+
+
+def test_lehai_jio_stock_alert_requires_a_real_wallet_topup() -> None:
+    class BalanceSupplier:
+        def __init__(self, balance: int) -> None:
+            self.balance = balance
+
+        async def fetch_snapshot(self, product_id: str) -> SupplierSnapshot:
+            return SupplierSnapshot(
+                product_id=product_id,
+                name="Link GG Pro Jio 18M",
+                description="Jio family link",
+                unit_price=27_000,
+                source_stock=79,
+                owner_balance=self.balance,
+            )
+
+    async def scenario() -> None:
+        engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+        async with engine.begin() as connection:
+            await connection.run_sync(Base.metadata.create_all)
+        sessions = async_sessionmaker(engine, expire_on_commit=False)
+
+        async with sessions() as session:
+            category = Category(name_vi=CATEGORY_VI, name_en=CATEGORY_VI)
+            session.add(category)
+            await session.flush()
+            product = Product(
+                category_id=category.id,
+                name_vi="Link GG Pro Jio 18M",
+                name_en="Google Pro Jio 18M Link",
+                price=35_000,
+                fulfillment_source="lehai",
+                supplier_product_id="cdk_ggpro_18m",
+                supplier_markup=8_000,
+                supplier_price=27_000,
+                external_stock=4,
+                supplier_available_stock=4,
+                supplier_available_stock_initialized=True,
+                supplier_owner_balance=108_000,
+                supplier_synced_at=datetime.now(UTC),
+            )
+            session.add(product)
+            await session.commit()
+
+            await refresh_lehai_product(
+                session,
+                product,
+                BalanceSupplier(135_000),  # type: ignore[arg-type]
+            )
+            await session.commit()
+            assert await session.scalar(select(ProductStockAlert.id)) is not None
+
+        async with sessions() as session:
+            await session.execute(ProductStockAlert.__table__.delete())
+            product = await session.scalar(
+                select(Product).where(Product.supplier_product_id == "cdk_ggpro_18m")
+            )
+            assert product is not None
+            product.external_stock = 4
+            product.supplier_available_stock = 4
+            product.supplier_owner_balance = 108_000
+            session.add(
+                SupplierBalanceTransaction(
+                    provider="lehai",
+                    kind="suspicious",
+                    amount=-27_000,
+                    balance_before=135_000,
+                    balance_after=108_000,
+                )
+            )
+            await session.commit()
+
+            await refresh_lehai_product(
+                session,
+                product,
+                BalanceSupplier(135_000),  # type: ignore[arg-type]
+            )
+            await session.commit()
+            assert await session.scalar(select(ProductStockAlert.id)) is None
+
         await engine.dispose()
 
     asyncio.run(scenario())
