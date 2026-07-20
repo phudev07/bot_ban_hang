@@ -275,10 +275,25 @@ def test_dashboard_login_catalog_inventory_and_balance(tmp_path) -> None:
         assert "Message 123" in broadcasts_page.text
         assert "Hoàn thành" in broadcasts_page.text
         assert "10/10" in broadcasts_page.text
-        assert "Sale API tự động" in broadcasts_page.text
-        assert broadcasts_page.text.count("<th>Tiến độ</th>") == 3
-        assert broadcasts_page.text.count("<th>Tốc độ</th>") == 3
-        assert broadcasts_page.text.count("<th>Thời lượng</th>") == 3
+        assert 'href="/admin/broadcasts?tab=admin"' in broadcasts_page.text
+        assert "Sale API tự động" not in broadcasts_page.text
+        assert broadcasts_page.text.count("<th>Tiến độ</th>") == 1
+
+        sale_broadcasts_page = client.get("/admin/broadcasts?tab=sale")
+        assert sale_broadcasts_page.status_code == 200
+        assert "Sale API tự động" in sale_broadcasts_page.text
+        assert "Hàng mới về tự động" not in sale_broadcasts_page.text
+        assert sale_broadcasts_page.text.count("<th>Tiến độ</th>") == 1
+        assert sale_broadcasts_page.text.count("<th>Tốc độ</th>") == 1
+        assert sale_broadcasts_page.text.count("<th>Thời lượng</th>") == 1
+
+        stock_broadcasts_page = client.get("/admin/broadcasts?tab=stock")
+        assert stock_broadcasts_page.status_code == 200
+        assert "Hàng mới về tự động" in stock_broadcasts_page.text
+        assert "Sale API tự động" not in stock_broadcasts_page.text
+        assert stock_broadcasts_page.text.count("<th>Tiến độ</th>") == 1
+        assert stock_broadcasts_page.text.count("<th>Tốc độ</th>") == 1
+        assert stock_broadcasts_page.text.count("<th>Thời lượng</th>") == 1
 
         invalid_csrf = client.post(
             "/admin/categories",
@@ -604,13 +619,19 @@ def test_dashboard_shows_sale_alert_history(tmp_path) -> None:
         assert "Xem đầy đủ" in home.text
         assert "BACK IN STOCK" in home.text
         assert "10/10" in home.text
-        broadcasts = client.get("/admin/broadcasts")
-        assert broadcasts.status_code == 200
-        assert "BACK IN STOCK HISTORY" in broadcasts.text
-        assert "GPT Plus sale" in broadcasts.text
-        assert "10/10" in broadcasts.text
-        assert "Xem nội dung" in broadcasts.text
-        assert "HÀNG MỚI VỀ" in broadcasts.text
+        sale_broadcasts = client.get("/admin/broadcasts?tab=sale")
+        assert sale_broadcasts.status_code == 200
+        assert "API SALE HISTORY" in sale_broadcasts.text
+        assert "GPT Plus sale" in sale_broadcasts.text
+        assert "10/10" in sale_broadcasts.text
+
+        stock_broadcasts = client.get("/admin/broadcasts?tab=stock")
+        assert stock_broadcasts.status_code == 200
+        assert "BACK IN STOCK HISTORY" in stock_broadcasts.text
+        assert "GPT Plus sale" in stock_broadcasts.text
+        assert "10/10" in stock_broadcasts.text
+        assert "Xem nội dung" in stock_broadcasts.text
+        assert "HÀNG MỚI VỀ" in stock_broadcasts.text
 
     asyncio.run(engine.dispose())
 

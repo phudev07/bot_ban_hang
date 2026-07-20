@@ -8,6 +8,18 @@
   <article class="metric"><span>Thất bại</span><strong>{{ failed_count }}</strong><small>Bot bị chặn hoặc lỗi gửi</small></article>
 </section>
 
+<section class="panel filter-panel notification-tab-panel">
+  <div class="audit-filters notification-tabs">
+    <div><span>NHÓM THÔNG BÁO</span><strong>Chọn loại lịch sử cần xem</strong></div>
+    <nav aria-label="Chọn loại thông báo">
+      <a class="{{ 'active' if selected_tab == 'admin' else '' }}" href="/admin/broadcasts?tab=admin">Thông báo admin <b>{{ broadcast_count }}</b></a>
+      <a class="{{ 'active' if selected_tab == 'sale' else '' }}" href="/admin/broadcasts?tab=sale">Sale API <b>{{ sale_alert_count }}</b></a>
+      <a class="{{ 'active' if selected_tab == 'stock' else '' }}" href="/admin/broadcasts?tab=stock">Hàng mới về <b>{{ stock_alert_count }}</b></a>
+    </nav>
+  </div>
+</section>
+
+{% if selected_tab == 'admin' %}
 <div class="split-layout">
   <section class="panel">
     <div class="panel-head"><div><span>BROADCAST HISTORY</span><h2>Toàn bộ lịch sử gửi</h2></div><small>100 lần mỗi trang</small></div>
@@ -52,7 +64,9 @@
     <a class="button secondary" href="https://t.me/phptool_bot" target="_blank" rel="noreferrer">Mở bot Telegram</a>
   </aside>
 </div>
+{% endif %}
 
+{% if selected_tab == 'sale' %}
 <section class="panel">
   <div class="panel-head"><div><span>API SALE HISTORY</span><h2>Sale API tự động</h2></div><strong>{{ sale_alert_count }} lần phát hiện</strong></div>
   <div class="table-wrap">
@@ -78,7 +92,9 @@
   </div>
   {{ render_pager(sale_pager, 'lần giảm giá') }}
 </section>
+{% endif %}
 
+{% if selected_tab == 'stock' %}
 <section class="panel">
   <div class="panel-head"><div><span>BACK IN STOCK HISTORY</span><h2>Hàng mới về tự động</h2></div><strong>{{ stock_alert_count }} lần phát hiện</strong></div>
   <div class="table-wrap">
@@ -113,6 +129,7 @@
   </div>
   {{ render_pager(stock_pager, 'lần hàng về') }}
 </section>
+{% endif %}
 {% if auto_refresh %}
 <script>window.setTimeout(() => window.location.reload(), 10000);</script>
 {% endif %}

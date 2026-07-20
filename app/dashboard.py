@@ -2289,12 +2289,14 @@ def create_dashboard_router(
     @router.get("/admin/broadcasts", response_class=HTMLResponse)
     async def broadcasts_page(
         request: Request,
+        tab: str = "admin",
         broadcast_page: int = 1,
         sale_page: int = 1,
         stock_page: int = 1,
     ) -> Response:
         if not is_admin(request):
             return redirect_to_login()
+        selected_tab = tab if tab in {"admin", "sale", "stock"} else "admin"
         async with session_factory() as session:
             active_recipients = int(
                 await session.scalar(
@@ -2331,14 +2333,16 @@ def create_dashboard_router(
                 broadcast_page,
                 page_parameter="broadcast_page",
             )
-            broadcast_records = list(
-                await session.scalars(
-                    select(BroadcastLog)
-                    .order_by(BroadcastLog.id.desc())
-                    .offset(broadcast_pager.offset)
-                    .limit(ADMIN_PAGE_SIZE)
+            broadcast_records = []
+            if selected_tab == "admin":
+                broadcast_records = list(
+                    await session.scalars(
+                        select(BroadcastLog)
+                        .order_by(BroadcastLog.id.desc())
+                        .offset(broadcast_pager.offset)
+                        .limit(ADMIN_PAGE_SIZE)
+                    )
                 )
-            )
             broadcast_ids = [broadcast.id for broadcast in broadcast_records]
             failure_groups: dict[int, list[dict[str, object]]] = {}
             if broadcast_ids:
@@ -2410,15 +2414,17 @@ def create_dashboard_router(
                 sale_page,
                 page_parameter="sale_page",
             )
-            sale_records = (
-                await session.execute(
-                    select(ProductPriceAlert, Product)
-                    .join(Product, Product.id == ProductPriceAlert.product_id)
-                    .order_by(ProductPriceAlert.id.desc())
-                    .offset(sale_pager.offset)
-                    .limit(ADMIN_PAGE_SIZE)
-                )
-            ).all()
+            sale_records = []
+            if selected_tab == "sale":
+                sale_records = (
+                    await session.execute(
+                        select(ProductPriceAlert, Product)
+                        .join(Product, Product.id == ProductPriceAlert.product_id)
+                        .order_by(ProductPriceAlert.id.desc())
+                        .offset(sale_pager.offset)
+                        .limit(ADMIN_PAGE_SIZE)
+                    )
+                ).all()
             stock_alert_count = int(
                 await session.scalar(select(func.count(ProductStockAlert.id))) or 0
             )
@@ -2428,15 +2434,17 @@ def create_dashboard_router(
                 stock_page,
                 page_parameter="stock_page",
             )
-            stock_records = (
-                await session.execute(
-                    select(ProductStockAlert, Product)
-                    .join(Product, Product.id == ProductStockAlert.product_id)
-                    .order_by(ProductStockAlert.id.desc())
-                    .offset(stock_pager.offset)
-                    .limit(ADMIN_PAGE_SIZE)
-                )
-            ).all()
+            stock_records = []
+            if selected_tab == "stock":
+                stock_records = (
+                    await session.execute(
+                        select(ProductStockAlert, Product)
+                        .join(Product, Product.id == ProductStockAlert.product_id)
+                        .order_by(ProductStockAlert.id.desc())
+                        .offset(stock_pager.offset)
+                        .limit(ADMIN_PAGE_SIZE)
+                    )
+                ).all()
             alert_failures: dict[tuple[str, int], list[dict[str, object]]] = {}
             sale_ids = [alert.id for alert, _product in sale_records]
             stock_ids = [alert.id for alert, _product in stock_records]
@@ -2546,6 +2554,7 @@ def create_dashboard_router(
                 broadcast_count=broadcast_count,
                 delivered_count=delivered_count,
                 failed_count=failed_count,
+                selected_tab=selected_tab,
                 broadcasts=broadcasts,
                 broadcast_pager=broadcast_pager,
                 sale_alert_count=sale_alert_count,
