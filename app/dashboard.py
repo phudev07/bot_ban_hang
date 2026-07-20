@@ -2162,23 +2162,24 @@ def create_dashboard_router(
                 await session.execute(summary_statement)
             ).one()
             pager = admin_pager(request, int(order_count), page)
+            paged_group_key = order_group_key()
             paged_keys_statement = (
                 select(
-                    order_group_key().label("group_key"),
+                    paged_group_key.label("group_key"),
                     func.max(Order.id).label("latest_order_id"),
                 )
                 .select_from(Order)
                 .join(Product, Product.id == Order.product_id)
                 .join(User, User.telegram_id == Order.user_id)
                 .where(*conditions)
-                .group_by(order_group_key())
+                .group_by(paged_group_key)
                 .order_by(func.max(Order.id).desc())
                 .offset(pager.offset)
                 .limit(ADMIN_PAGE_SIZE)
             )
             if matching_keys is not None:
                 paged_keys_statement = paged_keys_statement.where(
-                    order_group_key().in_(select(matching_keys.c.group_key))
+                    paged_group_key.in_(select(matching_keys.c.group_key))
                 )
             paged_keys = paged_keys_statement.subquery()
             rows = await session.execute(
