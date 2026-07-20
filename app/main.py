@@ -40,6 +40,8 @@ from app.sms_rentals import (
     poll_pending_sms_rentals,
 )
 from app.supplier_audit import (
+    mark_supplier_alerted,
+    pending_unresolved_supplier_alerts,
     reconcile_historical_supplier_refunds,
     reconcile_supplier_balance,
 )
@@ -120,6 +122,29 @@ async def initialize_database(engine, session_factory, seed_demo_data: bool) -> 
             text(
                 "CREATE INDEX IF NOT EXISTS ix_product_alert_deliveries_alert_status "
                 "ON product_alert_deliveries (alert_type, alert_id, status, id)"
+            )
+        )
+        await connection.execute(
+            text(
+                "DO $$ BEGIN "
+                "IF NOT EXISTS ("
+                "SELECT 1 FROM information_schema.columns "
+                "WHERE table_schema = current_schema() "
+                "AND table_name = 'supplier_balance_transactions' "
+                "AND column_name = 'admin_alerted_at'"
+                ") THEN "
+                "ALTER TABLE supplier_balance_transactions "
+                "ADD COLUMN admin_alerted_at TIMESTAMPTZ NULL; "
+                "UPDATE supplier_balance_transactions SET admin_alerted_at = created_at "
+                "WHERE kind = 'suspicious'; "
+                "END IF; END $$"
+            )
+        )
+        await connection.execute(
+            text(
+                "CREATE INDEX IF NOT EXISTS ix_supplier_balance_pending_admin_alert "
+                "ON supplier_balance_transactions "
+                "(provider, kind, admin_alerted_at, created_at, id)"
             )
         )
         await connection.execute(
@@ -641,6 +666,56 @@ async def lehai_sync_worker(
         await asyncio.sleep(max(15, interval_seconds))
 
 
+async def notify_unresolved_supplier_alerts(
+    session_factory,
+    bot: Bot,
+    admin_ids: tuple[int, ...],
+    *,
+    provider: str,
+    provider_label: str,
+) -> int:
+    alerts = await pending_unresolved_supplier_alerts(
+        session_factory,
+        provider=provider,
+    )
+    sent_count = 0
+    for alert in alerts:
+        before = (
+            format_vnd(alert.balance_before)
+            if alert.balance_before is not None
+            else "không đọc được"
+        )
+        after = (
+            format_vnd(alert.balance_after)
+            if alert.balance_after is not None
+            else "không đọc được"
+        )
+        message = (
+            f"🚨 <b>Không thể tự thu hồi giao dịch {escape(provider_label)}</b>\n\n"
+            f"• Log: <code>#{alert.transaction_id}</code>\n"
+            f"• Số tiền chưa khớp: <b>-{format_vnd(abs(alert.amount))}</b>\n"
+            f"• Số dư nguồn: <b>{before} → {after}</b>\n\n"
+            "Đã hết thời gian tự thu hồi/hoàn tiền nhưng giao dịch vẫn chưa "
+            "được xử lý. Mở Admin → Giao dịch đáng ngờ để kiểm tra."
+        )
+        delivered = False
+        for admin_id in admin_ids:
+            try:
+                await bot.send_message(admin_id, message)
+                delivered = True
+            except Exception:
+                logging.getLogger(__name__).exception(
+                    "Could not notify admin %s about supplier balance anomaly",
+                    admin_id,
+                )
+        if delivered and await mark_supplier_alerted(
+            session_factory,
+            alert.transaction_id,
+        ):
+            sent_count += 1
+    return sent_count
+
+
 async def supplier_audit_worker(
     session_factory,
     client: ExternalSupplierClient,
@@ -653,27 +728,19 @@ async def supplier_audit_worker(
 ) -> None:
     while True:
         try:
-            result = await reconcile_supplier_balance(
+            await reconcile_supplier_balance(
                 session_factory,
                 client,
                 provider=provider,
                 provider_label=provider_label,
             )
-            if result.suspicious_amount < 0:
-                message = (
-                    f"🚨 <b>Phát hiện giao dịch {provider_label} đáng ngờ</b>\n"
-                    f"Số tiền không khớp: <b>-{format_vnd(abs(result.suspicious_amount))}</b>\n"
-                    f"Số dư hiện tại: <b>{format_vnd(result.current_balance)}</b>\n\n"
-                    f"Mở Admin → Giao dịch đáng ngờ → {provider_label} để xem kỳ đối soát."
-                )
-                for admin_id in admin_ids:
-                    try:
-                        await bot.send_message(admin_id, message)
-                    except Exception:
-                        logging.getLogger(__name__).exception(
-                            "Could not notify admin %s about supplier balance anomaly",
-                            admin_id,
-                        )
+            await notify_unresolved_supplier_alerts(
+                session_factory,
+                bot,
+                admin_ids,
+                provider=provider,
+                provider_label=provider_label,
+            )
         except SupplierError as exc:
             logging.getLogger(__name__).warning(
                 "Could not reconcile %s balance: code=%s",

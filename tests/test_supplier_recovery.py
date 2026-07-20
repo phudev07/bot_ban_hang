@@ -88,6 +88,16 @@ class OrphanedSupplier:
         )
 
 
+class NoFetchSupplier:
+    provider = "sumistore"
+
+    def __init__(self) -> None:
+        self.balance_lock = asyncio.Lock()
+
+    async def fetch_orders(self) -> tuple[SupplierOrderSummary, ...]:
+        raise AssertionError("expired recovery must not call the supplier")
+
+
 def test_delayed_sumistore_order_is_imported_and_links_suspicious_audit() -> None:
     async def scenario() -> None:
         engine, sessions = await make_database()
@@ -232,6 +242,55 @@ def test_orphaned_sumistore_order_without_pending_request_is_recovered() -> None
             assert cipher.decrypt(items[0].encrypted_secret) == "orphaned|password"
             assert stored_audit is not None and stored_audit.kind == "recovered"
             assert stored_audit.supplier_order_code == "API-ORPHANED-COMMIT"
+        await engine.dispose()
+
+    asyncio.run(scenario())
+
+
+def test_expired_sumistore_recovery_is_closed_before_admin_alerting() -> None:
+    async def scenario() -> None:
+        engine, sessions = await make_database()
+        cipher = SecretCipher(Fernet.generate_key().decode())
+        now = datetime.now(UTC)
+        async with sessions() as session:
+            category = Category(name_vi="ChatGPT", name_en="ChatGPT")
+            session.add(category)
+            await session.flush()
+            product = Product(
+                category_id=category.id,
+                name_vi="GPT Plus",
+                name_en="GPT Plus",
+                price=15_000,
+                fulfillment_source="sumistore",
+                supplier_product_id="SP-EXPIRED-RECOVERY",
+            )
+            session.add(product)
+            await session.flush()
+            session.add(
+                SupplierRecoveryRequest(
+                    provider="sumistore",
+                    request_key="expired-recovery",
+                    product_id=product.id,
+                    supplier_product_id="SP-EXPIRED-RECOVERY",
+                    quantity=1,
+                    status="pending",
+                    error_code="SUPPLIER_UNAVAILABLE",
+                    started_at=now - timedelta(hours=25),
+                    expires_at=now - timedelta(hours=1),
+                )
+            )
+            await session.commit()
+
+        result = await recover_pending_sumistore_orders(
+            sessions,
+            NoFetchSupplier(),  # type: ignore[arg-type]
+            cipher,
+        )
+
+        assert result == type(result)()
+        async with sessions() as session:
+            recovery = await session.scalar(select(SupplierRecoveryRequest))
+            assert recovery is not None and recovery.status == "expired"
         await engine.dispose()
 
     asyncio.run(scenario())

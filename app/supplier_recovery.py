@@ -3,7 +3,7 @@ import logging
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 
-from sqlalchemy import select
+from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.models import (
@@ -442,18 +442,28 @@ async def recover_pending_sumistore_orders(
     now = datetime.now(UTC)
     async with supplier_balance_guard(client):
         async with session_factory() as session:
-            pending = list(
-                await session.scalars(
-                    select(SupplierRecoveryRequest)
+            async with session.begin():
+                await session.execute(
+                    update(SupplierRecoveryRequest)
                     .where(
                         SupplierRecoveryRequest.provider == "sumistore",
                         SupplierRecoveryRequest.status == "pending",
-                        SupplierRecoveryRequest.expires_at >= now,
+                        SupplierRecoveryRequest.expires_at < now,
                     )
-                    .order_by(SupplierRecoveryRequest.started_at)
+                    .values(status="expired")
                 )
-            )
-            known_codes = await _known_supplier_order_codes(session)
+                pending = list(
+                    await session.scalars(
+                        select(SupplierRecoveryRequest)
+                        .where(
+                            SupplierRecoveryRequest.provider == "sumistore",
+                            SupplierRecoveryRequest.status == "pending",
+                            SupplierRecoveryRequest.expires_at >= now,
+                        )
+                        .order_by(SupplierRecoveryRequest.started_at)
+                    )
+                )
+                known_codes = await _known_supplier_order_codes(session)
         has_suspicious = False
         async with session_factory() as session:
             has_suspicious = bool(

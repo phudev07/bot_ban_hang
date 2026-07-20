@@ -10,6 +10,7 @@ from app.models import (
     Product,
     SupplierBalanceState,
     SupplierBalanceTransaction,
+    SupplierRecoveryRequest,
 )
 from app.suppliers import ExternalSupplierClient, SumistoreClient, supplier_balance_guard
 from app.utils import SecretCipher
@@ -17,6 +18,10 @@ from app.utils import SecretCipher
 
 logger = logging.getLogger(__name__)
 PROVIDER = "sumistore"
+SUPPLIER_ALERT_GRACE_PERIODS = {
+    "sumistore": timedelta(hours=24),
+    "lehai": timedelta(hours=48),
+}
 
 
 @dataclass(frozen=True)
@@ -41,6 +46,101 @@ class SupplierOrderRecoveryResult:
     account_count: int
     inserted_count: int
     total_cost: int
+
+
+@dataclass(frozen=True)
+class UnresolvedSupplierAlert:
+    transaction_id: int
+    provider: str
+    amount: int
+    balance_before: int | None
+    balance_after: int | None
+    period_started_at: datetime | None
+    created_at: datetime
+
+
+async def pending_unresolved_supplier_alerts(
+    session_factory: async_sessionmaker[AsyncSession],
+    *,
+    provider: str,
+    now: datetime | None = None,
+    limit: int = 20,
+) -> tuple[UnresolvedSupplierAlert, ...]:
+    checked_at = now or datetime.now(UTC)
+    grace_period = SUPPLIER_ALERT_GRACE_PERIODS.get(provider, timedelta(hours=24))
+    cutoff = checked_at - grace_period
+    async with session_factory() as session:
+        transactions = list(
+            await session.scalars(
+                select(SupplierBalanceTransaction)
+                .where(
+                    SupplierBalanceTransaction.provider == provider,
+                    SupplierBalanceTransaction.kind == "suspicious",
+                    SupplierBalanceTransaction.admin_alerted_at.is_(None),
+                    SupplierBalanceTransaction.created_at < cutoff,
+                )
+                .order_by(SupplierBalanceTransaction.id)
+            )
+        )
+        if provider == PROVIDER and transactions:
+            active_recoveries = list(
+                await session.scalars(
+                    select(SupplierRecoveryRequest).where(
+                        SupplierRecoveryRequest.provider == provider,
+                        SupplierRecoveryRequest.status == "pending",
+                        SupplierRecoveryRequest.expires_at >= checked_at,
+                    )
+                )
+            )
+        else:
+            active_recoveries = []
+
+    alerts: list[UnresolvedSupplierAlert] = []
+    for transaction in transactions:
+        has_active_recovery = any(
+            recovery.audit_transaction_id == transaction.id
+            or recovery.request_key.startswith(f"audit-{transaction.id}-")
+            for recovery in active_recoveries
+        )
+        if has_active_recovery:
+            continue
+        alerts.append(
+            UnresolvedSupplierAlert(
+                transaction_id=transaction.id,
+                provider=transaction.provider,
+                amount=transaction.amount,
+                balance_before=transaction.balance_before,
+                balance_after=transaction.balance_after,
+                period_started_at=transaction.period_started_at,
+                created_at=transaction.created_at,
+            )
+        )
+        if len(alerts) >= max(1, limit):
+            break
+    return tuple(alerts)
+
+
+async def mark_supplier_alerted(
+    session_factory: async_sessionmaker[AsyncSession],
+    transaction_id: int,
+    *,
+    alerted_at: datetime | None = None,
+) -> bool:
+    async with session_factory() as session:
+        async with session.begin():
+            transaction = await session.scalar(
+                select(SupplierBalanceTransaction)
+                .where(SupplierBalanceTransaction.id == transaction_id)
+                .with_for_update()
+            )
+            if (
+                transaction is None
+                or transaction.kind != "suspicious"
+                or transaction.admin_alerted_at is not None
+            ):
+                return False
+            transaction.admin_alerted_at = alerted_at or datetime.now(UTC)
+            return True
 
 
 async def recover_supplier_order(
