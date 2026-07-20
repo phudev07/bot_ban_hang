@@ -61,6 +61,8 @@ td small { margin-top: 3px; color: var(--muted); }
 .notification-preview strong { margin-top: 10px; font-size: 11px; }
 .notification-preview pre { width: min(440px, 65vw); max-height: 280px; margin: 7px 0 0; padding: 12px; overflow: auto; border: 1px solid var(--line); border-radius: 10px; background: #f7f4ec; color: #25302b; font: 12px/1.55 "SFMono-Regular", Consolas, monospace; white-space: pre-wrap; word-break: break-word; }
 .broadcast-table { min-width: 980px; }
+.table-wrap .sale-alert-table { min-width: 1120px; }
+.table-wrap .stock-alert-table { min-width: 1380px; }
 .broadcast-progress-cell { min-width: 245px; }
 .broadcast-progress { width: 100%; height: 7px; margin-bottom: 7px; overflow: hidden; border-radius: 999px; background: #e8e4da; }
 .broadcast-progress i { display: block; height: 100%; border-radius: inherit; background: linear-gradient(90deg, var(--orange), var(--green)); transition: width .25s ease; }

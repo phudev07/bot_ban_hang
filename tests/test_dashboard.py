@@ -276,6 +276,9 @@ def test_dashboard_login_catalog_inventory_and_balance(tmp_path) -> None:
         assert "Hoàn thành" in broadcasts_page.text
         assert "10/10" in broadcasts_page.text
         assert "Sale API tự động" in broadcasts_page.text
+        assert broadcasts_page.text.count("<th>Tiến độ</th>") == 3
+        assert broadcasts_page.text.count("<th>Tốc độ</th>") == 3
+        assert broadcasts_page.text.count("<th>Thời lượng</th>") == 3
 
         invalid_csrf = client.post(
             "/admin/categories",
