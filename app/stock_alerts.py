@@ -1,3 +1,5 @@
+from datetime import timedelta
+
 from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -12,6 +14,7 @@ STOCK_ALERT_PRODUCT_IDS = frozenset(
         "cdk_ggpro_18m",  # Link GG Pro Jio 18M
     }
 )
+STOCK_ALERT_COOLDOWN = timedelta(minutes=10)
 
 
 def stock_alert_mode(product: Product) -> str:
@@ -85,11 +88,14 @@ async def apply_supplier_stock(
         .with_for_update()
     )
     if pending is not None:
-        if new_stock > 0:
+        if new_stock <= 0:
+            pending.status = "superseded"
+        elif new_stock != previous_stock:
+            # Keep one queued event, but make it describe the latest real
+            # stock change observed during the cooldown window.
+            pending.stock_before = previous_stock
             pending.stock_after = new_stock
             pending.sale_price = locked_product.price
-        else:
-            pending.status = "superseded"
         return False
 
     if not notify_on_increase or not was_initialized or new_stock <= previous_stock:

@@ -21,7 +21,7 @@ from app.models import (
     ProductStockAlert,
     User,
 )
-from app.stock_alerts import stock_alert_enabled
+from app.stock_alerts import STOCK_ALERT_COOLDOWN, stock_alert_enabled
 from app.utils import format_vnd, safe_html
 
 
@@ -981,6 +981,35 @@ async def _claim_stock_alert(
             ):
                 alert.status = "superseded"
                 continue
+
+            if product.notify_stock_without_balance_topup:
+                previous_alert = await session.scalar(
+                    select(ProductStockAlert)
+                    .where(
+                        ProductStockAlert.product_id == product.id,
+                        ProductStockAlert.id < alert.id,
+                        ProductStockAlert.status.in_(("sending", "sent")),
+                    )
+                    .order_by(ProductStockAlert.id.desc())
+                    .limit(1)
+                )
+                if previous_alert is not None:
+                    if previous_alert.status == "sending":
+                        continue
+                    cooldown_started_at = (
+                        previous_alert.sent_at or previous_alert.completed_at
+                    )
+                    if cooldown_started_at is not None:
+                        if cooldown_started_at.tzinfo is None:
+                            cooldown_started_at = cooldown_started_at.replace(tzinfo=UTC)
+                        if now < cooldown_started_at + STOCK_ALERT_COOLDOWN:
+                            continue
+
+                # The queued row is continuously refreshed while cooling down.
+                # Only announce when its latest actual stock change is an increase.
+                if alert.stock_after <= alert.stock_before:
+                    alert.status = "superseded"
+                    continue
 
             recipient_count = await _ensure_product_alert_deliveries(
                 session,

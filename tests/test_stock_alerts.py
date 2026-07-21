@@ -1,5 +1,5 @@
 import asyncio
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 from aiogram.exceptions import TelegramForbiddenError
 from sqlalchemy import select
@@ -104,7 +104,7 @@ def test_stock_return_is_queued_once_and_sent_to_started_users() -> None:
             blocked = await session.get(User, 3)
             assert len(alerts) == 1
             assert alerts[0].status == "sent"
-            assert alerts[0].stock_before == 0
+            assert alerts[0].stock_before == 4
             assert alerts[0].stock_after == 6
             assert alerts[0].total_recipients == 3
             assert alerts[0].delivered_count == 2
@@ -113,6 +113,151 @@ def test_stock_return_is_queued_once_and_sent_to_started_users() -> None:
             assert alerts[0].message_en == bot.calls[1][1]
             assert [delivery.status for delivery in deliveries] == ["sent", "sent", "failed"]
             assert blocked is not None and blocked.has_started is False
+        await engine.dispose()
+
+    asyncio.run(scenario())
+
+
+def test_always_stock_alert_waits_ten_minutes_and_sends_latest_increase() -> None:
+    async def scenario() -> None:
+        engine, sessions = await make_database()
+        async with sessions() as session:
+            category = Category(name_vi="API", name_en="API")
+            session.add(category)
+            await session.flush()
+            product = Product(
+                category_id=category.id,
+                name_vi="Kho thay đổi nhanh",
+                name_en="Fast-changing stock",
+                price=20_000,
+                fulfillment_source="sumistore",
+                supplier_product_id="SP-GEF55PBV",
+                notify_stock_without_balance_topup=True,
+                supplier_available_stock=0,
+                supplier_available_stock_initialized=True,
+                external_stock=0,
+            )
+            session.add(product)
+            session.add(User(telegram_id=1, full_name="Buyer", language="vi", has_started=True))
+            await session.commit()
+
+            assert await apply_supplier_stock(session, product, 5) is True
+            product.external_stock = 5
+            await session.commit()
+
+        bot = FakeStockBot()
+        assert await deliver_pending_stock_alerts(
+            sessions,
+            bot,  # type: ignore[arg-type]
+            throttle_seconds=0,
+        ) == 1
+        assert len(bot.calls) == 1
+        assert "<b>5</b>" in bot.calls[0][1]
+
+        async with sessions() as session:
+            product = await session.scalar(select(Product))
+            assert product is not None
+            assert await apply_supplier_stock(session, product, 6) is True
+            product.external_stock = 6
+            await session.commit()
+            assert await apply_supplier_stock(session, product, 8) is False
+            product.external_stock = 8
+            await session.commit()
+
+        # A newer increase is queued, but cannot start another broadcast yet.
+        assert await deliver_pending_stock_alerts(
+            sessions,
+            bot,  # type: ignore[arg-type]
+            throttle_seconds=0,
+        ) == 0
+        assert len(bot.calls) == 1
+
+        async with sessions() as session:
+            alerts = list(
+                await session.scalars(select(ProductStockAlert).order_by(ProductStockAlert.id))
+            )
+            assert len(alerts) == 2
+            assert alerts[1].status == "pending"
+            assert alerts[1].stock_before == 6
+            assert alerts[1].stock_after == 8
+            alerts[0].sent_at = datetime.now(UTC) - timedelta(minutes=11)
+            alerts[0].completed_at = alerts[0].sent_at
+            await session.commit()
+
+        assert await deliver_pending_stock_alerts(
+            sessions,
+            bot,  # type: ignore[arg-type]
+            throttle_seconds=0,
+        ) == 1
+        assert len(bot.calls) == 2
+        assert "<b>8</b>" in bot.calls[1][1]
+        await engine.dispose()
+
+    asyncio.run(scenario())
+
+
+def test_always_stock_alert_drops_queued_notice_when_latest_change_is_a_decrease() -> None:
+    async def scenario() -> None:
+        engine, sessions = await make_database()
+        async with sessions() as session:
+            category = Category(name_vi="API", name_en="API")
+            session.add(category)
+            await session.flush()
+            product = Product(
+                category_id=category.id,
+                name_vi="Kho thay đổi nhanh",
+                name_en="Fast-changing stock",
+                price=20_000,
+                fulfillment_source="sumistore",
+                supplier_product_id="SP-GEF55PBV",
+                notify_stock_without_balance_topup=True,
+                supplier_available_stock=0,
+                supplier_available_stock_initialized=True,
+                external_stock=0,
+            )
+            session.add(product)
+            session.add(User(telegram_id=1, full_name="Buyer", language="vi", has_started=True))
+            await session.commit()
+            assert await apply_supplier_stock(session, product, 5) is True
+            product.external_stock = 5
+            await session.commit()
+
+        bot = FakeStockBot()
+        assert await deliver_pending_stock_alerts(
+            sessions,
+            bot,  # type: ignore[arg-type]
+            throttle_seconds=0,
+        ) == 1
+
+        async with sessions() as session:
+            product = await session.scalar(select(Product))
+            assert product is not None
+            assert await apply_supplier_stock(session, product, 8) is True
+            product.external_stock = 8
+            await session.commit()
+            assert await apply_supplier_stock(session, product, 6) is False
+            product.external_stock = 6
+            first_alert = await session.scalar(
+                select(ProductStockAlert).order_by(ProductStockAlert.id).limit(1)
+            )
+            assert first_alert is not None
+            first_alert.sent_at = datetime.now(UTC) - timedelta(minutes=11)
+            first_alert.completed_at = first_alert.sent_at
+            await session.commit()
+
+        assert await deliver_pending_stock_alerts(
+            sessions,
+            bot,  # type: ignore[arg-type]
+            throttle_seconds=0,
+        ) == 0
+        assert len(bot.calls) == 1
+        async with sessions() as session:
+            alerts = list(
+                await session.scalars(select(ProductStockAlert).order_by(ProductStockAlert.id))
+            )
+            assert [alert.status for alert in alerts] == ["sent", "superseded"]
+            assert alerts[1].stock_before == 8
+            assert alerts[1].stock_after == 6
         await engine.dispose()
 
     asyncio.run(scenario())

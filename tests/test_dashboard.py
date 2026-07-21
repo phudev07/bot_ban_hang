@@ -877,7 +877,7 @@ def test_admin_can_enable_stock_notifications_without_balance_topup(tmp_path) ->
             edit_page.text,
         )
         products_page = client.get("/admin/products")
-        assert "TB hàng về: mọi lần tăng kho" in products_page.text
+        assert "TB hàng về: tăng kho · nghỉ 10 phút" in products_page.text
 
     async def verify_database() -> None:
         async with sessions() as session:
