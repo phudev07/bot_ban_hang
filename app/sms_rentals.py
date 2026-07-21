@@ -7,6 +7,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from app.models import BalanceAdjustment, SmsRental, User
 from app.partner_services import award_referral_commission
 from app.rentsim import RentSimClient, RentSimError, RentSimSnapshot
+from app.wallet_ledger import apply_wallet_change
 
 
 ACTIVE_SMS_STATUSES = ("requesting", "pending", "unknown")
@@ -145,7 +146,19 @@ async def _refund_sms_rental(
 ) -> None:
     if rental.refunded_at is not None or rental.status == "success":
         return
-    user.balance += rental.sale_amount
+    apply_wallet_change(
+        session,
+        user,
+        rental.sale_amount,
+        kind="sms_refund",
+        event_key=f"sms_refund:{rental.id}",
+        reference_type="sms_rental",
+        reference_id=rental.shop_order_code or f"SMS{rental.id}",
+        description=(
+            f"Hoàn tiền số {rental.phone_number or 'chưa được cấp'} "
+            f"({rental.shop_order_code or f'SMS{rental.id}'})"
+        ),
+    )
     rental.status = "refunded"
     rental.failure_reason = reason[:64]
     rental.refunded_at = now
@@ -295,7 +308,6 @@ async def rent_sms_number(
                         sale_amount=sale_amount,
                         cost_amount=snapshot.unit_price,
                     )
-                user.balance -= sale_amount
                 rental = SmsRental(
                     user_id=user.telegram_id,
                     service_id=snapshot.service_id,
@@ -311,6 +323,16 @@ async def rent_sms_number(
                 session.add(rental)
                 await session.flush()
                 rental.shop_order_code = f"SMS{rental.id}"
+                apply_wallet_change(
+                    session,
+                    user,
+                    -sale_amount,
+                    kind="sms_rental",
+                    event_key=f"sms_charge:{rental.id}",
+                    reference_type="sms_rental",
+                    reference_id=rental.shop_order_code,
+                    description=f"Thuê số nhận OTP ChatGPT ({rental.shop_order_code})",
+                )
                 rental_id = rental.id
                 balance_after_charge = user.balance
 

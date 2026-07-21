@@ -9,6 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models import ApiClient, ReferralReward, User
 from app.utils import SecretCipher
+from app.wallet_ledger import apply_wallet_change
 
 
 def generate_referral_code() -> str:
@@ -145,7 +146,18 @@ async def award_referral_commission(
     )
     if referrer is None or referrer.telegram_id == buyer.telegram_id:
         return None
-    referrer.balance += commission
+    apply_wallet_change(
+        session,
+        referrer,
+        commission,
+        kind="referral_commission",
+        event_key=f"referral:{shop_order_code}",
+        reference_type="referral",
+        reference_id=shop_order_code,
+        description=(
+            f"Hoa hồng giới thiệu từ đơn {shop_order_code} của khách {buyer.telegram_id}"
+        ),
+    )
     reward = ReferralReward(
         referrer_user_id=referrer.telegram_id,
         referred_user_id=buyer.telegram_id,

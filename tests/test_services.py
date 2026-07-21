@@ -16,6 +16,7 @@ from app.models import (
     ReferralReward,
     SupplierRecoveryRequest,
     User,
+    WalletTransaction,
 )
 from app.services import (
     available_stock,
@@ -485,8 +486,16 @@ def test_sepay_payment_is_idempotent() -> None:
 
         async with sessions() as session:
             user = await session.get(User, 123456)
+            wallet_transactions = list(
+                await session.scalars(select(WalletTransaction).order_by(WalletTransaction.id))
+            )
             assert user is not None
             assert user.balance == 100_000
+            assert len(wallet_transactions) == 1
+            assert wallet_transactions[0].kind == "deposit"
+            assert wallet_transactions[0].amount == 100_000
+            assert wallet_transactions[0].balance_before == 0
+            assert wallet_transactions[0].balance_after == 100_000
         await engine.dispose()
 
     asyncio.run(scenario())
@@ -551,9 +560,13 @@ def test_direct_purchase_payment_delivers_without_using_wallet() -> None:
             user = await session.get(User, 123456)
             stock_items = list(await session.scalars(select(InventoryItem)))
             order_count = await session.scalar(select(func.count(Order.id)))
+            wallet_count = int(
+                await session.scalar(select(func.count(WalletTransaction.id))) or 0
+            )
             assert user is not None and user.balance == 10_000
             assert all(item.status == "sold" for item in stock_items)
             assert order_count == 2
+            assert wallet_count == 0
         await engine.dispose()
 
     asyncio.run(scenario())
@@ -667,7 +680,11 @@ def test_direct_purchase_falls_back_to_wallet_when_stock_is_gone() -> None:
 
         async with sessions() as session:
             user = await session.get(User, 123456)
+            wallet_transaction = await session.scalar(select(WalletTransaction))
             assert user is not None and user.balance == 50_000
+            assert wallet_transaction is not None
+            assert wallet_transaction.kind == "direct_purchase_fallback"
+            assert wallet_transaction.amount == 50_000
         await engine.dispose()
 
     asyncio.run(scenario())
@@ -847,6 +864,7 @@ def test_external_purchase_uses_dynamic_price_and_delivers_accounts() -> None:
             user = await session.get(User, 123456)
             product = await session.get(Product, product.id)
             orders = list(await session.scalars(select(Order).order_by(Order.id)))
+            wallet_transaction = await session.scalar(select(WalletTransaction))
             assert user is not None and user.balance == 10_000
             assert product is not None and product.price == 20_000
             assert product.external_stock == 0
@@ -854,6 +872,12 @@ def test_external_purchase_uses_dynamic_price_and_delivers_accounts() -> None:
             assert all(order.cost_amount == 15_000 for order in orders)
             assert all(order.supplier_order_code == "API-TELE-TEST123" for order in orders)
             assert len({order.batch_code for order in orders}) == 1
+            assert wallet_transaction is not None
+            assert wallet_transaction.kind == "product_purchase"
+            assert wallet_transaction.amount == -40_000
+            assert wallet_transaction.balance_before == 50_000
+            assert wallet_transaction.balance_after == 10_000
+            assert wallet_transaction.reference_id == orders[0].batch_code
         await engine.dispose()
 
     asyncio.run(scenario())

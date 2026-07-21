@@ -5,7 +5,7 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from app.database import Base
-from app.models import BalanceAdjustment, ReferralReward, SmsRental, User
+from app.models import BalanceAdjustment, ReferralReward, SmsRental, User, WalletTransaction
 from app.rentsim import RentSimError, RentSimOtp, RentSimRental, RentSimSnapshot
 from app.sms_rentals import (
     mark_sms_review_alerted,
@@ -183,10 +183,20 @@ def test_sms_timeout_refunds_wallet_exactly_once() -> None:
             adjustments = int(
                 await session.scalar(select(func.count(BalanceAdjustment.id))) or 0
             )
+            wallet_transactions = list(
+                await session.scalars(select(WalletTransaction).order_by(WalletTransaction.id))
+            )
             assert user is not None and user.balance == 5_000
             assert rental is not None and rental.status == "refunded"
             assert rental.failure_reason == "otp_timeout"
             assert adjustments == 1
+            assert [item.kind for item in wallet_transactions] == [
+                "sms_rental",
+                "sms_refund",
+            ]
+            assert [item.amount for item in wallet_transactions] == [-2_000, 2_000]
+            assert [item.balance_before for item in wallet_transactions] == [5_000, 3_000]
+            assert [item.balance_after for item in wallet_transactions] == [3_000, 5_000]
         await engine.dispose()
 
     asyncio.run(scenario())

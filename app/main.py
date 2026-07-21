@@ -598,6 +598,19 @@ async def initialize_database(engine, session_factory, seed_demo_data: bool) -> 
                 "AND products.fulfillment_source = 'sumistore' AND orders.cost_amount = 0"
             )
         )
+        await connection.execute(
+            text(
+                "INSERT INTO wallet_transactions "
+                "(user_id, kind, amount, balance_before, balance_after, reference_type, "
+                "reference_id, event_key, description, created_at) "
+                "SELECT users.telegram_id, 'opening_balance', users.balance, 0, users.balance, "
+                "'system', CAST(users.telegram_id AS VARCHAR), "
+                "'opening:' || CAST(users.telegram_id AS VARCHAR), "
+                "'Số dư đầu kỳ khi bật sổ phát sinh', NOW() "
+                "FROM users "
+                "ON CONFLICT (event_key) DO NOTHING"
+            )
+        )
 
     if not seed_demo_data:
         return

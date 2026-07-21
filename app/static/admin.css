@@ -205,8 +205,31 @@ textarea { resize: vertical; }
 .customer-profile { padding: 22px; display: flex; align-items: center; gap: 13px; border-bottom: 1px solid var(--line); }
 .customer-profile strong, .customer-profile code { display: block; }
 .customer-profile code { margin-top: 5px; }
+.customer-ledger-hero { margin-bottom: 18px; padding: 24px 28px; border-radius: 20px; color: white; background: radial-gradient(circle at 82% 12%, rgba(217,244,124,.2), transparent 30%), linear-gradient(120deg, #17231f, #285342); box-shadow: var(--shadow); display: flex; align-items: center; justify-content: space-between; gap: 24px; }
+.customer-ledger-identity { display: flex; align-items: center; gap: 16px; }
+.customer-ledger-identity .avatar { width: 52px; height: 52px; border-radius: 16px; color: var(--ink); background: var(--lime); font-size: 26px; }
+.customer-ledger-identity span, .customer-ledger-balance span { color: var(--lime); font-size: 10px; font-weight: 800; letter-spacing: .16em; }
+.customer-ledger-identity h2 { margin: 4px 0; font-size: clamp(27px, 3vw, 39px); }
+.customer-ledger-identity p { margin: 0; color: #c0cec8; }
+.customer-ledger-identity code { background: rgba(255,255,255,.1); color: white; }
+.customer-ledger-balance { min-width: 230px; text-align: right; }
+.customer-ledger-balance strong, .customer-ledger-balance small { display: block; }
+.customer-ledger-balance strong { margin: 7px 0; color: white; font: 700 clamp(30px, 3vw, 43px)/1 "Fraunces", serif; }
+.customer-ledger-balance small { color: #bdcac4; }
+.wallet-summary-grid { margin-bottom: 18px; display: grid; grid-template-columns: repeat(4, minmax(0,1fr)); gap: 12px; }
+.wallet-summary-grid article { min-height: 126px; padding: 17px 18px; border: 1px solid var(--line); border-radius: 16px; background: var(--card); box-shadow: var(--shadow); display: flex; flex-direction: column; }
+.wallet-summary-grid span, .wallet-summary-grid small { color: var(--muted); font-size: 11px; }
+.wallet-summary-grid strong { margin: auto 0 7px; font: 700 clamp(22px, 2vw, 30px)/1.08 "Fraunces", serif; }
+.wallet-summary-grid .credit strong, .wallet-amount.positive { color: var(--green); }
+.wallet-summary-grid .debit strong, .wallet-amount.negative { color: var(--red); }
+.wallet-kind-tabs { padding: 13px 18px; border-bottom: 1px solid var(--line); display: flex; gap: 7px; overflow-x: auto; scrollbar-width: thin; }
+.wallet-kind-tabs a { flex: 0 0 auto; padding: 7px 10px; border-radius: 999px; color: var(--muted); background: #eeeae0; font-size: 11px; font-weight: 700; }
+.wallet-kind-tabs a.active { color: white; background: var(--green); }
+.wallet-ledger-table { min-width: 880px; }
+.wallet-ledger-table td:first-child { min-width: 260px; }
+.wallet-ledger-table .wallet-amount { white-space: nowrap; }
 @media (max-width: 1200px) { .filter-grid { grid-template-columns: repeat(3, minmax(0,1fr)); } .filter-grid label.wide { grid-column: span 2; } }
-@media (max-width: 1050px) { .metric-grid, .growth-grid { grid-template-columns: repeat(2, 1fr); } .form-grid.cols-3 { grid-template-columns: repeat(2, 1fr); } .dashboard-grid { grid-template-columns: 1fr; } }
+@media (max-width: 1050px) { .metric-grid, .growth-grid, .wallet-summary-grid { grid-template-columns: repeat(2, 1fr); } .form-grid.cols-3 { grid-template-columns: repeat(2, 1fr); } .dashboard-grid { grid-template-columns: 1fr; } }
 @media (max-width: 780px) {
   .shell { display: block; }
   .sidebar { position: static; width: 100%; height: auto; padding: 14px; }
@@ -238,8 +261,10 @@ textarea { resize: vertical; }
   .trend-chart { padding-inline: 10px; gap: 5px; }
   .trend-value { display: none; }
   .order-state { justify-items: start; }
+  .customer-ledger-hero { align-items: flex-start; flex-direction: column; }
+  .customer-ledger-balance { min-width: 0; text-align: left; }
 }
-@media (max-width: 520px) { .metric-grid { grid-template-columns: 1fr; } .metric { min-height: 130px; } .bot-link { display: none; } }
+@media (max-width: 520px) { .metric-grid, .wallet-summary-grid { grid-template-columns: 1fr; } .metric { min-height: 130px; } .bot-link { display: none; } .customer-ledger-hero { padding: 20px; } .customer-ledger-identity { align-items: flex-start; } }
 
 /* Business dashboard additions */
 .page-intro { margin-bottom: 18px; padding: 24px 26px; border-radius: 20px; color: white; background: radial-gradient(circle at 88% 10%, rgba(217,244,124,.2), transparent 28%), linear-gradient(120deg, #17231f, #284b3e); box-shadow: var(--shadow); display: flex; align-items: center; justify-content: space-between; gap: 30px; }

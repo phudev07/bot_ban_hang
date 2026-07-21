@@ -6,7 +6,15 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from app.database import Base
-from app.models import ApiClient, Category, InventoryItem, Product, ReferralReward, User
+from app.models import (
+    ApiClient,
+    Category,
+    InventoryItem,
+    Product,
+    ReferralReward,
+    User,
+    WalletTransaction,
+)
 from app.partner_services import ensure_api_client, rotate_api_secret
 from app.services import ensure_user, purchase_product
 from app.utils import SecretCipher
@@ -111,12 +119,27 @@ def test_referrer_receives_five_percent_for_every_completed_batch() -> None:
             referrer = await session.get(User, 20001)
             buyer = await session.get(User, 20002)
             rewards = list(await session.scalars(select(ReferralReward).order_by(ReferralReward.id)))
+            wallet_transactions = list(
+                await session.scalars(select(WalletTransaction).order_by(WalletTransaction.id))
+            )
             assert referrer is not None and referrer.balance == 4_000
             assert buyer is not None and buyer.balance == 0
             assert len(rewards) == 2
             assert [reward.order_amount for reward in rewards] == [40_000, 40_000]
             assert [reward.commission_amount for reward in rewards] == [2_000, 2_000]
             assert [reward.sales_channel for reward in rewards] == ["telegram", "api"]
+            buyer_debits = [
+                item.amount
+                for item in wallet_transactions
+                if item.user_id == buyer.telegram_id
+            ]
+            referrer_credits = [
+                item.amount
+                for item in wallet_transactions
+                if item.user_id == referrer.telegram_id
+            ]
+            assert buyer_debits == [-40_000, -40_000]
+            assert referrer_credits == [2_000, 2_000]
         await engine.dispose()
 
     asyncio.run(scenario())

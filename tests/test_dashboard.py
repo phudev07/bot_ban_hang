@@ -27,6 +27,7 @@ from app.models import (
     QuantityDiscount,
     SmsRental,
     User,
+    WalletTransaction,
 )
 from app.utils import SecretCipher
 
@@ -95,6 +96,20 @@ def test_admin_core_ledgers_paginate_all_rows(tmp_path) -> None:
                         expires_at=now + timedelta(minutes=5),
                     )
                 )
+                session.add(
+                    WalletTransaction(
+                        user_id=users[0].telegram_id,
+                        kind="admin_adjustment",
+                        amount=1,
+                        balance_before=index - 1,
+                        balance_after=index,
+                        reference_type="test",
+                        reference_id=str(index),
+                        event_key=f"page-ledger-{index}",
+                        description=f"Ledger-{index:03d}",
+                        created_at=now + timedelta(seconds=index),
+                    )
+                )
             await session.commit()
         return engine, sessions
 
@@ -154,6 +169,12 @@ def test_admin_core_ledgers_paginate_all_rows(tmp_path) -> None:
         assert inventory_page.status_code == 200
         assert "trên tổng <strong>105</strong> mục kho" in inventory_page.text
 
+        user_detail_page = client.get("/admin/users/7000000000?page=2")
+        assert user_detail_page.status_code == 200
+        assert "Ledger-005" in user_detail_page.text
+        assert "Ledger-105" not in user_detail_page.text
+        assert "trên tổng <strong>105</strong> phát sinh" in user_detail_page.text
+
     asyncio.run(engine.dispose())
 
 
@@ -168,6 +189,7 @@ def test_dashboard_login_catalog_inventory_and_balance(tmp_path) -> None:
             user = User(
                 telegram_id=6799701918,
                 full_name="Admin test user",
+                username="nhattan02",
                 balance=50_000,
                 has_started=True,
             )
@@ -268,6 +290,14 @@ def test_dashboard_login_catalog_inventory_and_balance(tmp_path) -> None:
         token_match = re.search(r'name="csrf" value="([^"]+)"', home.text)
         assert token_match is not None
         csrf = token_match.group(1)
+
+        search_without_at = client.get("/admin/users?q=nhattan02")
+        search_with_at = client.get("/admin/users?q=%40nhattan02")
+        assert search_without_at.status_code == 200
+        assert search_with_at.status_code == 200
+        assert "Admin test user" in search_without_at.text
+        assert "Admin test user" in search_with_at.text
+        assert 'href="/admin/users/6799701918"' in search_with_at.text
 
         broadcasts_page = client.get("/admin/broadcasts")
         assert broadcasts_page.status_code == 200
@@ -524,10 +554,16 @@ def test_dashboard_login_catalog_inventory_and_balance(tmp_path) -> None:
 
         adjusted = client.post(
             "/admin/users/6799701918/balance",
-            data={"csrf": csrf, "amount": "+10.000", "reason": "Kiểm thử dashboard"},
+            data={"csrf": csrf, "amount": "+10.000", "reason": "dashboard-test"},
             follow_redirects=False,
         )
         assert adjusted.status_code == 303
+        assert adjusted.headers["location"] == "/admin/users/6799701918"
+        user_detail = client.get(adjusted.headers["location"])
+        assert user_detail.status_code == 200
+        assert "WALLET LEDGER" in user_detail.text
+        assert "dashboard-test" in user_detail.text
+        assert "50.000" in user_detail.text and "60.000" in user_detail.text
 
     async def verify_database() -> None:
         async with sessions() as session:
@@ -536,6 +572,7 @@ def test_dashboard_login_catalog_inventory_and_balance(tmp_path) -> None:
             stock_count = int(await session.scalar(select(func.count(InventoryItem.id))) or 0)
             user = await session.get(User, 6799701918)
             adjustment = await session.scalar(select(BalanceAdjustment))
+            wallet_transaction = await session.scalar(select(WalletTransaction))
             discount_count = int(await session.scalar(select(func.count(DiscountCode.id))) or 0)
             quantity_discount_count = int(
                 await session.scalar(select(func.count(QuantityDiscount.id))) or 0
@@ -545,6 +582,11 @@ def test_dashboard_login_catalog_inventory_and_balance(tmp_path) -> None:
             assert stock_count == 0
             assert user is not None and user.balance == 60_000
             assert adjustment is not None and adjustment.amount == 10_000
+            assert wallet_transaction is not None
+            assert wallet_transaction.kind == "admin_adjustment"
+            assert wallet_transaction.amount == 10_000
+            assert wallet_transaction.balance_before == 50_000
+            assert wallet_transaction.balance_after == 60_000
             assert discount_count == 0
             assert quantity_discount_count == 0
         await engine.dispose()

@@ -3,7 +3,7 @@
 {% block content %}
 <section class="panel filter-panel">
   <form class="filter-grid customer-filter" method="get">
-    <label class="wide">Tìm khách hàng<input name="q" value="{{ query }}" placeholder="Telegram ID, tên hoặc username"></label>
+    <label class="wide">Tìm khách hàng<input name="q" value="{{ query }}" placeholder="Telegram ID, tên hoặc @username"></label>
     <label>Nhóm khách<select name="status"><option value="all">Tất cả</option><option value="wallet" {{ 'selected' if status == 'wallet' else '' }}>Khách còn tiền trong ví</option><option value="started" {{ 'selected' if status == 'started' else '' }}>Đang nhận bot</option><option value="inactive" {{ 'selected' if status == 'inactive' else '' }}>Không còn nhận bot</option><option value="blocked" {{ 'selected' if status == 'blocked' else '' }}>Bị khóa mua hàng</option></select></label>
     <button class="button primary">Tìm khách</button>
     <a class="button quiet" href="/admin/users">Đặt lại</a>
@@ -15,7 +15,7 @@
   <div class="table-wrap"><table><thead><tr><th>Khách hàng</th><th>Tham gia / Hoạt động</th><th>Số dư</th><th>Đã nạp</th><th>Đơn / Đã chi</th><th>Trạng thái</th><th>Điều chỉnh số dư</th></tr></thead><tbody>
   {% for row in users %}{% set user = row.user %}
   <tr>
-    <td><strong>{{ user.full_name }}</strong><small>@{{ user.username or '—' }}</small><code>{{ user.telegram_id }}</code></td>
+    <td><a class="text-link" href="/admin/users/{{ user.telegram_id }}">{{ user.full_name }}</a><small>@{{ user.username or '—' }}</small><code>{{ user.telegram_id }}</code><small><a class="text-link" href="/admin/users/{{ user.telegram_id }}">Xem phát sinh số dư →</a></small></td>
     <td>{{ user.created_at|localtime }}<small>Đơn cuối: {{ row.last_order_at|localtime }}<br>Nạp cuối: {{ row.last_deposit_at|localtime }}</small></td>
     <td><strong>{{ user.balance|vnd }}</strong></td>
     <td>{{ row.deposited|vnd }}</td>

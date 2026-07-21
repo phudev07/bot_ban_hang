@@ -52,6 +52,7 @@ from app.suppliers import (
     supplier_balance_guard,
 )
 from app.utils import SecretCipher, find_deposit_code
+from app.wallet_ledger import apply_wallet_change
 
 
 logger = logging.getLogger(__name__)
@@ -879,7 +880,19 @@ async def _purchase_product(
                         secret_values.append(cipher.decrypt(item.encrypted_secret))
                     if pricing.coupon is not None:
                         pricing.coupon.used_count += 1
-                    user.balance -= total_amount
+                    apply_wallet_change(
+                        session,
+                        user,
+                        -total_amount,
+                        kind="product_purchase",
+                        event_key=f"purchase:{batch_code}",
+                        reference_type="order",
+                        reference_id=batch_code,
+                        description=(
+                            f"Mua {quantity} tài khoản {product.name_vi} "
+                            f"qua {sales_channel}"
+                        ),
+                    )
                     await award_referral_commission(
                         session,
                         user,
@@ -1031,7 +1044,18 @@ async def _purchase_product(
                 )
                 if pricing.coupon is not None:
                     pricing.coupon.used_count += 1
-                user.balance -= total_amount
+                apply_wallet_change(
+                    session,
+                    user,
+                    -total_amount,
+                    kind="product_purchase",
+                    event_key=f"purchase:{batch_code}",
+                    reference_type="order",
+                    reference_id=batch_code,
+                    description=(
+                        f"Mua {quantity} tài khoản {product.name_vi} qua {sales_channel}"
+                    ),
+                )
                 await award_referral_commission(
                     session,
                     user,
@@ -1070,7 +1094,18 @@ async def _purchase_product(
 
             now = datetime.now(UTC)
             batch_code = f"B{secrets.token_hex(5).upper()}"
-            user.balance -= total_amount
+            apply_wallet_change(
+                session,
+                user,
+                -total_amount,
+                kind="product_purchase",
+                event_key=f"purchase:{batch_code}",
+                reference_type="order",
+                reference_id=batch_code,
+                description=(
+                    f"Mua {quantity} tài khoản {product.name_vi} qua {sales_channel}"
+                ),
+            )
             orders = []
             secret_values = []
             for item in items:
@@ -1713,7 +1748,21 @@ async def _process_sepay_payment(
                     )
 
             await release_deposit_flash_sale(session, deposit)
-            user.balance += amount
+            is_direct_fallback = deposit.payment_kind == "direct_purchase"
+            apply_wallet_change(
+                session,
+                user,
+                amount,
+                kind="direct_purchase_fallback" if is_direct_fallback else "deposit",
+                event_key=f"deposit:{deposit.id}",
+                reference_type="deposit",
+                reference_id=deposit.code,
+                description=(
+                    f"Thanh toán trực tiếp {deposit.code} không giao được, đã chuyển vào ví"
+                    if is_direct_fallback
+                    else f"Nạp tiền vào ví qua mã {deposit.code}"
+                ),
+            )
             deposit.status = "paid"
             deposit.paid_amount = amount
             deposit.paid_at = now
@@ -1727,7 +1776,6 @@ async def _process_sepay_payment(
                 )
             )
             user_id = user.telegram_id
-            is_direct_fallback = deposit.payment_kind == "direct_purchase"
             language = user.language
 
         return PaymentResult(

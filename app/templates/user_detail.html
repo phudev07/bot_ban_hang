@@ -1,0 +1,69 @@
+{% extends "base.html" %}
+{% from "_pagination.html" import render_pager %}
+{% block content %}
+<div class="detail-actions">
+  <a class="button quiet" href="/admin/users">← Danh sách khách hàng</a>
+  {% if user.username %}<a class="button secondary" href="https://t.me/{{ user.username }}" target="_blank" rel="noreferrer">Nhắn @{{ user.username }}</a>{% endif %}
+  <a class="button primary" href="/admin/orders?q={{ user.telegram_id }}">Xem đơn hàng</a>
+</div>
+
+<section class="customer-ledger-hero">
+  <div class="customer-ledger-identity">
+    <span class="avatar">{{ user.full_name[:1]|upper }}</span>
+    <div><span>CUSTOMER WALLET</span><h2>{{ user.full_name }}</h2><p>@{{ user.username or '—' }} · Telegram <code>{{ user.telegram_id }}</code></p></div>
+  </div>
+  <div class="customer-ledger-balance"><span>Số dư hiện tại</span><strong>{{ user.balance|vnd }}</strong><small>{{ 'Đang hoạt động' if not user.is_blocked else 'Đã khóa mua hàng' }}</small></div>
+</section>
+
+<section class="wallet-summary-grid">
+  <article><span>Số dư đầu kỳ</span><strong>{{ opening_balance|vnd }}</strong><small>Chốt khi bật sổ phát sinh</small></article>
+  <article class="credit"><span>Tổng cộng vào</span><strong>+{{ total_credits|vnd }}</strong><small>Không gồm số dư đầu kỳ</small></article>
+  <article class="debit"><span>Tổng trừ ra</span><strong>-{{ total_debits|vnd }}</strong><small>Mua hàng và thuê số</small></article>
+  <article><span>Hoạt động</span><strong>{{ order_count }} đơn · {{ sms_count }} SMS</strong><small>{{ transaction_count }} phát sinh trong bộ lọc</small></article>
+</section>
+
+<div class="dashboard-grid detail-grid">
+  <section class="panel">
+    <div class="panel-head"><div><span>WALLET LEDGER</span><h2>Lịch sử cộng và trừ tiền</h2><small>Sổ ghi chính xác từ lúc tính năng được bật; dữ liệu cũ được chốt thành số dư đầu kỳ.</small></div><small>100 dòng mỗi trang</small></div>
+    <nav class="wallet-kind-tabs" aria-label="Lọc phát sinh số dư">
+      <a class="{{ 'active' if selected_kind == 'all' else '' }}" href="/admin/users/{{ user.telegram_id }}">Tất cả</a>
+      {% for kind, label in wallet_kind_labels.items() %}<a class="{{ 'active' if selected_kind == kind else '' }}" href="/admin/users/{{ user.telegram_id }}?kind={{ kind }}">{{ label }}</a>{% endfor %}
+    </nav>
+    <div class="table-wrap"><table class="wallet-ledger-table"><thead><tr><th>Phát sinh</th><th>Số tiền</th><th>Số dư trước → sau</th><th>Tham chiếu</th><th>Thời gian</th></tr></thead><tbody>
+      {% for item in transactions %}
+      <tr>
+        <td><strong>{{ wallet_kind_labels.get(item.kind, item.kind) }}</strong><small>{{ item.description or '—' }}</small></td>
+        <td><strong class="wallet-amount {{ 'positive' if item.amount > 0 else 'negative' if item.amount < 0 else '' }}">{{ '+' if item.amount > 0 else '' }}{{ item.amount|vnd }}</strong></td>
+        <td><strong>{{ item.balance_before|vnd }} → {{ item.balance_after|vnd }}</strong></td>
+        <td>
+          {% if item.reference_type == 'order' %}<a class="text-link" href="/admin/orders?q={{ item.reference_id }}"><code>{{ item.reference_id }}</code></a>
+          {% elif item.reference_type == 'deposit' %}<a class="text-link" href="/admin/payments?q={{ item.reference_id }}"><code>{{ item.reference_id }}</code></a>
+          {% elif item.reference_type == 'sms_rental' %}<a class="text-link" href="/admin/sms-rentals?q={{ item.reference_id }}"><code>{{ item.reference_id }}</code></a>
+          {% elif item.reference_type == 'referral' %}<a class="text-link" href="/admin/referrals"><code>{{ item.reference_id }}</code></a>
+          {% else %}<code>{{ item.reference_id or '—' }}</code>{% endif %}
+          <small>{{ wallet_reference_labels.get(item.reference_type, item.reference_type) }}</small>
+        </td>
+        <td>{{ item.created_at|localtime }}</td>
+      </tr>
+      {% else %}<tr><td colspan="5" class="empty">Chưa có phát sinh số dư trong bộ lọc này.</td></tr>{% endfor %}
+    </tbody></table></div>
+    {{ render_pager(pager, 'phát sinh') }}
+  </section>
+
+  <aside class="panel form-panel">
+    <div class="panel-head"><div><span>MANUAL ADJUSTMENT</span><h2>Điều chỉnh số dư</h2></div></div>
+    <form class="form-grid" method="post" action="/admin/users/{{ user.telegram_id }}/balance">
+      <input type="hidden" name="csrf" value="{{ csrf_token }}">
+      <label>Số tiền<input name="amount" placeholder="+50000 hoặc -10000" required></label>
+      <label>Lý do thay đổi<textarea name="reason" rows="4" placeholder="Ghi rõ lý do để tra soát sau này" required></textarea></label>
+      <button class="button primary full">Cập nhật và ghi sổ</button>
+      <p class="hint">Mỗi thay đổi sẽ lưu Admin thực hiện, số dư trước/sau và thời gian chính xác.</p>
+    </form>
+    <dl class="info-list">
+      <div><dt>Tham gia</dt><dd>{{ user.created_at|localtime }}</dd></div>
+      <div><dt>Nhận bot</dt><dd>{{ 'Có' if user.has_started else 'Không' }}</dd></div>
+      <div><dt>Trạng thái</dt><dd>{{ 'Đã khóa' if user.is_blocked else 'Hoạt động' }}</dd></div>
+    </dl>
+  </aside>
+</div>
+{% endblock %}

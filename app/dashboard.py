@@ -45,6 +45,7 @@ from app.models import (
     SupplierBalanceTransaction,
     SupplierPurchaseAttempt,
     User,
+    WalletTransaction,
 )
 from app.rentsim import RentSimClient
 from app.sms_rentals import sms_availability
@@ -57,6 +58,7 @@ from app.suppliers import (
     SupplierError,
 )
 from app.utils import SecretCipher, format_vnd, parse_vnd
+from app.wallet_ledger import apply_wallet_change
 from app.dashboard_security import new_csrf_token, verify_dashboard_password
 
 
@@ -68,6 +70,25 @@ LOCAL_TIMEZONE = ZoneInfo("Asia/Bangkok")
 ADMIN_PAGE_SIZE = 100
 MAX_FLASH_SALE_IMAGE_BYTES = 8 * 1024 * 1024
 logger = logging.getLogger(__name__)
+
+WALLET_KIND_LABELS = {
+    "opening_balance": "Số dư đầu kỳ",
+    "deposit": "Nạp tiền",
+    "direct_purchase_fallback": "Tiền mua chuyển vào ví",
+    "product_purchase": "Mua hàng",
+    "sms_rental": "Thuê số SMS",
+    "sms_refund": "Hoàn tiền thuê số",
+    "referral_commission": "Hoa hồng giới thiệu",
+    "admin_adjustment": "Admin điều chỉnh",
+}
+WALLET_REFERENCE_LABELS = {
+    "system": "Hệ thống",
+    "order": "Đơn hàng",
+    "deposit": "Mã nạp",
+    "sms_rental": "Đơn thuê số",
+    "referral": "Đơn giới thiệu",
+    "balance_adjustment": "Điều chỉnh Admin",
+}
 
 
 @dataclass(frozen=True)
@@ -2285,8 +2306,9 @@ def create_dashboard_router(
         if not is_admin(request):
             return redirect_to_login()
         user_conditions = []
-        if q.strip():
-            needle = f"%{q.strip()}%"
+        normalized_query = q.strip().lstrip("@").strip()
+        if normalized_query:
+            needle = f"%{normalized_query}%"
             user_conditions.append(
                 or_(
                     User.username.ilike(needle),
@@ -2378,6 +2400,109 @@ def create_dashboard_router(
                 status=status,
                 pager=pager,
                 filtered_wallet_total=int(filtered_wallet_total),
+            ),
+        )
+
+    @router.get("/admin/users/{user_id}", response_class=HTMLResponse)
+    async def user_detail_page(
+        user_id: int,
+        request: Request,
+        kind: str = "all",
+        page: int = 1,
+    ) -> Response:
+        if not is_admin(request):
+            return redirect_to_login()
+        selected_kind = kind if kind in WALLET_KIND_LABELS else "all"
+        async with session_factory() as session:
+            user = await session.get(User, user_id)
+            if user is None:
+                return Response("Không tìm thấy khách hàng.", status_code=404)
+
+            ledger_conditions = [WalletTransaction.user_id == user.telegram_id]
+            if selected_kind != "all":
+                ledger_conditions.append(WalletTransaction.kind == selected_kind)
+            transaction_count = int(
+                await session.scalar(
+                    select(func.count(WalletTransaction.id)).where(*ledger_conditions)
+                )
+                or 0
+            )
+            pager = admin_pager(request, transaction_count, page)
+            transactions = list(
+                await session.scalars(
+                    select(WalletTransaction)
+                    .where(*ledger_conditions)
+                    .order_by(WalletTransaction.created_at.desc(), WalletTransaction.id.desc())
+                    .offset(pager.offset)
+                    .limit(ADMIN_PAGE_SIZE)
+                )
+            )
+            total_credits = int(
+                await session.scalar(
+                    select(func.coalesce(func.sum(WalletTransaction.amount), 0)).where(
+                        WalletTransaction.user_id == user.telegram_id,
+                        WalletTransaction.amount > 0,
+                        WalletTransaction.kind != "opening_balance",
+                    )
+                )
+                or 0
+            )
+            total_debits = abs(
+                int(
+                    await session.scalar(
+                        select(func.coalesce(func.sum(WalletTransaction.amount), 0)).where(
+                            WalletTransaction.user_id == user.telegram_id,
+                            WalletTransaction.amount < 0,
+                        )
+                    )
+                    or 0
+                )
+            )
+            opening_balance = int(
+                await session.scalar(
+                    select(WalletTransaction.balance_after)
+                    .where(
+                        WalletTransaction.user_id == user.telegram_id,
+                        WalletTransaction.kind == "opening_balance",
+                    )
+                    .order_by(WalletTransaction.id)
+                    .limit(1)
+                )
+                or 0
+            )
+            order_count = int(
+                await session.scalar(
+                    select(purchase_order_count()).where(Order.user_id == user.telegram_id)
+                )
+                or 0
+            )
+            sms_count = int(
+                await session.scalar(
+                    select(func.count(SmsRental.id)).where(
+                        SmsRental.user_id == user.telegram_id
+                    )
+                )
+                or 0
+            )
+        return templates.TemplateResponse(
+            request,
+            "user_detail.html",
+            page_context(
+                request,
+                f"Khách hàng {user.full_name}",
+                "users",
+                user=user,
+                transactions=transactions,
+                transaction_count=transaction_count,
+                total_credits=total_credits,
+                total_debits=total_debits,
+                opening_balance=opening_balance,
+                order_count=order_count,
+                sms_count=sms_count,
+                selected_kind=selected_kind,
+                wallet_kind_labels=WALLET_KIND_LABELS,
+                wallet_reference_labels=WALLET_REFERENCE_LABELS,
+                pager=pager,
             ),
         )
 
@@ -2677,25 +2802,41 @@ def create_dashboard_router(
         sign = -1 if amount.strip().startswith("-") else 1
         parsed_amount = parse_vnd(amount)
         adjustment = sign * (parsed_amount or 0)
+        clean_reason = reason.strip()
         async with session_factory() as session:
             async with session.begin():
                 user = await session.scalar(
                     select(User).where(User.telegram_id == user_id).with_for_update()
                 )
-                if user is None or adjustment == 0 or user.balance + adjustment < 0:
+                if (
+                    user is None
+                    or adjustment == 0
+                    or not clean_reason
+                    or user.balance + adjustment < 0
+                ):
                     flash(request, "Không thể điều chỉnh số dư.", "error")
                     return RedirectResponse("/admin/users", status_code=303)
-                user.balance += adjustment
-                session.add(
-                    BalanceAdjustment(
-                        user_id=user.telegram_id,
-                        admin_username=str(request.session["dashboard_admin"]),
-                        amount=adjustment,
-                        reason=reason.strip(),
-                    )
+                admin_username = str(request.session["dashboard_admin"])
+                balance_adjustment = BalanceAdjustment(
+                    user_id=user.telegram_id,
+                    admin_username=admin_username,
+                    amount=adjustment,
+                    reason=clean_reason,
+                )
+                session.add(balance_adjustment)
+                await session.flush()
+                apply_wallet_change(
+                    session,
+                    user,
+                    adjustment,
+                    kind="admin_adjustment",
+                    event_key=f"admin_adjustment:{balance_adjustment.id}",
+                    reference_type="balance_adjustment",
+                    reference_id=str(balance_adjustment.id),
+                    description=f"{clean_reason} · thực hiện bởi {admin_username}",
                 )
         flash(request, "Đã cập nhật số dư và ghi lịch sử audit.")
-        return RedirectResponse("/admin/users", status_code=303)
+        return RedirectResponse(f"/admin/users/{user_id}", status_code=303)
 
     @router.post("/admin/users/{user_id}/toggle-block")
     async def toggle_user_block(

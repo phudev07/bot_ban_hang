@@ -412,6 +412,29 @@ class BalanceAdjustment(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
 
+class WalletTransaction(Base):
+    __tablename__ = "wallet_transactions"
+    __table_args__ = (
+        Index("ix_wallet_transactions_user_created", "user_id", "created_at", "id"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    user_id: Mapped[int] = mapped_column(
+        ForeignKey("users.telegram_id", ondelete="CASCADE"), index=True
+    )
+    kind: Mapped[str] = mapped_column(String(32), index=True)
+    amount: Mapped[int] = mapped_column(BigInteger)
+    balance_before: Mapped[int] = mapped_column(BigInteger)
+    balance_after: Mapped[int] = mapped_column(BigInteger)
+    reference_type: Mapped[str] = mapped_column(String(32), default="system")
+    reference_id: Mapped[str] = mapped_column(String(128), default="")
+    event_key: Mapped[str] = mapped_column(String(191), unique=True, index=True)
+    description: Mapped[str] = mapped_column(Text, default="")
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), index=True
+    )
+
+
 class SmsRental(Base):
     __tablename__ = "sms_rentals"
     __table_args__ = (
