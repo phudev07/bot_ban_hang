@@ -393,6 +393,8 @@ async def available_stock(
     product = await session.get(Product, product_id)
     if product is None:
         return 0
+    if product.force_out_of_stock:
+        return 0
     if product.fulfillment_source in EXTERNAL_FULFILLMENT_SOURCES:
         if refresh_external:
             max_age = max(0, refresh_max_age_seconds)
@@ -765,6 +767,8 @@ async def _purchase_product(
             )
             if user is None or product is None or not product.active:
                 return PurchaseResult(False, "not_found")
+            if product.force_out_of_stock:
+                return PurchaseResult(False, "out_of_stock")
             if user.is_blocked:
                 return PurchaseResult(False, "blocked")
             if quantity < 1 or quantity > product.max_quantity:
@@ -1469,7 +1473,12 @@ async def _process_sepay_payment(
                     )
                 items: list[InventoryItem] = []
                 supplier_purchase_made = False
-                if product is not None and product.active and flash_sale_can_fulfill:
+                if (
+                    product is not None
+                    and product.active
+                    and not product.force_out_of_stock
+                    and flash_sale_can_fulfill
+                ):
                     if deposit.quantity == 1 or product.allow_quantity:
                         external_client = supplier_client_for_source(
                             product.fulfillment_source,

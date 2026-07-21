@@ -231,7 +231,9 @@ def create_admin_router(settings: Settings, cipher: SecretCipher) -> Router:
             return
         lines = ["📦 <b>Danh sách sản phẩm</b>"]
         for product in products:
-            if product.fulfillment_source in EXTERNAL_FULFILLMENT_SOURCES:
+            if product.force_out_of_stock:
+                stock = 0
+            elif product.fulfillment_source in EXTERNAL_FULFILLMENT_SOURCES:
                 stock = max(0, product.external_stock)
             else:
                 stock = int(

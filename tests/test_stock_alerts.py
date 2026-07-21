@@ -216,6 +216,37 @@ def test_non_alert_product_updates_stock_without_queueing_notification() -> None
     asyncio.run(scenario())
 
 
+def test_manual_stock_zero_updates_source_stock_without_announcing() -> None:
+    async def scenario() -> None:
+        engine, sessions = await make_database()
+        async with sessions() as session:
+            category = Category(name_vi="ChatGPT", name_en="ChatGPT")
+            session.add(category)
+            await session.flush()
+            product = Product(
+                category_id=category.id,
+                name_vi="GPT Plus tạm dừng",
+                name_en="Paused GPT Plus",
+                price=20_000,
+                fulfillment_source="sumistore",
+                supplier_product_id="SP-GEF55PBV",
+                force_out_of_stock=True,
+                supplier_available_stock=5,
+                supplier_available_stock_initialized=True,
+            )
+            session.add(product)
+            await session.flush()
+
+            assert await apply_supplier_stock(session, product, 20) is False
+            await session.commit()
+
+            assert product.supplier_available_stock == 20
+            assert await session.scalar(select(ProductStockAlert.id)) is None
+        await engine.dispose()
+
+    asyncio.run(scenario())
+
+
 def test_only_jio_is_featured_for_lehai_stock_notifications() -> None:
     pixel = Product(
         category_id=1,

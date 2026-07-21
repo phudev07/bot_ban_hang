@@ -329,3 +329,36 @@ def test_sale_alert_waits_until_stock_is_available() -> None:
         await engine.dispose()
 
     asyncio.run(scenario())
+
+
+def test_manual_stock_zero_updates_dynamic_price_without_sale_alert() -> None:
+    async def scenario() -> None:
+        engine, sessions = await make_database()
+        async with sessions() as session:
+            category = Category(name_vi="API", name_en="API")
+            session.add(category)
+            await session.flush()
+            product = Product(
+                category_id=category.id,
+                name_vi="Tạm dừng bán",
+                name_en="Paused",
+                price=17_000,
+                fulfillment_source="lehai",
+                supplier_price=15_000,
+                supplier_markup=2_000,
+                external_stock=10,
+                force_out_of_stock=True,
+                supplier_synced_at=datetime.now(UTC),
+            )
+            session.add(product)
+            await session.flush()
+
+            assert await apply_supplier_price(session, product, 10_000) is False
+            await session.commit()
+
+            assert product.price == 12_000
+            assert product.supplier_price == 10_000
+            assert await session.scalar(select(ProductPriceAlert.id)) is None
+        await engine.dispose()
+
+    asyncio.run(scenario())

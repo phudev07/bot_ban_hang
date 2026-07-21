@@ -1,4 +1,4 @@
-from sqlalchemy import and_, or_, select
+from sqlalchemy import and_, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.flash_sales import stop_unsafe_flash_sale
@@ -49,6 +49,17 @@ async def apply_supplier_price(
     )
     for campaign in campaigns:
         stop_unsafe_flash_sale(campaign, locked_product)
+
+    if locked_product.force_out_of_stock:
+        await session.execute(
+            update(ProductPriceAlert)
+            .where(
+                ProductPriceAlert.product_id == locked_product.id,
+                ProductPriceAlert.status == "pending",
+            )
+            .values(status="superseded")
+        )
+        return False
 
     pending = await session.scalar(
         select(ProductPriceAlert)

@@ -481,6 +481,27 @@ def test_dashboard_login_catalog_inventory_and_balance(tmp_path) -> None:
         )
         assert imported.status_code == 303
 
+        stock_zero = client.post(
+            f"/admin/products/{product_id}/stock-zero",
+            data={"csrf": csrf, "action": "zero"},
+            follow_redirects=False,
+        )
+        assert stock_zero.status_code == 303
+        assert stock_zero.headers["location"] == "/admin/products"
+        products_page = client.get("/admin/products")
+        assert "Tạm khóa · kho thật 2" in products_page.text
+        assert ">Mở lại</button>" in products_page.text
+
+        restored_stock = client.post(
+            f"/admin/products/{product_id}/stock-zero",
+            data={"csrf": csrf, "action": "restore"},
+            follow_redirects=False,
+        )
+        assert restored_stock.status_code == 303
+        products_page = client.get("/admin/products")
+        assert ">Về 0</button>" in products_page.text
+        assert "Tạm khóa · kho thật" not in products_page.text
+
         inventory_page = client.get("/admin/inventory")
         delete_match = re.search(r'action="/admin/inventory/(\d+)/delete"', inventory_page.text)
         assert delete_match is not None

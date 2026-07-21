@@ -116,6 +116,9 @@ textarea { resize: vertical; }
 .danger-zone { margin: 0 22px 22px; padding: 18px; border: 1px solid #ecc7c0; border-radius: 13px; background: #fff4f1; display: flex; align-items: center; justify-content: space-between; gap: 20px; }
 .danger-zone strong { color: var(--red); }
 .danger-zone p { margin: 5px 0 0; color: var(--muted); font-size: 12px; }
+.stock-zero-zone { margin: 0 22px 14px; padding: 18px; border: 1px solid #ead7a8; border-radius: 13px; background: #fff9e9; display: flex; align-items: center; justify-content: space-between; gap: 20px; }
+.stock-zero-zone strong { color: #805d12; }
+.stock-zero-zone p { margin: 5px 0 0; color: var(--muted); font-size: 12px; }
 .category-list { padding: 12px 20px 20px; display: grid; gap: 10px; }
 .category-card { padding: 13px; border: 1px solid #e3ded3; border-radius: 13px; background: #faf7ef; display: flex; align-items: flex-end; gap: 10px; }
 .category-meta { min-width: 112px; padding-bottom: 3px; }
@@ -222,7 +225,7 @@ textarea { resize: vertical; }
   .form-grid label.wide { grid-column: auto; }
   .category-card { align-items: stretch; flex-direction: column; }
   .category-form { grid-template-columns: 1fr; }
-  .danger-zone { align-items: stretch; flex-direction: column; }
+  .danger-zone, .stock-zero-zone { align-items: stretch; flex-direction: column; }
   .panel-head { align-items: flex-start; }
   .search { width: 100%; flex-direction: column; }
   .search input { min-width: 0; }

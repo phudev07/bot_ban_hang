@@ -15,7 +15,7 @@ from aiogram.types import BufferedInputFile
 from fastapi import APIRouter, File, Form, Request, UploadFile
 from fastapi.responses import HTMLResponse, RedirectResponse, Response
 from fastapi.templating import Jinja2Templates
-from sqlalchemy import String, cast, delete, func, literal, or_, select
+from sqlalchemy import String, cast, delete, func, literal, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from sqlalchemy.orm import aliased
 
@@ -668,6 +668,7 @@ def create_dashboard_router(
                     .where(
                         InventoryItem.status == "available",
                         Product.fulfillment_source == "local",
+                        Product.force_out_of_stock.is_(False),
                         Product.product_type == "account",
                     )
                 )
@@ -676,7 +677,8 @@ def create_dashboard_router(
             stock += int(
                 await session.scalar(
                     select(func.coalesce(func.sum(Product.external_stock), 0)).where(
-                        Product.fulfillment_source.in_(EXTERNAL_FULFILLMENT_SOURCES)
+                        Product.fulfillment_source.in_(EXTERNAL_FULFILLMENT_SOURCES),
+                        Product.force_out_of_stock.is_(False),
                     )
                 )
                 or 0
@@ -1161,10 +1163,19 @@ def create_dashboard_router(
             {
                 "product": product,
                 "category": category,
-                "stock": (
+                "source_stock": (
                     max(0, product.external_stock)
                     if product.fulfillment_source in EXTERNAL_FULFILLMENT_SOURCES
                     else int(stock)
+                ),
+                "stock": (
+                    0
+                    if product.force_out_of_stock
+                    else (
+                        max(0, product.external_stock)
+                        if product.fulfillment_source in EXTERNAL_FULFILLMENT_SOURCES
+                        else int(stock)
+                    )
                 ),
                 "coupon_count": int(coupon_count),
                 "unit_cost": (
@@ -1390,6 +1401,75 @@ def create_dashboard_router(
             await session.commit()
         flash(request, "Đã lưu thông tin sản phẩm.")
         return RedirectResponse(f"/admin/products/{product_id}", status_code=303)
+
+    @router.post("/admin/products/{product_id}/stock-zero")
+    async def toggle_product_stock_zero(
+        product_id: int,
+        request: Request,
+        csrf: str = Form(...),
+        action: str = Form("zero"),
+        return_to: str = Form("list"),
+    ) -> RedirectResponse:
+        redirect_url = (
+            f"/admin/products/{product_id}"
+            if return_to == "edit"
+            else "/admin/products"
+        )
+        if not is_admin(request):
+            return redirect_to_login()
+        if not valid_csrf(request, csrf):
+            flash(request, "Phiên biểu mẫu không hợp lệ.", "error")
+            return RedirectResponse(redirect_url, status_code=303)
+        async with session_factory() as session:
+            product = await session.scalar(
+                select(Product).where(Product.id == product_id).with_for_update()
+            )
+            if (
+                product is None
+                or product.product_type != "account"
+                or product.fulfillment_source not in SELLABLE_FULFILLMENT_SOURCES
+            ):
+                flash(request, "Sản phẩm không tồn tại.", "error")
+                return RedirectResponse("/admin/products", status_code=303)
+
+            restore = action == "restore"
+            product.force_out_of_stock = not restore
+            if not restore:
+                await session.execute(
+                    update(ProductPriceAlert)
+                    .where(
+                        ProductPriceAlert.product_id == product.id,
+                        ProductPriceAlert.status.in_(("pending", "sending")),
+                    )
+                    .values(status="superseded")
+                )
+                await session.execute(
+                    update(ProductStockAlert)
+                    .where(
+                        ProductStockAlert.product_id == product.id,
+                        ProductStockAlert.status.in_(("pending", "sending")),
+                    )
+                    .values(status="superseded")
+                )
+                await session.execute(
+                    update(FlashSaleCampaign)
+                    .where(
+                        FlashSaleCampaign.product_id == product.id,
+                        FlashSaleCampaign.notification_status.in_(("pending", "sending")),
+                    )
+                    .values(notification_status="superseded")
+                )
+            await session.commit()
+            product_name = product.name_vi
+
+        if restore:
+            flash(request, f"Đã mở bán lại {product_name}; tồn kho được giữ nguyên.")
+        else:
+            flash(
+                request,
+                f"Đã đưa {product_name} về 0 hàng. Kho thật vẫn được giữ để mở lại sau.",
+            )
+        return RedirectResponse(redirect_url, status_code=303)
 
     @router.post("/admin/products/{product_id}/delete")
     async def delete_product(
@@ -1654,7 +1734,9 @@ def create_dashboard_router(
                 if existing is not None:
                     flash(request, "Sản phẩm này đang có một chiến dịch Flash Sale.", "error")
                     return RedirectResponse("/admin/flash-sales", status_code=303)
-                if product.fulfillment_source in EXTERNAL_FULFILLMENT_SOURCES:
+                if product.force_out_of_stock:
+                    stock = 0
+                elif product.fulfillment_source in EXTERNAL_FULFILLMENT_SOURCES:
                     stock = max(0, product.external_stock)
                 else:
                     stock = int(

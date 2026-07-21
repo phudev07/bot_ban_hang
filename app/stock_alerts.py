@@ -44,6 +44,17 @@ async def apply_supplier_stock(
     locked_product.supplier_available_stock = new_stock
     locked_product.supplier_available_stock_initialized = True
 
+    if locked_product.force_out_of_stock:
+        await session.execute(
+            update(ProductStockAlert)
+            .where(
+                ProductStockAlert.product_id == locked_product.id,
+                ProductStockAlert.status == "pending",
+            )
+            .values(status="superseded")
+        )
+        return False
+
     if not stock_alert_enabled(locked_product):
         await session.execute(
             update(ProductStockAlert)

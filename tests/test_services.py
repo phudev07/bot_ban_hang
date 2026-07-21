@@ -673,6 +673,139 @@ def test_direct_purchase_falls_back_to_wallet_when_stock_is_gone() -> None:
     asyncio.run(scenario())
 
 
+def test_manual_stock_zero_preserves_inventory_and_blocks_all_purchase_sources() -> None:
+    async def scenario() -> None:
+        engine, sessions = await make_database()
+        cipher = SecretCipher(Fernet.generate_key().decode())
+        supplier = FakeSupplier(balance=100_000, stock=20)
+        async with sessions() as session:
+            category = Category(name_vi="Test", name_en="Test")
+            session.add(category)
+            await session.flush()
+            local_product = Product(
+                category_id=category.id,
+                name_vi="Kho local tạm dừng",
+                name_en="Paused local",
+                price=10_000,
+                force_out_of_stock=True,
+            )
+            api_product = Product(
+                category_id=category.id,
+                name_vi="API tạm dừng",
+                name_en="Paused API",
+                price=20_000,
+                fulfillment_source="sumistore",
+                supplier_product_id="SP-PAUSED",
+                external_stock=20,
+                force_out_of_stock=True,
+            )
+            user = User(telegram_id=123456, full_name="Buyer", balance=100_000)
+            session.add_all([local_product, api_product, user])
+            await session.flush()
+            item = InventoryItem(
+                product_id=local_product.id,
+                encrypted_secret=cipher.encrypt("preserved:account"),
+            )
+            session.add(item)
+            await session.commit()
+
+        async with sessions() as session:
+            assert await available_stock(session, local_product.id) == 0
+            assert (
+                await available_stock(
+                    session,
+                    api_product.id,
+                    supplier,  # type: ignore[arg-type]
+                    refresh_external=True,
+                )
+                == 0
+            )
+
+        local_result = await purchase_product(
+            sessions,
+            user.telegram_id,
+            local_product.id,
+            cipher,
+        )
+        api_result = await purchase_product(
+            sessions,
+            user.telegram_id,
+            api_product.id,
+            cipher,
+            supplier_client=supplier,  # type: ignore[arg-type]
+        )
+
+        assert local_result.message == "out_of_stock"
+        assert api_result.message == "out_of_stock"
+        assert supplier.buy_calls == 0
+        async with sessions() as session:
+            stored_item = await session.get(InventoryItem, item.id)
+            stored_api_product = await session.get(Product, api_product.id)
+            stored_user = await session.get(User, user.telegram_id)
+            assert stored_item is not None and stored_item.status == "available"
+            assert stored_api_product is not None and stored_api_product.external_stock == 20
+            assert stored_user is not None and stored_user.balance == 100_000
+        await engine.dispose()
+
+    asyncio.run(scenario())
+
+
+def test_direct_purchase_manual_stock_zero_falls_back_without_consuming_inventory() -> None:
+    async def scenario() -> None:
+        engine, sessions = await make_database()
+        async with sessions() as session:
+            category = Category(name_vi="Test", name_en="Test")
+            session.add(category)
+            await session.flush()
+            product = Product(
+                category_id=category.id,
+                name_vi="Tài khoản tạm dừng",
+                name_en="Paused account",
+                price=50_000,
+                force_out_of_stock=True,
+            )
+            user = User(telegram_id=123456, full_name="Buyer", balance=0)
+            session.add_all([product, user])
+            await session.flush()
+            item = InventoryItem(
+                product_id=product.id,
+                encrypted_secret="preserved-secret",
+            )
+            session.add_all(
+                [
+                    item,
+                    Deposit(
+                        user_id=user.telegram_id,
+                        code="NAP123456EFGH",
+                        requested_amount=50_000,
+                        payment_kind="direct_purchase",
+                        product_id=product.id,
+                    ),
+                ]
+            )
+            await session.commit()
+
+        result = await process_sepay_payment(
+            sessions,
+            {
+                "id": 33334,
+                "transferType": "in",
+                "transferAmount": 50_000,
+                "content": "NAP123456EFGH",
+            },
+        )
+
+        assert result.status == "direct_purchase_fallback"
+        async with sessions() as session:
+            stored_user = await session.get(User, user.telegram_id)
+            stored_item = await session.get(InventoryItem, item.id)
+            assert stored_user is not None and stored_user.balance == 50_000
+            assert stored_item is not None and stored_item.status == "available"
+        await engine.dispose()
+
+    asyncio.run(scenario())
+
+
 def test_external_purchase_uses_dynamic_price_and_delivers_accounts() -> None:
     async def scenario() -> None:
         engine, sessions = await make_database()

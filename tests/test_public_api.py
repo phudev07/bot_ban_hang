@@ -324,6 +324,21 @@ def test_warehouse_api_purchases_from_shared_wallet_and_is_idempotent(tmp_path) 
         assert mismatch.status_code == 409
         assert mismatch.json()["detail"]["code"] == "IDEMPOTENCY_MISMATCH"
 
+        async def pause_product() -> None:
+            async with sessions() as session:
+                product = await session.get(Product, product_id)
+                assert product is not None
+                product.force_out_of_stock = True
+                await session.commit()
+
+        asyncio.run(pause_product())
+        paused_catalog = client.get(
+            "/v1/catalog",
+            headers=signed_headers(api_id, api_secret, "GET", "/v1/catalog"),
+        )
+        assert paused_catalog.status_code == 200
+        assert paused_catalog.json()["products"][0]["stock"] == 0
+
     async def verify_database() -> None:
         async with sessions() as session:
             buyer = await session.get(User, 30002)

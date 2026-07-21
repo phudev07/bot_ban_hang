@@ -342,9 +342,13 @@ def create_public_api_router(
             for product in rows:
                 flash_sale = flash_sales.get(product.id)
                 stock = (
-                    max(0, product.external_stock)
-                    if product.fulfillment_source in EXTERNAL_FULFILLMENT_SOURCES
-                    else local_stock.get(product.id, 0)
+                    0
+                    if product.force_out_of_stock
+                    else (
+                        max(0, product.external_stock)
+                        if product.fulfillment_source in EXTERNAL_FULFILLMENT_SOURCES
+                        else local_stock.get(product.id, 0)
+                    )
                 )
                 if flash_sale is not None:
                     stock = min(stock, flash_sale_remaining(flash_sale))

@@ -775,7 +775,13 @@ async def _deliver_product_alert(
     send_delivery: Callable[[ProductAlertDelivery], Awaitable[DeliveryResult]],
 ) -> None:
     while True:
-        if alert_type == "flash":
+        if alert_type in {"sale", "stock"}:
+            model = ProductPriceAlert if alert_type == "sale" else ProductStockAlert
+            async with session_factory() as session:
+                alert = await session.get(model, alert_id)
+                if alert is None or alert.status != "sending":
+                    return
+        else:
             async with session_factory() as session:
                 async with session.begin():
                     campaign = await session.scalar(
@@ -849,7 +855,7 @@ async def _claim_sale_alert(
             ):
                 alert.status = "superseded"
                 continue
-            if product.external_stock <= 0:
+            if product.force_out_of_stock or product.external_stock <= 0:
                 continue
 
             recipient_count = await _ensure_product_alert_deliveries(
@@ -969,6 +975,7 @@ async def _claim_stock_alert(
             if (
                 not product.active
                 or product.fulfillment_source != alert.provider
+                or product.force_out_of_stock
                 or product.external_stock <= 0
                 or not stock_alert_enabled(product)
             ):
