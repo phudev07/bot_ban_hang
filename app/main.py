@@ -958,6 +958,38 @@ async def rentsim_otp_worker(
         await asyncio.sleep(max(2, poll_seconds))
 
 
+async def wait_for_server_started(
+    server: uvicorn.Server,
+    server_task: asyncio.Task[None],
+    *,
+    timeout_seconds: float = 10.0,
+) -> None:
+    deadline = asyncio.get_running_loop().time() + max(1.0, timeout_seconds)
+    while not server.started:
+        if server_task.done():
+            await server_task
+            raise RuntimeError("Web server stopped before startup completed")
+        if asyncio.get_running_loop().time() >= deadline:
+            raise TimeoutError("Web server did not start within the expected time")
+        await asyncio.sleep(0.05)
+
+
+async def startup_maintenance_worker(session_factory) -> None:
+    try:
+        matched_refunds = await reconcile_historical_supplier_refunds(session_factory)
+        if matched_refunds:
+            logging.getLogger(__name__).warning(
+                "Matched historical Le Hai refunds: audits=%s",
+                matched_refunds,
+            )
+    except Exception:
+        logging.getLogger(__name__).exception("Could not reconcile historical supplier refunds")
+    try:
+        await backfill_stock_alert_messages(session_factory)
+    except Exception:
+        logging.getLogger(__name__).exception("Could not backfill stock alert messages")
+
+
 async def main() -> None:
     settings = get_settings()
     logging.basicConfig(
@@ -977,35 +1009,9 @@ async def main() -> None:
     await initialize_database(engine, session_factory, settings.seed_demo_data)
     await ensure_sumistore_product(session_factory, settings)
     supplier_client = create_sumistore_client(settings)
-    await sync_sumistore_products(session_factory, supplier_client)
     await ensure_lehai_products(session_factory, settings)
     lehai_client = create_lehai_client(settings)
-    await sync_lehai_products(session_factory, lehai_client)
-    matched_refunds = await reconcile_historical_supplier_refunds(session_factory)
-    if matched_refunds:
-        logging.getLogger(__name__).warning(
-            "Matched historical Le Hai refunds: audits=%s",
-            matched_refunds,
-        )
-    await backfill_stock_alert_messages(session_factory)
     rentsim_client = create_rentsim_client(settings)
-    if supplier_client is not None:
-        try:
-            await reconcile_supplier_balance(session_factory, supplier_client)
-        except Exception:
-            logging.getLogger(__name__).exception("Could not initialize supplier balance audit")
-    if lehai_client is not None:
-        try:
-            await reconcile_supplier_balance(
-                session_factory,
-                lehai_client,
-                provider="lehai",
-                provider_label="Lê Hải Premium",
-            )
-        except Exception:
-            logging.getLogger(__name__).exception(
-                "Could not initialize Le Hai Premium balance audit"
-            )
 
     cipher = SecretCipher(settings.inventory_encryption_key.get_secret_value())
     bot = Bot(
@@ -1021,27 +1027,6 @@ async def main() -> None:
         if notification_token
         else None
     )
-    customer_commands = [
-        BotCommand(command="start", description="Mở menu chính"),
-        BotCommand(command="muanhanh", description="Mua nhanh sản phẩm"),
-        BotCommand(command="naptien", description="Nạp tiền tự động"),
-        BotCommand(command="donmua", description="Xem đơn đã mua"),
-        BotCommand(command="hoso", description="Xem hồ sơ và số dư"),
-        BotCommand(command="donchat", description="Dọn chat và mở menu mới"),
-        BotCommand(command="hotro", description="Liên hệ hỗ trợ"),
-    ]
-    await bot.set_my_commands(customer_commands)
-    admin_commands = [
-        *customer_commands,
-        BotCommand(command="admin", description="Mở bảng quản trị Telegram"),
-        BotCommand(command="products", description="Xem sản phẩm và tồn kho"),
-        BotCommand(command="thongbao", description="Gửi thông báo tới khách hàng"),
-    ]
-    for admin_id in settings.admin_ids:
-        await bot.set_my_commands(
-            admin_commands,
-            scope=BotCommandScopeChat(chat_id=admin_id),
-        )
     storage = RedisStorage.from_url(settings.redis_url)
     dispatcher = Dispatcher(storage=storage)
     dispatcher.update.outer_middleware(BotSpamProtectionMiddleware(storage.redis, settings))
@@ -1071,6 +1056,36 @@ async def main() -> None:
         )
     )
     api_task = asyncio.create_task(server.serve())
+    await wait_for_server_started(server, api_task)
+
+    customer_commands = [
+        BotCommand(command="start", description="Mở menu chính"),
+        BotCommand(command="muanhanh", description="Mua nhanh sản phẩm"),
+        BotCommand(command="naptien", description="Nạp tiền tự động"),
+        BotCommand(command="donmua", description="Xem đơn đã mua"),
+        BotCommand(command="hoso", description="Xem hồ sơ và số dư"),
+        BotCommand(command="donchat", description="Dọn chat và mở menu mới"),
+        BotCommand(command="hotro", description="Liên hệ hỗ trợ"),
+    ]
+    try:
+        await bot.set_my_commands(customer_commands)
+        admin_commands = [
+            *customer_commands,
+            BotCommand(command="admin", description="Mở bảng quản trị Telegram"),
+            BotCommand(command="products", description="Xem sản phẩm và tồn kho"),
+            BotCommand(command="thongbao", description="Gửi thông báo tới khách hàng"),
+        ]
+        for admin_id in settings.admin_ids:
+            await bot.set_my_commands(
+                admin_commands,
+                scope=BotCommandScopeChat(chat_id=admin_id),
+            )
+    except Exception:
+        logging.getLogger(__name__).exception("Could not configure Telegram bot commands")
+
+    startup_maintenance_task = asyncio.create_task(
+        startup_maintenance_worker(session_factory)
+    )
     payment_expiry_task = asyncio.create_task(
         payment_expiry_worker(
             session_factory,
@@ -1179,6 +1194,9 @@ async def main() -> None:
         await bot.delete_webhook(drop_pending_updates=False)
         await dispatcher.start_polling(bot)
     finally:
+        startup_maintenance_task.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await startup_maintenance_task
         broadcast_task.cancel()
         with contextlib.suppress(asyncio.CancelledError):
             await broadcast_task
