@@ -968,7 +968,12 @@ async def main() -> None:
     logging.getLogger("httpx").setLevel(logging.WARNING)
     logging.getLogger("httpcore").setLevel(logging.WARNING)
 
-    engine, session_factory = create_database(settings.database_url)
+    engine, session_factory = create_database(
+        settings.database_url,
+        pool_size=settings.database_pool_size,
+        max_overflow=settings.database_max_overflow,
+        pool_timeout=settings.database_pool_timeout_seconds,
+    )
     await initialize_database(engine, session_factory, settings.seed_demo_data)
     await ensure_sumistore_product(session_factory, settings)
     supplier_client = create_sumistore_client(settings)

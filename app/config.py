@@ -10,6 +10,9 @@ class Settings(BaseSettings):
 
     bot_token: SecretStr
     database_url: str = "postgresql+asyncpg://shop:change_me@postgres:5432/shop"
+    database_pool_size: int = 10
+    database_max_overflow: int = 10
+    database_pool_timeout_seconds: float = 8.0
     redis_url: str = "redis://redis:6379/0"
     admin_ids_text: str = Field(default="", validation_alias="ADMIN_IDS")
     deposit_notification_bot_token: SecretStr = SecretStr("")
@@ -118,6 +121,10 @@ class Settings(BaseSettings):
 
     @model_validator(mode="after")
     def validate_sepay_configuration(self) -> "Settings":
+        if self.database_pool_size < 1 or self.database_max_overflow < 0:
+            raise ValueError("Database pool configuration is invalid")
+        if self.database_pool_timeout_seconds < 1:
+            raise ValueError("Database pool timeout must be at least one second")
         if self.sepay_enabled:
             if not all((self.bank_code, self.bank_account, self.bank_account_name)):
                 raise ValueError("SePay is enabled but bank details are missing")

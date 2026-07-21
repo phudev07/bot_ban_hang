@@ -19,6 +19,18 @@ def base_settings(**overrides):
 def test_bot_can_start_with_sepay_disabled() -> None:
     settings = base_settings()
     assert settings.sepay_enabled is False
+    assert settings.database_pool_size == 10
+    assert settings.database_max_overflow == 10
+    assert settings.database_pool_timeout_seconds == 8
+
+
+def test_database_pool_configuration_is_bounded() -> None:
+    with pytest.raises(ValidationError):
+        base_settings(database_pool_size=0)
+    with pytest.raises(ValidationError):
+        base_settings(database_max_overflow=-1)
+    with pytest.raises(ValidationError):
+        base_settings(database_pool_timeout_seconds=0.5)
 
 
 def test_enabled_sepay_requires_bank_configuration() -> None:

@@ -12,6 +12,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.chat_cleanup import delete_recent_messages
 from app.config import Settings
+from app.database import release_session_connection
 from app.delivery import (
     delivery_file,
     delivery_keyboard,
@@ -757,6 +758,9 @@ def create_router(
         fulfillment_source = await session.scalar(
             select(Product.fulfillment_source).where(Product.id == product_id)
         )
+        # The purchase service opens its own transaction. Do not hold the
+        # middleware connection while waiting for a supplier or another buyer.
+        await release_session_connection(session)
         if fulfillment_source in EXTERNAL_FULFILLMENT_SOURCES:
             await show_fulfillment_started(user.telegram_id, user.language)
         try:

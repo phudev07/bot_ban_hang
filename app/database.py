@@ -18,9 +18,28 @@ class Base(DeclarativeBase):
 
 def create_database(
     database_url: str,
+    *,
+    pool_size: int = 10,
+    max_overflow: int = 10,
+    pool_timeout: float = 8.0,
 ) -> tuple[AsyncEngine, async_sessionmaker[AsyncSession]]:
-    engine = create_async_engine(database_url, pool_pre_ping=True)
+    engine = create_async_engine(
+        database_url,
+        pool_pre_ping=True,
+        pool_size=max(1, int(pool_size)),
+        max_overflow=max(0, int(max_overflow)),
+        pool_timeout=max(1.0, float(pool_timeout)),
+        pool_use_lifo=True,
+    )
     return engine, async_sessionmaker(engine, expire_on_commit=False)
+
+
+async def release_session_connection(session: AsyncSession) -> None:
+    """Release a read transaction before a handler starts long-running external work."""
+    if session.in_transaction():
+        if session.new or session.dirty or session.deleted:
+            raise RuntimeError("Cannot release a session that has pending database changes")
+        await session.commit()
 
 
 class DatabaseSessionMiddleware(BaseMiddleware):
