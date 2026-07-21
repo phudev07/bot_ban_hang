@@ -5,13 +5,14 @@ import json
 import os
 import secrets
 import time
+from datetime import UTC, datetime
 
 import httpx
-from sqlalchemy import func, select
+from sqlalchemy import delete, func, select
 
 from app.config import Settings
 from app.database import create_database
-from app.models import ApiClient, Product
+from app.models import ApiClient, ApiRequestAudit, Product
 from app.suppliers import SELLABLE_FULFILLMENT_SOURCES
 from app.utils import SecretCipher
 
@@ -63,6 +64,8 @@ async def main() -> None:
         pool_timeout=5,
     )
     cipher = SecretCipher(settings.inventory_encryption_key.get_secret_value())
+    smoke_started_at = datetime.now(UTC)
+    api_client_id: int | None = None
     try:
         async with sessions() as session:
             api_client = await session.scalar(
@@ -88,6 +91,7 @@ async def main() -> None:
         if api_client is None:
             raise RuntimeError("No active unrestricted API client is available for smoke testing")
 
+        api_client_id = api_client.id
         api_secret = cipher.decrypt(api_client.encrypted_secret)
         base_url = os.environ.get("SHOP_API_SMOKE_BASE_URL", "http://app:8080")
         async with httpx.AsyncClient(base_url=base_url, timeout=20, trust_env=False) as client:
@@ -152,6 +156,16 @@ async def main() -> None:
 
         print(f"Warehouse API production smoke passed: products={expected_products}")
     finally:
+        if api_client_id is not None:
+            async with sessions() as session:
+                await session.execute(
+                    delete(ApiRequestAudit).where(
+                        ApiRequestAudit.api_client_id == api_client_id,
+                        ApiRequestAudit.created_at >= smoke_started_at,
+                        ApiRequestAudit.client_ip.like("172.%"),
+                    )
+                )
+                await session.commit()
         await engine.dispose()
 
 
