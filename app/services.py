@@ -1,4 +1,5 @@
 import asyncio
+import hashlib
 import logging
 import secrets
 from collections.abc import Awaitable, Callable
@@ -109,6 +110,20 @@ async def buy_supplier_product(
 ) -> SupplierPurchase:
     provider = getattr(client, "provider", "sumistore")
     request_key = idempotency_key or f"shop-{secrets.token_hex(16)}"
+    if provider == "sumistore":
+        recovery_key = (
+            request_key
+            if len(request_key) <= 96
+            else hashlib.sha256(request_key.encode()).hexdigest()
+        )
+        pending_recovery = await session.scalar(
+            select(SupplierRecoveryRequest.id).where(
+                SupplierRecoveryRequest.request_key == recovery_key,
+                SupplierRecoveryRequest.status == "pending",
+            )
+        )
+        if pending_recovery is not None:
+            raise SupplierError("SUPPLIER_RECOVERY_PENDING")
     product_db_id = await session.scalar(
         select(Product.id).where(
             Product.fulfillment_source == provider,
@@ -222,29 +237,6 @@ async def _execute_supplier_purchase(
     idempotency_key: str | None = None,
 ) -> SupplierPurchase:
     provider = getattr(client, "provider", "sumistore")
-    known_order_codes = set(
-        await session.scalars(
-            select(SupplierBalanceTransaction.supplier_order_code).where(
-                SupplierBalanceTransaction.provider == provider,
-                SupplierBalanceTransaction.supplier_order_code.is_not(None),
-            )
-        )
-    )
-    known_order_codes.update(
-        await session.scalars(
-            select(InventoryItem.supplier_order_code).where(
-                InventoryItem.supplier_order_code.is_not(None)
-            )
-        )
-    )
-    known_order_codes.update(
-        await session.scalars(
-            select(SupplierRecoveryRequest.supplier_order_code).where(
-                SupplierRecoveryRequest.provider == provider,
-                SupplierRecoveryRequest.supplier_order_code.is_not(None),
-            )
-        )
-    )
     started_at = datetime.now(UTC)
     try:
         if provider == "sumistore":
@@ -301,6 +293,32 @@ async def _execute_supplier_purchase(
         recover_recent_purchase = getattr(client, "recover_recent_purchase", None)
         if recover_recent_purchase is None:
             raise
+        # Building the known-order set can grow with the lifetime of the shop.
+        # It is only needed after an ambiguous Sumi response, not on every
+        # successful Sumi purchase or any idempotent Le Hai request.
+        known_order_codes = set(
+            await session.scalars(
+                select(SupplierBalanceTransaction.supplier_order_code).where(
+                    SupplierBalanceTransaction.provider == provider,
+                    SupplierBalanceTransaction.supplier_order_code.is_not(None),
+                )
+            )
+        )
+        known_order_codes.update(
+            await session.scalars(
+                select(InventoryItem.supplier_order_code).where(
+                    InventoryItem.supplier_order_code.is_not(None)
+                )
+            )
+        )
+        known_order_codes.update(
+            await session.scalars(
+                select(SupplierRecoveryRequest.supplier_order_code).where(
+                    SupplierRecoveryRequest.provider == provider,
+                    SupplierRecoveryRequest.supplier_order_code.is_not(None),
+                )
+            )
+        )
         try:
             recovered = await recover_recent_purchase(
                 product_id,
@@ -691,6 +709,7 @@ async def purchase_product(
     on_fulfillment_started: FulfillmentStartedCallback | None = None,
     supplier_idempotency_key: str | None = None,
     expected_flash_sale_id: int | None = None,
+    max_unit_price: int | None = None,
 ) -> PurchaseResult:
     async with session_factory() as session:
         fulfillment_source = await session.scalar(
@@ -720,6 +739,7 @@ async def purchase_product(
                 on_fulfillment_started=on_fulfillment_started,
                 supplier_idempotency_key=supplier_idempotency_key,
                 expected_flash_sale_id=expected_flash_sale_id,
+                max_unit_price=max_unit_price,
             )
     return await _purchase_product(
         session_factory,
@@ -738,6 +758,7 @@ async def purchase_product(
         on_fulfillment_started=on_fulfillment_started,
         supplier_idempotency_key=supplier_idempotency_key,
         expected_flash_sale_id=expected_flash_sale_id,
+        max_unit_price=max_unit_price,
     )
 
 
@@ -759,6 +780,7 @@ async def _purchase_product(
     on_fulfillment_started: FulfillmentStartedCallback | None,
     supplier_idempotency_key: str | None,
     expected_flash_sale_id: int | None,
+    max_unit_price: int | None,
 ) -> PurchaseResult:
     async with session_factory() as session:
         async with session.begin():
@@ -831,6 +853,16 @@ async def _purchase_product(
                 and flash_sale_remaining(pricing.flash_sale) < quantity
             ):
                 return PurchaseResult(False, "out_of_stock")
+            if max_unit_price is not None and pricing.final_unit_price > max_unit_price:
+                return PurchaseResult(
+                    False,
+                    "price_changed",
+                    total_amount=pricing.final_unit_price * quantity,
+                    discount_amount=pricing.discount_per_unit * quantity,
+                    coupon_code=pricing.coupon.code if pricing.coupon else None,
+                    quantity_discount_percent=pricing.quantity_discount_percent,
+                    flash_sale_id=(pricing.flash_sale.id if pricing.flash_sale else None),
+                )
             total_amount = pricing.final_unit_price * quantity
             total_discount = pricing.discount_per_unit * quantity
             if user.balance < total_amount:

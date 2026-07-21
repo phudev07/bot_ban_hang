@@ -89,7 +89,7 @@ Vi du Python tao chu ky:
 import hashlib
 import hmac
 
-body = b'{"product_id":1,"quantity":2}'
+body = b'{"product_id":1,"quantity":2,"max_unit_price":20000}'
 canonical = "|".join(
     (timestamp, nonce, "POST", "/v1/orders", hashlib.sha256(body).hexdigest())
 )
@@ -103,8 +103,13 @@ Khong tai su dung key do cho payload khac.
 Body dat hang:
 
 ```json
-{"product_id": 1, "quantity": 2, "coupon_code": "SALE10"}
+{"product_id": 1, "quantity": 2, "max_unit_price": 20000, "coupon_code": "SALE10"}
 ```
+
+`max_unit_price` bat buoc va nen lay truc tiep tu truong `price` cua catalog.
+Neu gia shop tang trong luc doi tac dat don, API tra `409 PRICE_CHANGED` thay vi
+tu dong mua cao hon muc doi tac chap nhan. Gia catalog la gia ban cua shop da
+gom markup, khong phai gia von nha cung cap.
 
 He thong khoa dong vi, khoa ton kho local bang `FOR UPDATE SKIP LOCKED`, khoa
 luong mua theo tung nha cung cap va co unique idempotency trong PostgreSQL.

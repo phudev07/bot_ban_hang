@@ -1,5 +1,6 @@
 import hashlib
 import hmac
+import ipaddress
 import secrets
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -31,6 +32,25 @@ async def ensure_referral_code(session: AsyncSession, user: User) -> str:
 
 def generate_api_credentials() -> tuple[str, str]:
     return f"VS{secrets.token_hex(8).upper()}", f"vs_live_{secrets.token_urlsafe(32)}"
+
+
+def normalize_allowed_ips(value: str, *, max_addresses: int = 64) -> str:
+    addresses: list[str] = []
+    seen: set[str] = set()
+    for raw_value in value.replace("\n", ",").split(","):
+        candidate = raw_value.strip()
+        if not candidate:
+            continue
+        try:
+            normalized = str(ipaddress.ip_address(candidate))
+        except ValueError as exc:
+            raise ValueError(f"Invalid IP address: {candidate}") from exc
+        if normalized not in seen:
+            seen.add(normalized)
+            addresses.append(normalized)
+        if len(addresses) > max_addresses:
+            raise ValueError(f"At most {max_addresses} IP addresses are allowed")
+    return ",".join(addresses)
 
 
 async def ensure_api_client(

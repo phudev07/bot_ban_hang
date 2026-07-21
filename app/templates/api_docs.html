@@ -352,7 +352,7 @@
 nonce    = "a06f8c44d0fe01a4c25028df"
 method   = "POST"
 path     = "/v1/orders"
-body     = {"product_id":1,"quantity":2}
+body     = {"product_id":1,"quantity":2,"max_unit_price":25000}
 
 body_hash = sha256(body)
 canonical = timestamp|nonce|POST|/v1/orders|body_hash
@@ -380,7 +380,7 @@ signature = hmac_sha256(API_SECRET, canonical)</pre>
 
         <section class="section" id="san-pham">
           <div class="section-head"><div><span class="section-number">04</span><h2>Sản phẩm, giá và tồn kho</h2></div></div>
-          <p><code>GET /v1/products</code> trả danh mục tài khoản đang bán. Giá là số nguyên VND. Với hàng đấu nguồn, giá bán được đồng bộ động theo giá vốn hiện tại cộng phần chênh của shop.</p>
+          <p><code>GET /v1/products</code> trả danh mục tài khoản đang bán. Giá là số nguyên VND và là <strong>giá bán của VietShare đã gồm phần chênh</strong>, không phải giá vốn nhà cung cấp. Với hàng đấu nguồn, giá này được cập nhật động theo giá vốn hiện tại cộng markup của shop.</p>
           <div class="code-wrap"><button class="copy" data-copy-target="products-response">Sao chép</button><pre id="products-response">{
   "count": 1,
   "products": [
@@ -407,7 +407,8 @@ signature = hmac_sha256(API_SECRET, canonical)</pre>
               <tr><td><code>max_quantity</code></td><td>integer</td><td>Số lượng tối đa trong một request.</td></tr>
             </tbody>
           </table>
-          <div class="note" style="margin-top:14px">Tồn kho có thể thay đổi giữa lúc đọc và lúc mua. Chỉ coi đơn thành công khi <code>POST /v1/orders</code> trả HTTP 200. HTTP 202 là đơn cần đối soát; hãy retry cùng payload và cùng <code>Idempotency-Key</code>, tuyệt đối không tạo key mới.</div>
+          <div class="note" style="margin-top:14px">Tồn kho và giá có thể thay đổi giữa lúc đọc và lúc mua. Luôn sao chép <code>price</code> từ catalog vào <code>max_unit_price</code>; nếu giá tăng, đơn sẽ dừng với <code>PRICE_CHANGED</code> thay vì mua cao hơn dự kiến. Chỉ coi đơn thành công khi <code>POST /v1/orders</code> trả HTTP 200.</div>
+          <div class="note good-note" style="margin-top:14px"><strong>Khuyến nghị đồng bộ 10-30 giây/lần.</strong> Không gọi catalog liên tục theo từng request của khách; hệ thống vẫn kiểm tra lại giá và tồn trong transaction mua.</div>
         </section>
 
         <section class="section" id="don-hang">
@@ -418,16 +419,17 @@ signature = hmac_sha256(API_SECRET, canonical)</pre>
             <tbody>
               <tr><td><code>product_id</code></td><td class="required">Có</td><td>integer</td><td>ID sản phẩm từ catalog.</td></tr>
               <tr><td><code>quantity</code></td><td>Không</td><td>integer</td><td>Mặc định 1; tối đa theo sản phẩm và không quá 100.</td></tr>
+              <tr><td><code>max_unit_price</code></td><td class="required">Có</td><td>integer</td><td>Giá tối đa chấp nhận cho mỗi tài khoản. Gửi <code>price</code> vừa đọc từ catalog.</td></tr>
               <tr><td><code>coupon_code</code></td><td>Không</td><td>string</td><td>Mã giảm giá dành riêng cho sản phẩm, tối đa 64 ký tự.</td></tr>
               <tr><td><code>flash_sale_id</code></td><td>Không</td><td>integer</td><td>ID từ catalog. Nên gửi khi khác null để đơn thất bại an toàn nếu Flash Sale vừa hết hoặc giá vốn tăng.</td></tr>
             </tbody>
           </table>
-          <p style="margin-top:16px"><strong>Header riêng bắt buộc:</strong> <code>Idempotency-Key</code> dài 8-128 ký tự.</p>
+          <p style="margin-top:16px"><strong>Header riêng bắt buộc:</strong> <code>Idempotency-Key</code> dài 8-128 ký tự, chỉ gồm chữ, số và <code>._:-</code>.</p>
           <div class="code-wrap"><button class="copy" data-copy-target="order-request">Sao chép</button><pre id="order-request">POST /v1/orders
 Idempotency-Key: reseller-order-20260718-00001
 Content-Type: application/json
 
-{"product_id":7,"quantity":2,"flash_sale_id":123}</pre></div>
+{"product_id":7,"quantity":2,"max_unit_price":25000,"flash_sale_id":123}</pre></div>
           <div class="code-wrap"><button class="copy" data-copy-target="order-response">Sao chép</button><pre id="order-response">{
   "success": true,
   "order": {
@@ -436,12 +438,14 @@ Content-Type: application/json
     "channel": "api",
     "product": {"id": 7, "name": "Tài khoản mẫu"},
     "quantity": 2,
+    "unit_price": 22500,
     "total_amount": 45000,
     "discount_amount": 5000,
     "accounts": [
       "email1@example.com|password1",
       "email2@example.com|password2"
     ],
+    "idempotency_key": "reseller-order-20260718-00001",
     "created_at": "2026-07-18T03:15:22+00:00",
     "delivered_at": "2026-07-18T03:15:22+00:00"
   }
@@ -505,7 +509,11 @@ def call_api(method, endpoint, payload=None, idempotency_key=None):
 
 catalog = call_api("GET", "/products")
 product = catalog["products"][0]
-payload = {"product_id": product["id"], "quantity": 1}
+payload = {
+    "product_id": product["id"],
+    "quantity": 1,
+    "max_unit_price": product["price"],
+}
 if product.get("flash_sale_id"):
     payload["flash_sale_id"] = product["flash_sale_id"]
 order = call_api(
@@ -556,7 +564,11 @@ async function callApi(method, endpoint, payload = null, idempotencyKey = null) 
 
 const catalog = await callApi("GET", "/products");
 const product = catalog.products[0];
-const payload = {product_id: product.id, quantity: 1};
+const payload = {
+  product_id: product.id,
+  quantity: 1,
+  max_unit_price: product.price,
+};
 if (product.flash_sale_id) payload.flash_sale_id = product.flash_sale_id;
 const order = await callApi(
   "POST",
@@ -573,12 +585,14 @@ console.log(order);</pre></div>
           <table class="error-table">
             <thead><tr><th>HTTP</th><th>Code phổ biến</th><th>Cách xử lý</th></tr></thead>
             <tbody>
-              <tr><td>400</td><td><code>INVALID_IDEMPOTENCY_KEY</code><br><code>INVALID_COUPON</code><br><code>INVALID_QUANTITY</code></td><td>Sửa dữ liệu request rồi gửi lại với key mới.</td></tr>
+              <tr><td>400</td><td><code>INVALID_IDEMPOTENCY_KEY</code><br><code>MAX_UNIT_PRICE_REQUIRED</code><br><code>INVALID_COUPON</code><br><code>INVALID_QUANTITY</code></td><td>Sửa dữ liệu request rồi gửi lại với key mới.</td></tr>
               <tr><td>401</td><td><code>AUTH_REQUIRED</code><br><code>INVALID_API_ID</code><br><code>INVALID_SIGNATURE</code><br><code>EXPIRED_REQUEST</code></td><td>Kiểm tra credentials, đồng hồ máy chủ và canonical string.</td></tr>
-              <tr><td>402</td><td><code>INSUFFICIENT</code></td><td>Nạp thêm số dư vào ví Telegram.</td></tr>
+              <tr><td>402</td><td><code>INSUFFICIENT</code></td><td>Nạp thêm số dư vào ví Telegram, sau đó tạo request mới với Idempotency-Key mới.</td></tr>
               <tr><td>403</td><td><code>API_CLIENT_BLOCKED</code><br><code>IP_NOT_ALLOWED</code><br><code>BLOCKED</code></td><td>Mở lại API trong bot hoặc liên hệ admin.</td></tr>
               <tr><td>404</td><td><code>PRODUCT_NOT_FOUND</code><br><code>ORDER_NOT_FOUND</code></td><td>Đồng bộ lại catalog hoặc kiểm tra mã đơn thuộc đúng API client.</td></tr>
-              <tr><td>409</td><td><code>OUT_OF_STOCK</code><br><code>REPLAYED_REQUEST</code><br><code>IDEMPOTENCY_MISMATCH</code><br><code>REQUEST_IN_PROGRESS</code></td><td>Đọc lại tồn; dùng nonce mới; giữ nguyên payload khi retry đơn.</td></tr>
+              <tr><td>409</td><td><code>OUT_OF_STOCK</code><br><code>PRICE_CHANGED</code></td><td>Đọc lại giá/tồn; nếu muốn đặt lại thì tạo payload và Idempotency-Key mới.</td></tr>
+              <tr><td>409</td><td><code>REPLAYED_REQUEST</code><br><code>IDEMPOTENCY_MISMATCH</code><br><code>REQUEST_IN_PROGRESS</code></td><td>Dùng nonce mới. Riêng <code>REQUEST_IN_PROGRESS</code> phải giữ nguyên payload và Idempotency-Key rồi chờ theo <code>Retry-After</code>.</td></tr>
+              <tr><td>422</td><td><code>Request validation</code></td><td>Kiểm tra đúng kiểu dữ liệu và tên trường; API từ chối trường JSON không được tài liệu định nghĩa.</td></tr>
               <tr><td>429</td><td><code>RATE_LIMITED</code></td><td>Giảm tần suất và retry có backoff.</td></tr>
               <tr><td>503</td><td><code>SUPPLIER_UNAVAILABLE</code><br><code>AUTH_STORE_UNAVAILABLE</code></td><td>Retry sau; không tự coi đơn là thành công.</td></tr>
             </tbody>
@@ -593,7 +607,7 @@ console.log(order);</pre></div>
             <article class="rule"><strong>Nonce mới mỗi request</strong><span>Không dùng lại nonce, kể cả khi retry cùng một Idempotency-Key.</span></article>
             <article class="rule"><strong>Lưu đơn của bạn</strong><span>Lưu Idempotency-Key và order_code để đối soát và lấy lại tài khoản khi mất kết nối.</span></article>
             <article class="rule"><strong>Bảo vệ dữ liệu giao hàng</strong><span>Response chứa tài khoản thật. Không log plaintext lâu dài và không gửi sang dịch vụ phân tích bên thứ ba.</span></article>
-            <article class="rule"><strong>Chỉ tin HTTP 200</strong><span>Khi timeout hoặc nhận HTTP 202, gọi lại bằng cùng Idempotency-Key. Không tạo đơn mới bằng key khác.</span></article>
+            <article class="rule"><strong>Chỉ tin HTTP 200</strong><span>Khi timeout hoặc nhận HTTP 202, đọc <code>Retry-After</code> rồi gọi lại bằng cùng Idempotency-Key, cùng payload nhưng nonce/chữ ký mới.</span></article>
           </div>
           <div class="note good-note" style="margin-top:14px">Hệ thống khóa ví theo user, khóa tồn local bằng PostgreSQL, tuần tự hóa luồng mua nguồn và dùng unique idempotency. Nhiều đối tác mua đồng thời không được nhận trùng cùng tài khoản.</div>
         </section>

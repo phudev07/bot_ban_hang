@@ -47,6 +47,7 @@ from app.models import (
     User,
     WalletTransaction,
 )
+from app.partner_services import normalize_allowed_ips
 from app.rentsim import RentSimClient
 from app.services import approve_wallet_deposit
 from app.sms_rentals import sms_availability
@@ -3315,6 +3316,7 @@ def create_dashboard_router(
                 clients=rows,
                 stats=stats,
                 api_base_url=settings.shop_api_base_url,
+                api_audit_retention_days=settings.shop_api_audit_retention_days,
                 query=q,
                 status=selected_status,
                 pager=pager,
@@ -3337,14 +3339,6 @@ def create_dashboard_router(
             return redirect_to_login()
         if not valid_csrf(request, csrf):
             return RedirectResponse("/admin/api-clients", status_code=303)
-        async with session_factory() as session:
-            client = await session.get(ApiClient, client_id)
-            if client is not None:
-                client.rate_limit_per_minute = max(1, min(rate_limit_per_minute, 10_000))
-                client.allowed_ips = allowed_ips.strip()[:2000]
-                client.admin_blocked = admin_blocked is not None
-                await session.commit()
-                flash(request, "Đã cập nhật API client.")
         selected_status = (
             return_status
             if return_status in {"all", "active", "paused", "blocked", "attention"}
@@ -3357,6 +3351,19 @@ def create_dashboard_router(
                 "page": max(1, return_page),
             }
         )
+        try:
+            normalized_allowed_ips = normalize_allowed_ips(allowed_ips)
+        except ValueError as exc:
+            flash(request, f"Không thể lưu API client: {exc}")
+            return RedirectResponse(f"/admin/api-clients?{query_string}", status_code=303)
+        async with session_factory() as session:
+            client = await session.get(ApiClient, client_id)
+            if client is not None:
+                client.rate_limit_per_minute = max(1, min(rate_limit_per_minute, 10_000))
+                client.allowed_ips = normalized_allowed_ips
+                client.admin_blocked = admin_blocked is not None
+                await session.commit()
+                flash(request, "Đã cập nhật API client.")
         return RedirectResponse(f"/admin/api-clients?{query_string}", status_code=303)
 
     @router.get("/admin/api-orders")

@@ -1028,10 +1028,24 @@ def test_external_purchase_queues_late_recovery_without_charging_user() -> None:
             cipher,
             2,
             supplier,  # type: ignore[arg-type]
+            supplier_idempotency_key="shop-api-pending-recovery",
+        )
+
+        repeated = await purchase_product(
+            sessions,
+            user.telegram_id,
+            product.id,
+            cipher,
+            2,
+            supplier,  # type: ignore[arg-type]
+            supplier_idempotency_key="shop-api-pending-recovery",
         )
 
         assert result.ok is False
         assert result.message == "supplier_unavailable"
+        assert repeated.ok is False
+        assert repeated.message == "supplier_unavailable"
+        assert supplier.buy_calls == 1
         async with sessions() as session:
             stored_user = await session.get(User, user.telegram_id)
             recovery = await session.scalar(select(SupplierRecoveryRequest))

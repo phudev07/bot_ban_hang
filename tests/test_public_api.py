@@ -4,6 +4,7 @@ import json
 import secrets
 import time
 from datetime import UTC, datetime, timedelta
+from pathlib import Path
 
 from cryptography.fernet import Fernet
 from fastapi.testclient import TestClient
@@ -16,6 +17,7 @@ from app.config import Settings
 from app.database import Base
 from app.models import (
     ApiOrderRequest,
+    ApiRequestAudit,
     Category,
     FlashSaleCampaign,
     InventoryItem,
@@ -73,6 +75,14 @@ def request_with_headers(headers: dict[str, str]) -> Request:
             "server": ("testserver", 443),
         }
     )
+
+
+def test_warehouse_api_origin_is_cloudflare_only_and_body_is_bounded() -> None:
+    caddyfile = Path("deploy/Caddyfile").read_text(encoding="utf-8")
+    token_site = caddyfile.split("token.vietshare.site", 1)[1]
+    assert "@direct_origin not remote_ip" in token_site
+    assert "respond @direct_origin 403" in token_site
+    assert "max_size 64KB" in token_site
 
 
 def test_client_ip_trusts_cloudflare_header_only_from_cloudflare() -> None:
@@ -210,7 +220,7 @@ def test_warehouse_api_purchases_from_shared_wallet_and_is_idempotent(tmp_path) 
     )
 
     body = json.dumps(
-        {"product_id": product_id, "quantity": 1},
+        {"product_id": product_id, "quantity": 1, "max_unit_price": 20_000},
         separators=(",", ":"),
     ).encode()
     with TestClient(app, base_url="https://testserver") as client:
@@ -223,6 +233,7 @@ def test_warehouse_api_purchases_from_shared_wallet_and_is_idempotent(tmp_path) 
         assert "https://token.vietshare.site/v1" in docs.text
         assert "Tạo QR nạp ví" not in docs.text
         assert "flash_sale_id" in docs.text
+        assert "max_unit_price" in docs.text
 
         docs_redirect = client.get("/v1/docs", follow_redirects=False)
         assert docs_redirect.status_code == 307
@@ -230,6 +241,7 @@ def test_warehouse_api_purchases_from_shared_wallet_and_is_idempotent(tmp_path) 
 
         information = client.get("/v1")
         assert information.status_code == 200
+        assert information.headers["cache-control"] == "no-store"
         assert information.json()["documentation"] == "https://token.vietshare.site/docs"
         assert all("deposits" not in endpoint for endpoint in information.json()["endpoints"])
 
@@ -241,6 +253,7 @@ def test_warehouse_api_purchases_from_shared_wallet_and_is_idempotent(tmp_path) 
             headers=signed_headers(api_id, api_secret, "GET", "/v1/catalog"),
         )
         assert products.status_code == 200
+        assert products.headers["cache-control"] == "no-store"
         assert products.json()["count"] == 1
         assert products.json()["products"][0]["stock"] == 2
         assert products.json()["products"][0]["flash_sale_id"] is None
@@ -254,7 +267,7 @@ def test_warehouse_api_purchases_from_shared_wallet_and_is_idempotent(tmp_path) 
             assert blocked_stock.json()["detail"]["code"] == "PRODUCT_NOT_FOUND"
 
         blocked_body = json.dumps(
-            {"product_id": sms_product_id, "quantity": 1},
+            {"product_id": sms_product_id, "quantity": 1, "max_unit_price": 2_000},
             separators=(",", ":"),
         ).encode()
         blocked_order = client.post(
@@ -272,6 +285,44 @@ def test_warehouse_api_purchases_from_shared_wallet_and_is_idempotent(tmp_path) 
         assert blocked_order.status_code == 404
         assert blocked_order.json()["detail"]["code"] == "PRODUCT_NOT_FOUND"
 
+        missing_price_body = json.dumps(
+            {"product_id": product_id, "quantity": 1},
+            separators=(",", ":"),
+        ).encode()
+        missing_price = client.post(
+            "/v1/orders",
+            content=missing_price_body,
+            headers=signed_headers(
+                api_id,
+                api_secret,
+                "POST",
+                "/v1/orders",
+                missing_price_body,
+                idempotency_key="ORDER-MISSING-PRICE",
+            ),
+        )
+        assert missing_price.status_code == 400
+        assert missing_price.json()["detail"]["code"] == "MAX_UNIT_PRICE_REQUIRED"
+
+        stale_price_body = json.dumps(
+            {"product_id": product_id, "quantity": 1, "max_unit_price": 19_000},
+            separators=(",", ":"),
+        ).encode()
+        stale_price = client.post(
+            "/v1/orders",
+            content=stale_price_body,
+            headers=signed_headers(
+                api_id,
+                api_secret,
+                "POST",
+                "/v1/orders",
+                stale_price_body,
+                idempotency_key="ORDER-STALE-PRICE",
+            ),
+        )
+        assert stale_price.status_code == 409
+        assert stale_price.json()["detail"]["code"] == "PRICE_CHANGED"
+
         first = client.post(
             "/v1/orders",
             content=body,
@@ -287,8 +338,10 @@ def test_warehouse_api_purchases_from_shared_wallet_and_is_idempotent(tmp_path) 
         assert first.status_code == 200
         order = first.json()["order"]
         assert order["channel"] == "api"
+        assert order["unit_price"] == 20_000
         assert order["total_amount"] == 20_000
         assert order["accounts"] == ["api-account-1|password"]
+        assert order["idempotency_key"] == "ORDER-CLIENT-0001"
 
         repeated = client.post(
             "/v1/orders",
@@ -306,7 +359,7 @@ def test_warehouse_api_purchases_from_shared_wallet_and_is_idempotent(tmp_path) 
         assert repeated.json()["order"]["order_code"] == order["order_code"]
 
         changed_body = json.dumps(
-            {"product_id": product_id, "quantity": 2},
+            {"product_id": product_id, "quantity": 2, "max_unit_price": 20_000},
             separators=(",", ":"),
         ).encode()
         mismatch = client.post(
@@ -346,11 +399,13 @@ def test_warehouse_api_purchases_from_shared_wallet_and_is_idempotent(tmp_path) 
             orders = list(await session.scalars(select(Order)))
             rewards = list(await session.scalars(select(ReferralReward)))
             requests = list(await session.scalars(select(ApiOrderRequest)))
+            audits = list(await session.scalars(select(ApiRequestAudit)))
             assert buyer is not None and buyer.balance == 30_000
             assert referrer is not None and referrer.balance == 1_000
             assert len(orders) == 1 and orders[0].sales_channel == "api"
             assert len(rewards) == 1 and rewards[0].commission_amount == 1_000
-            assert len(requests) == 1 and requests[0].status == "completed"
+            assert sorted(request.status for request in requests) == ["completed", "failed"]
+            assert audits and all(audit.api_client_id is not None for audit in audits)
             assert int(await session.scalar(select(func.count(InventoryItem.id))) or 0) == 2
         await engine.dispose()
 
@@ -439,7 +494,10 @@ def test_public_api_keeps_supplier_failure_in_review_and_retries_same_key(
         cipher,
         api_redis=FakeRedis(),  # type: ignore[arg-type]
     )
-    body = json.dumps({"product_id": product_id}, separators=(",", ":")).encode()
+    body = json.dumps(
+        {"product_id": product_id, "max_unit_price": 30_000},
+        separators=(",", ":"),
+    ).encode()
     with TestClient(app, base_url="https://testserver") as client:
         first = client.post(
             "/v1/orders",
@@ -455,6 +513,7 @@ def test_public_api_keeps_supplier_failure_in_review_and_retries_same_key(
         )
         assert first.status_code == 202
         assert first.json()["status"] == "review"
+        assert first.headers["retry-after"] == "10"
 
         second = client.post(
             "/v1/orders",
@@ -635,6 +694,7 @@ def test_stale_processing_idempotency_request_can_be_retried(tmp_path) -> None:
                     {
                         "coupon_code": None,
                         "flash_sale_id": None,
+                        "max_unit_price": 10_000,
                         "product_id": product.id,
                         "quantity": 1,
                     },
@@ -672,7 +732,10 @@ def test_stale_processing_idempotency_request_can_be_retried(tmp_path) -> None:
         cipher,
         api_redis=FakeRedis(),  # type: ignore[arg-type]
     )
-    body = json.dumps({"product_id": product_id, "quantity": 1}, separators=(",", ":")).encode()
+    body = json.dumps(
+        {"product_id": product_id, "quantity": 1, "max_unit_price": 10_000},
+        separators=(",", ":"),
+    ).encode()
     with TestClient(app, base_url="https://testserver") as client:
         response = client.post(
             "/v1/orders",

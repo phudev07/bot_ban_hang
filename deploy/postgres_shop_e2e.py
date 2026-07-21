@@ -509,7 +509,12 @@ async def main() -> None:
         assert repeated_audit.suspicious_amount == 0
 
         order_body = json.dumps(
-            {"product_id": ids["bulk"], "quantity": 1, "coupon_code": None},
+            {
+                "product_id": ids["bulk"],
+                "quantity": 1,
+                "coupon_code": None,
+                "max_unit_price": 20_000,
+            },
             separators=(",", ":"),
         ).encode()
         idempotency_key = "E2E-API-ORDER-0001"
@@ -558,7 +563,12 @@ async def main() -> None:
         assert repeated_api.json()["order"]["order_code"] == api_order_code
 
         mismatch_body = json.dumps(
-            {"product_id": ids["bulk"], "quantity": 2, "coupon_code": None},
+            {
+                "product_id": ids["bulk"],
+                "quantity": 2,
+                "coupon_code": None,
+                "max_unit_price": 20_000,
+            },
             separators=(",", ":"),
         ).encode()
         api_mismatch = await client.post(
@@ -577,7 +587,12 @@ async def main() -> None:
         assert api_mismatch.json()["detail"]["code"] == "IDEMPOTENCY_MISMATCH"
 
         expensive_body = json.dumps(
-            {"product_id": ids["expensive"], "quantity": 1, "coupon_code": None},
+            {
+                "product_id": ids["expensive"],
+                "quantity": 1,
+                "coupon_code": None,
+                "max_unit_price": 999_999,
+            },
             separators=(",", ":"),
         ).encode()
         insufficient = await client.post(
@@ -595,7 +610,12 @@ async def main() -> None:
         assert insufficient.status_code == 402
 
         empty_body = json.dumps(
-            {"product_id": ids["empty"], "quantity": 1, "coupon_code": None},
+            {
+                "product_id": ids["empty"],
+                "quantity": 1,
+                "coupon_code": None,
+                "max_unit_price": 10_000,
+            },
             separators=(",", ":"),
         ).encode()
         out_of_stock = await client.post(

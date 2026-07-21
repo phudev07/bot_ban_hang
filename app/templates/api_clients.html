@@ -71,7 +71,7 @@
       <div class="api-client-kpis">
         <div><span>Số dư ví</span><strong>{{ user.balance|vnd }}</strong></div>
         <div><span>Đơn API</span><strong>{{ row.order_count }}</strong><small>{{ row.revenue|vnd }}</small></div>
-        <div><span>Request 24h</span><strong>{{ row.recent_request_count }}</strong><small>{{ row.request_count }} toàn thời gian</small></div>
+        <div><span>Request 24h</span><strong>{{ row.recent_request_count }}</strong><small>{{ row.request_count }} trong {{ api_audit_retention_days }} ngày lưu log</small></div>
         <div class="{{ 'kpi-danger' if row.recent_error_count else '' }}"><span>Lỗi 24h</span><strong>{{ row.recent_error_count }}</strong><small>{{ row.success_rate ~ '% thành công' if row.success_rate is not none else 'Chưa có dữ liệu' }}</small></div>
         <div><span>Độ trễ TB</span><strong>{{ row.average_duration_ms }}ms</strong><small>Trong 24 giờ</small></div>
         <div><span>Request cuối</span><strong class="small-value">{{ row.last_request_at|localtime }}</strong><small>Secret v{{ client.secret_version }}</small></div>

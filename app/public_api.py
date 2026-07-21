@@ -3,6 +3,7 @@ import hmac
 import ipaddress
 import json
 import logging
+import re
 import time
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
@@ -11,7 +12,7 @@ from pathlib import Path
 from fastapi import APIRouter, Depends, Header, HTTPException, Request
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 from redis.asyncio import Redis
 from redis.exceptions import RedisError
 from sqlalchemy import func, select
@@ -44,6 +45,10 @@ from app.utils import SecretCipher
 templates = Jinja2Templates(directory=Path(__file__).parent / "templates")
 logger = logging.getLogger(__name__)
 API_PROCESSING_RECOVERY_AFTER = timedelta(minutes=15)
+API_ID_PATTERN = re.compile(r"^VS[0-9A-F]{16}$")
+API_SIGNATURE_PATTERN = re.compile(r"^[0-9a-fA-F]{64}$")
+API_NONCE_PATTERN = re.compile(r"^[A-Za-z0-9._~:-]{12,128}$")
+IDEMPOTENCY_KEY_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{7,127}$")
 
 
 CLOUDFLARE_NETWORKS = tuple(
@@ -76,10 +81,13 @@ CLOUDFLARE_NETWORKS = tuple(
 
 
 class ApiOrderBody(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     product_id: int
     quantity: int = Field(default=1, ge=1, le=100)
     coupon_code: str | None = Field(default=None, max_length=64)
     flash_sale_id: int | None = Field(default=None, ge=1)
+    max_unit_price: int | None = Field(default=None, ge=1)
 
 
 @dataclass(frozen=True)
@@ -88,8 +96,18 @@ class ApiPrincipal:
     user: User
 
 
-def api_error(status_code: int, code: str, message: str) -> HTTPException:
-    return HTTPException(status_code=status_code, detail={"code": code, "message": message})
+def api_error(
+    status_code: int,
+    code: str,
+    message: str,
+    *,
+    headers: dict[str, str] | None = None,
+) -> HTTPException:
+    return HTTPException(
+        status_code=status_code,
+        detail={"code": code, "message": message},
+        headers=headers,
+    )
 
 
 def request_path(request: Request) -> str:
@@ -142,9 +160,14 @@ def create_public_api_docs_router(settings: Settings) -> APIRouter:
     return router
 
 
-def order_payload(orders: list[Order], cipher: SecretCipher) -> dict[str, object]:
+def order_payload(
+    orders: list[Order],
+    cipher: SecretCipher,
+    *,
+    idempotency_key: str | None = None,
+) -> dict[str, object]:
     representative = orders[0]
-    return {
+    payload: dict[str, object] = {
         "order_code": representative.shop_order_code,
         "status": representative.status,
         "channel": representative.sales_channel,
@@ -153,6 +176,7 @@ def order_payload(orders: list[Order], cipher: SecretCipher) -> dict[str, object
             "name": representative.product.name_vi,
         },
         "quantity": len(orders),
+        "unit_price": representative.amount,
         "total_amount": sum(order.amount for order in orders),
         "discount_amount": sum(order.discount_amount for order in orders),
         "accounts": [
@@ -163,6 +187,9 @@ def order_payload(orders: list[Order], cipher: SecretCipher) -> dict[str, object
             representative.delivered_at.isoformat() if representative.delivered_at else None
         ),
     }
+    if idempotency_key is not None:
+        payload["idempotency_key"] = idempotency_key
+    return payload
 
 
 async def orders_for_request(
@@ -205,6 +232,10 @@ def create_public_api_router(
             raise api_error(503, "API_DISABLED", "Shop API is disabled")
         if not all((x_shop_api_id, x_timestamp, x_nonce, x_signature)):
             raise api_error(401, "AUTH_REQUIRED", "Missing API authentication headers")
+        if not API_ID_PATTERN.fullmatch(x_shop_api_id):
+            raise api_error(401, "INVALID_API_ID", "API client does not exist")
+        if not API_SIGNATURE_PATTERN.fullmatch(x_signature):
+            raise api_error(401, "INVALID_SIGNATURE", "Request signature is invalid")
         current_timestamp = int(time.time())
         try:
             timestamp = int(x_timestamp)
@@ -212,8 +243,12 @@ def create_public_api_router(
             raise api_error(401, "INVALID_TIMESTAMP", "Invalid timestamp") from exc
         if abs(current_timestamp - timestamp) > settings.shop_api_signature_tolerance_seconds:
             raise api_error(401, "EXPIRED_REQUEST", "Request timestamp is outside the allowed window")
-        if len(x_nonce) < 12 or len(x_nonce) > 128:
-            raise api_error(401, "INVALID_NONCE", "Nonce must contain 12-128 characters")
+        if not API_NONCE_PATTERN.fullmatch(x_nonce):
+            raise api_error(
+                401,
+                "INVALID_NONCE",
+                "Nonce must contain 12-128 safe ASCII characters",
+            )
 
         async with session_factory() as session:
             row = (
@@ -295,6 +330,10 @@ def create_public_api_router(
                     "X-Signature",
                 ],
                 "signature": "HMAC-SHA256(timestamp|nonce|METHOD|PATH_WITH_QUERY|sha256(body))",
+            },
+            "order_requirements": {
+                "idempotency_header": "Idempotency-Key",
+                "price_guard_field": "max_unit_price",
             },
             "endpoints": [
                 "GET /v1/account",
@@ -403,8 +442,18 @@ def create_public_api_router(
         idempotency_key: str = Header(default="", alias="Idempotency-Key"),
     ) -> dict[str, object]:
         normalized_key = idempotency_key.strip()
-        if not 8 <= len(normalized_key) <= 128:
-            raise api_error(400, "INVALID_IDEMPOTENCY_KEY", "Idempotency-Key is required")
+        if not IDEMPOTENCY_KEY_PATTERN.fullmatch(normalized_key):
+            raise api_error(
+                400,
+                "INVALID_IDEMPOTENCY_KEY",
+                "Idempotency-Key must contain 8-128 safe ASCII characters",
+            )
+        if body.max_unit_price is None:
+            raise api_error(
+                400,
+                "MAX_UNIT_PRICE_REQUIRED",
+                "max_unit_price is required to protect the buyer from price changes",
+            )
         request_json = json.dumps(body.model_dump(), sort_keys=True, separators=(",", ":"))
         request_hash = hashlib.sha256(request_json.encode()).hexdigest()
         order_request = ApiOrderRequest(
@@ -461,7 +510,14 @@ def create_public_api_router(
                     order_request.id,
                 )
                 if existing_orders:
-                    return {"success": True, "order": order_payload(existing_orders, cipher)}
+                    return {
+                        "success": True,
+                        "order": order_payload(
+                            existing_orders,
+                            cipher,
+                            idempotency_key=order_request.idempotency_key,
+                        ),
+                    }
                 if order_request.status == "review":
                     order_request.status = "processing"
                     order_request.error_code = None
@@ -485,6 +541,7 @@ def create_public_api_router(
                             409,
                             "REQUEST_IN_PROGRESS",
                             "The original request is processing",
+                            headers={"Retry-After": "3"},
                         )
                 elif order_request.status == "failed":
                     raise api_error(
@@ -493,7 +550,12 @@ def create_public_api_router(
                         "The original request failed",
                     )
                 else:
-                    raise api_error(409, "REQUEST_IN_PROGRESS", "The original request is processing")
+                    raise api_error(
+                        409,
+                        "REQUEST_IN_PROGRESS",
+                        "The original request is processing",
+                        headers={"Retry-After": "3"},
+                    )
 
         if not claimed:
             raise api_error(409, "REQUEST_IN_PROGRESS", "The original request is processing")
@@ -525,6 +587,7 @@ def create_public_api_router(
                     f"shop-api-{principal.client.id}-{order_request.id}"
                 ),
                 expected_flash_sale_id=expected_flash_sale_id,
+                max_unit_price=body.max_unit_price,
             )
         except Exception:
             logger.exception("Shop API order %s needs supplier review after an exception", order_request.id)
@@ -536,6 +599,7 @@ def create_public_api_router(
                     await session.commit()
             return JSONResponse(
                 status_code=202,
+                headers={"Retry-After": "10"},
                 content={
                     "success": False,
                     "status": "review",
@@ -557,6 +621,7 @@ def create_public_api_router(
                     await session.commit()
                     return JSONResponse(
                         status_code=202,
+                        headers={"Retry-After": "10"},
                         content={
                             "success": False,
                             "status": "review",
@@ -578,6 +643,7 @@ def create_public_api_router(
                     "invalid_coupon": 400,
                     "flash_sale_unavailable": 409,
                     "invalid_quantity": 400,
+                    "price_changed": 409,
                     "not_found": 404,
                 }
                 raise api_error(
@@ -599,9 +665,11 @@ def create_public_api_router(
                     "name": result.orders[0].product.name_vi,
                 },
                 "quantity": len(result.orders),
+                "unit_price": result.orders[0].amount,
                 "total_amount": result.total_amount,
                 "discount_amount": result.discount_amount,
                 "accounts": result.secrets,
+                "idempotency_key": normalized_key,
                 "created_at": result.orders[0].created_at.isoformat(),
                 "delivered_at": result.orders[0].delivered_at.isoformat(),
             },
@@ -641,7 +709,11 @@ def create_public_api_router(
                     if order.api_order_request_id is not None:
                         grouped_orders[order.api_order_request_id].append(order)
             values = [
-                order_payload(grouped_orders[order_request.id], cipher)
+                order_payload(
+                    grouped_orders[order_request.id],
+                    cipher,
+                    idempotency_key=order_request.idempotency_key,
+                )
                 for order_request in requests
                 if grouped_orders[order_request.id]
             ]
@@ -665,6 +737,13 @@ def create_public_api_router(
             orders = await orders_for_request(session, principal.client.id, order_request.id)
             if not orders:
                 raise api_error(404, "ORDER_NOT_FOUND", "Order does not exist")
-            return {"success": True, "order": order_payload(orders, cipher)}
+            return {
+                "success": True,
+                "order": order_payload(
+                    orders,
+                    cipher,
+                    idempotency_key=order_request.idempotency_key,
+                ),
+            }
 
     return router

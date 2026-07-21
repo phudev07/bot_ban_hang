@@ -1,6 +1,7 @@
 import asyncio
 import contextlib
 import logging
+from datetime import UTC, datetime, timedelta
 from html import escape
 
 import uvicorn
@@ -10,7 +11,7 @@ from aiogram.enums import ParseMode
 from aiogram.exceptions import TelegramBadRequest
 from aiogram.fsm.storage.redis import RedisStorage
 from aiogram.types import BotCommand, BotCommandScopeChat
-from sqlalchemy import select, text
+from sqlalchemy import delete, select, text
 
 from app.admin import create_admin_router
 from app.api import create_api
@@ -30,7 +31,7 @@ from app.lehai_suppliers import (
     ensure_lehai_products,
     sync_lehai_products,
 )
-from app.models import Category, Product
+from app.models import ApiRequestAudit, Category, Product
 from app.payment_expiry import payment_expiry_worker
 from app.rate_limit import BotSpamProtectionMiddleware
 from app.rentsim import RentSimClient, create_rentsim_client
@@ -589,6 +590,30 @@ async def initialize_database(engine, session_factory, seed_demo_data: bool) -> 
             )
         )
         await connection.execute(
+            text(
+                "CREATE INDEX IF NOT EXISTS ix_orders_api_client_request "
+                "ON orders (api_client_id, api_order_request_id, id)"
+            )
+        )
+        await connection.execute(
+            text(
+                "CREATE INDEX IF NOT EXISTS ix_api_order_requests_client_status_id "
+                "ON api_order_requests (api_client_id, status, id)"
+            )
+        )
+        await connection.execute(
+            text(
+                "CREATE INDEX IF NOT EXISTS ix_api_order_requests_client_order_code "
+                "ON api_order_requests (api_client_id, shop_order_code)"
+            )
+        )
+        await connection.execute(
+            text(
+                "CREATE INDEX IF NOT EXISTS ix_api_request_audits_client_created "
+                "ON api_request_audits (api_client_id, created_at)"
+            )
+        )
+        await connection.execute(
             text("UPDATE products SET allow_quantity = TRUE WHERE name_en = 'Demo account'")
         )
         await connection.execute(
@@ -990,6 +1015,36 @@ async def startup_maintenance_worker(session_factory) -> None:
         logging.getLogger(__name__).exception("Could not backfill stock alert messages")
 
 
+async def delete_expired_api_audits(session_factory, retention_days: int) -> int:
+    cutoff = datetime.now(UTC) - timedelta(days=max(1, retention_days))
+    async with session_factory() as session:
+        result = await session.execute(
+            delete(ApiRequestAudit).where(ApiRequestAudit.created_at < cutoff)
+        )
+        await session.commit()
+    return max(0, int(result.rowcount or 0))
+
+
+async def api_audit_cleanup_worker(
+    session_factory,
+    retention_days: int,
+    *,
+    interval_seconds: int = 6 * 60 * 60,
+) -> None:
+    while True:
+        try:
+            deleted_count = await delete_expired_api_audits(session_factory, retention_days)
+            if deleted_count:
+                logging.getLogger(__name__).info(
+                    "Deleted expired Shop API audit rows: count=%s retention_days=%s",
+                    deleted_count,
+                    retention_days,
+                )
+        except Exception:
+            logging.getLogger(__name__).exception("Could not clean expired Shop API audit rows")
+        await asyncio.sleep(max(60, interval_seconds))
+
+
 async def main() -> None:
     settings = get_settings()
     logging.basicConfig(
@@ -1085,6 +1140,16 @@ async def main() -> None:
 
     startup_maintenance_task = asyncio.create_task(
         startup_maintenance_worker(session_factory)
+    )
+    api_audit_cleanup_task = (
+        asyncio.create_task(
+            api_audit_cleanup_worker(
+                session_factory,
+                settings.shop_api_audit_retention_days,
+            )
+        )
+        if settings.shop_api_enabled
+        else None
     )
     payment_expiry_task = asyncio.create_task(
         payment_expiry_worker(
@@ -1197,6 +1262,10 @@ async def main() -> None:
         startup_maintenance_task.cancel()
         with contextlib.suppress(asyncio.CancelledError):
             await startup_maintenance_task
+        if api_audit_cleanup_task is not None:
+            api_audit_cleanup_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await api_audit_cleanup_task
         broadcast_task.cancel()
         with contextlib.suppress(asyncio.CancelledError):
             await broadcast_task

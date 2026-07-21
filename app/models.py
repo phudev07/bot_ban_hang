@@ -312,6 +312,14 @@ class InventoryItem(Base):
 
 class Order(Base):
     __tablename__ = "orders"
+    __table_args__ = (
+        Index(
+            "ix_orders_api_client_request",
+            "api_client_id",
+            "api_order_request_id",
+            "id",
+        ),
+    )
 
     id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
     user_id: Mapped[int] = mapped_column(ForeignKey("users.telegram_id"), index=True)
@@ -509,6 +517,12 @@ class ApiOrderRequest(Base):
     __tablename__ = "api_order_requests"
     __table_args__ = (
         UniqueConstraint("api_client_id", "idempotency_key", name="uq_api_order_idempotency"),
+        Index("ix_api_order_requests_client_status_id", "api_client_id", "status", "id"),
+        Index(
+            "ix_api_order_requests_client_order_code",
+            "api_client_id",
+            "shop_order_code",
+        ),
     )
 
     id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
@@ -528,6 +542,9 @@ class ApiOrderRequest(Base):
 
 class ApiRequestAudit(Base):
     __tablename__ = "api_request_audits"
+    __table_args__ = (
+        Index("ix_api_request_audits_client_created", "api_client_id", "created_at"),
+    )
 
     id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
     api_client_id: Mapped[int | None] = mapped_column(

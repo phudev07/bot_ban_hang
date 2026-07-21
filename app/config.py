@@ -91,6 +91,7 @@ class Settings(BaseSettings):
     shop_api_base_url: str = "https://token.vietshare.site/v1"
     shop_api_rate_limit_per_minute: int = 60
     shop_api_signature_tolerance_seconds: int = 300
+    shop_api_audit_retention_days: int = 30
     referral_commission_percent: int = 5
 
     inventory_encryption_key: SecretStr
@@ -179,6 +180,8 @@ class Settings(BaseSettings):
             raise ValueError("Shop API rate limit must be positive")
         if self.shop_api_signature_tolerance_seconds < 30:
             raise ValueError("Shop API signature tolerance is too small")
+        if not 1 <= self.shop_api_audit_retention_days <= 365:
+            raise ValueError("Shop API audit retention must be between 1 and 365 days")
         if not 60 <= self.payment_expiry_seconds <= 3600:
             raise ValueError("Payment expiry must be between 60 and 3600 seconds")
         if not 1 <= self.payment_expiry_sweep_seconds <= 60:

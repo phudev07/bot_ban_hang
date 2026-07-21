@@ -159,6 +159,10 @@ def create_api(
             "camera=(), microphone=(), geolocation=(), payment=(), usb=()"
         )
         response.headers["Strict-Transport-Security"] = "max-age=31536000; includeSubDomains"
+        if request.url.path == "/v1" or request.url.path.startswith("/v1/"):
+            # Authenticated responses can contain wallet balances and delivered accounts.
+            response.headers["Cache-Control"] = "no-store"
+            response.headers["Pragma"] = "no-cache"
         return response
 
     if settings.dashboard_enabled:
@@ -239,19 +243,21 @@ def create_api(
                 status_code = response.status_code
                 return response
             finally:
-                with suppress(Exception):
-                    async with session_factory() as session:
-                        session.add(
-                            ApiRequestAudit(
-                                api_client_id=getattr(request.state, "api_client_id", None),
-                                method=request.method,
-                                path=request.url.path[:255],
-                                status_code=status_code,
-                                client_ip=client_ip(request)[:64],
-                                duration_ms=int((time.perf_counter() - started) * 1000),
+                api_client_id = getattr(request.state, "api_client_id", None)
+                if api_client_id is not None:
+                    with suppress(Exception):
+                        async with session_factory() as session:
+                            session.add(
+                                ApiRequestAudit(
+                                    api_client_id=api_client_id,
+                                    method=request.method,
+                                    path=request.url.path[:255],
+                                    status_code=status_code,
+                                    client_ip=client_ip(request)[:64],
+                                    duration_ms=int((time.perf_counter() - started) * 1000),
+                                )
                             )
-                        )
-                        await session.commit()
+                            await session.commit()
 
     @app.get("/health")
     async def health() -> dict[str, str]:

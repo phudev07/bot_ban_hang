@@ -1,5 +1,6 @@
 import asyncio
 
+import pytest
 from aiogram.types import User as TelegramUser
 from cryptography.fernet import Fernet
 from sqlalchemy import func, select
@@ -15,7 +16,7 @@ from app.models import (
     User,
     WalletTransaction,
 )
-from app.partner_services import ensure_api_client, rotate_api_secret
+from app.partner_services import ensure_api_client, normalize_allowed_ips, rotate_api_secret
 from app.services import ensure_user, purchase_product
 from app.utils import SecretCipher
 
@@ -57,6 +58,14 @@ def test_each_user_has_one_rotatable_api_client() -> None:
         await engine.dispose()
 
     asyncio.run(scenario())
+
+
+def test_allowed_api_ips_are_validated_normalized_and_deduplicated() -> None:
+    assert normalize_allowed_ips("203.0.113.10, 203.0.113.10\n2001:0db8::1") == (
+        "203.0.113.10,2001:db8::1"
+    )
+    with pytest.raises(ValueError, match="Invalid IP address"):
+        normalize_allowed_ips("https://partner.example")
 
 
 def test_referrer_receives_five_percent_for_every_completed_batch() -> None:
