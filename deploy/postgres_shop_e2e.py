@@ -591,7 +591,7 @@ async def main() -> None:
                 "product_id": ids["expensive"],
                 "quantity": 1,
                 "coupon_code": None,
-                "max_unit_price": 999_999,
+                "max_unit_price": 1_000_000,
             },
             separators=(",", ":"),
         ).encode()
