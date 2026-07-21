@@ -14,8 +14,16 @@ STOCK_ALERT_PRODUCT_IDS = frozenset(
 )
 
 
+def stock_alert_mode(product: Product) -> str:
+    if product.notify_stock_without_balance_topup:
+        return "always"
+    if product.supplier_product_id in STOCK_ALERT_PRODUCT_IDS:
+        return "balance"
+    return "off"
+
+
 def stock_alert_enabled(product: Product) -> bool:
-    return product.supplier_product_id in STOCK_ALERT_PRODUCT_IDS
+    return stock_alert_mode(product) != "off"
 
 
 async def apply_supplier_stock(

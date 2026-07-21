@@ -593,7 +593,9 @@ async def refresh_external_product(
         session,
         product,
         snapshot.effective_stock,
-        notify_on_increase=balance_increased,
+        notify_on_increase=(
+            balance_increased or product.notify_stock_without_balance_topup
+        ),
     )
     product.supplier_synced_at = datetime.now(UTC)
     await session.flush()

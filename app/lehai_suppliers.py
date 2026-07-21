@@ -528,7 +528,10 @@ async def refresh_lehai_product(
         session,
         product,
         snapshot.effective_stock,
-        notify_on_increase=balance_increased and not refund_increase,
+        notify_on_increase=(
+            product.notify_stock_without_balance_topup
+            or (balance_increased and not refund_increase)
+        ),
     )
     product.supplier_synced_at = datetime.now(UTC)
     await session.flush()

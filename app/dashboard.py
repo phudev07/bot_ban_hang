@@ -48,6 +48,7 @@ from app.models import (
 )
 from app.rentsim import RentSimClient
 from app.sms_rentals import sms_availability
+from app.stock_alerts import stock_alert_mode
 from app.supplier_audit import PROVIDER, reconcile_supplier_balance
 from app.suppliers import (
     EXTERNAL_FULFILLMENT_SOURCES,
@@ -1178,6 +1179,7 @@ def create_dashboard_router(
                     )
                 ),
                 "coupon_count": int(coupon_count),
+                "stock_alert_mode": stock_alert_mode(product),
                 "unit_cost": (
                     int(product.supplier_price or 0)
                     if product.fulfillment_source in EXTERNAL_FULFILLMENT_SOURCES
@@ -1227,6 +1229,7 @@ def create_dashboard_router(
         fulfillment_source: str = Form("local"),
         supplier_product_id: str = Form(""),
         supplier_markup: str = Form("0"),
+        notify_stock_without_balance_topup: str | None = Form(None),
         allow_quantity: str | None = Form(None),
         max_quantity: int = Form(10),
     ) -> RedirectResponse:
@@ -1280,6 +1283,10 @@ def create_dashboard_router(
                     ),
                     supplier_price=None,
                     external_stock=0,
+                    notify_stock_without_balance_topup=(
+                        notify_stock_without_balance_topup is not None
+                        and normalized_source in EXTERNAL_FULFILLMENT_SOURCES
+                    ),
                     allow_quantity=allow_quantity is not None,
                     max_quantity=max(1, min(max_quantity, 100)),
                 )
@@ -1312,6 +1319,7 @@ def create_dashboard_router(
                 "products",
                 product=product,
                 categories=categories,
+                stock_alert_mode=stock_alert_mode(product),
             ),
         )
 
@@ -1330,6 +1338,7 @@ def create_dashboard_router(
         fulfillment_source: str = Form("local"),
         supplier_product_id: str = Form(""),
         supplier_markup: str = Form("0"),
+        notify_stock_without_balance_topup: str | None = Form(None),
         allow_quantity: str | None = Form(None),
         max_quantity: int = Form(10),
         active: str | None = Form(None),
@@ -1382,6 +1391,10 @@ def create_dashboard_router(
             if normalized_source == "local":
                 product.supplier_price = None
                 product.external_stock = 0
+            product.notify_stock_without_balance_topup = (
+                notify_stock_without_balance_topup is not None
+                and normalized_source in EXTERNAL_FULFILLMENT_SOURCES
+            )
             product.allow_quantity = allow_quantity is not None
             product.max_quantity = max(1, min(max_quantity, 100))
             product.active = active is not None

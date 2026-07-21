@@ -70,6 +70,9 @@ class Product(Base):
     force_out_of_stock: Mapped[bool] = mapped_column(
         Boolean, default=False, server_default="false"
     )
+    notify_stock_without_balance_topup: Mapped[bool] = mapped_column(
+        Boolean, default=False, server_default="false"
+    )
     supplier_available_stock: Mapped[int] = mapped_column(default=0)
     supplier_available_stock_initialized: Mapped[bool] = mapped_column(Boolean, default=False)
     supplier_owner_balance: Mapped[int | None] = mapped_column(BigInteger, nullable=True)

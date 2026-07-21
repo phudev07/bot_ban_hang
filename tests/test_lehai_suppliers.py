@@ -293,6 +293,21 @@ def test_lehai_jio_stock_alert_requires_a_real_wallet_topup() -> None:
             await session.commit()
             assert await session.scalar(select(ProductStockAlert.id)) is None
 
+            product.external_stock = 4
+            product.supplier_available_stock = 4
+            product.supplier_owner_balance = 135_000
+            product.notify_stock_without_balance_topup = True
+            await refresh_lehai_product(
+                session,
+                product,
+                BalanceSupplier(135_000),  # type: ignore[arg-type]
+            )
+            await session.commit()
+            alert = await session.scalar(select(ProductStockAlert))
+            assert alert is not None
+            assert alert.stock_before == 4
+            assert alert.stock_after == 5
+
         await engine.dispose()
 
     asyncio.run(scenario())

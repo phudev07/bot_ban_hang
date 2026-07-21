@@ -282,6 +282,12 @@ async def initialize_database(engine, session_factory, seed_demo_data: bool) -> 
         await connection.execute(
             text(
                 "ALTER TABLE products ADD COLUMN IF NOT EXISTS "
+                "notify_stock_without_balance_topup BOOLEAN NOT NULL DEFAULT FALSE"
+            )
+        )
+        await connection.execute(
+            text(
+                "ALTER TABLE products ADD COLUMN IF NOT EXISTS "
                 "supplier_available_stock INTEGER NOT NULL DEFAULT 0"
             )
         )

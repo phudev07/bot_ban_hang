@@ -657,6 +657,96 @@ def test_dashboard_shows_sale_alert_history(tmp_path) -> None:
     asyncio.run(engine.dispose())
 
 
+def test_admin_can_enable_stock_notifications_without_balance_topup(tmp_path) -> None:
+    async def setup_database():
+        database_path = (tmp_path / "stock-notification-switch.db").as_posix()
+        engine = create_async_engine(f"sqlite+aiosqlite:///{database_path}")
+        async with engine.begin() as connection:
+            await connection.run_sync(Base.metadata.create_all)
+        sessions = async_sessionmaker(engine, expire_on_commit=False)
+        async with sessions() as session:
+            category = Category(name_vi="ChatGPT", name_en="ChatGPT")
+            session.add(category)
+            await session.flush()
+            product = Product(
+                category_id=category.id,
+                name_vi="GPT Plus",
+                name_en="GPT Plus",
+                price=17_000,
+                fulfillment_source="sumistore",
+                supplier_product_id="SP-GEF55PBV",
+                supplier_markup=5_000,
+            )
+            session.add(product)
+            await session.commit()
+        return engine, sessions, category.id, product.id
+
+    engine, sessions, category_id, product_id = asyncio.run(setup_database())
+    encryption_key = Fernet.generate_key().decode()
+    settings = Settings(
+        _env_file=None,
+        bot_token="123456:ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghi",
+        inventory_encryption_key=encryption_key,
+        dashboard_enabled=True,
+        dashboard_username="admin",
+        dashboard_password_hash=hash_dashboard_password("dashboard-password"),
+        dashboard_session_secret="session-secret-long-enough-for-tests",
+    )
+    app = create_api(
+        settings,
+        sessions,
+        FakeBot(),  # type: ignore[arg-type]
+        SecretCipher(encryption_key),
+    )
+
+    with TestClient(app, base_url="https://testserver") as client:
+        client.post(
+            "/admin/login",
+            data={"username": "admin", "password": "dashboard-password"},
+        )
+        edit_page = client.get(f"/admin/products/{product_id}")
+        csrf = re.search(r'name="csrf" value="([^"]+)"', edit_page.text).group(1)
+        assert 'name="notify_stock_without_balance_topup"' in edit_page.text
+
+        updated = client.post(
+            f"/admin/products/{product_id}",
+            data={
+                "csrf": csrf,
+                "category_id": str(category_id),
+                "name_vi": "GPT Plus",
+                "name_en": "GPT Plus",
+                "price": "17.000",
+                "description_vi": "",
+                "description_en": "",
+                "product_type": "account",
+                "fulfillment_source": "sumistore",
+                "supplier_product_id": "SP-GEF55PBV",
+                "supplier_markup": "5.000",
+                "notify_stock_without_balance_topup": "1",
+                "allow_quantity": "1",
+                "max_quantity": "10",
+                "active": "1",
+            },
+            follow_redirects=False,
+        )
+        assert updated.status_code == 303
+        edit_page = client.get(f"/admin/products/{product_id}")
+        assert re.search(
+            r'name="notify_stock_without_balance_topup"[^>]*checked',
+            edit_page.text,
+        )
+        products_page = client.get("/admin/products")
+        assert "TB hàng về: mọi lần tăng kho" in products_page.text
+
+    async def verify_database() -> None:
+        async with sessions() as session:
+            product = await session.get(Product, product_id)
+            assert product is not None and product.notify_stock_without_balance_topup is True
+        await engine.dispose()
+
+    asyncio.run(verify_database())
+
+
 def test_admin_can_import_recovered_external_inventory(tmp_path) -> None:
     async def setup_database():
         database_path = (tmp_path / "dashboard-external-inventory.db").as_posix()

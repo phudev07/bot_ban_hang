@@ -276,3 +276,5 @@ def test_only_jio_is_featured_for_lehai_stock_notifications() -> None:
     assert stock_alert_enabled(pixel) is False
     assert stock_alert_enabled(jio) is True
     assert stock_alert_enabled(bhf) is False
+    bhf.notify_stock_without_balance_topup = True
+    assert stock_alert_enabled(bhf) is True
