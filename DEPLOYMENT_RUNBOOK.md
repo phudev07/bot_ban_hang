@@ -480,3 +480,48 @@ user ID, deposit code, log ID, screenshot, or exact time window.
 | Runtime configuration | `app/config.py`, `.env.example` |
 | Reverse proxy | `deploy/Caddyfile` |
 | Backup and restore | `deploy/BACKUP_RECOVERY.md`, `deploy/backup_shop.sh` |
+
+## 18. Deferred work: Sumi login-warranty tickets
+
+Status reviewed on 2026-07-22. This is a saved investigation only. Do not implement or
+change production until the owner explicitly asks to continue this work.
+
+Current findings:
+
+- The public Sumi warehouse guide exposes only product list/detail, wallet balance,
+  order list/detail, and purchase endpoints.
+- No public endpoint exists for creating a support ticket, submitting a warranty claim,
+  checking claim status, replacing an account, or receiving a warranty refund.
+- Sumi returns the warranty policy only inside each product's `description` field.
+- `SP-GEF55PBV` and `SP-JMYJL2PL` currently state a one-hour login warranty. The Plus
+  description also says no refund/return, so the intended scope is login failure only.
+- The Sumi website advertises order lookup and support in one interface, but it returned
+  HTTP 503 maintenance responses during the review. The authenticated ticket workflow and
+  any private web endpoint could not be verified.
+- The shop currently has no warranty-claim model, customer warranty button, admin ticket
+  queue, or automated Sumi ticket submission.
+
+Recommended future implementation if Sumi still has no supported ticket API:
+
+1. Add a claim per delivered account/order row, not one claim for an entire multi-account
+   batch. Enforce a database uniqueness constraint so concurrent taps cannot create two
+   claims for the same account.
+2. Show `Bao hanh dang nhap` only for Sumi orders and accept it only within one hour of
+   `delivered_at`. Allow login failures only; reject usage bans, changed credentials,
+   customer mistakes, and claims outside the supplier policy.
+3. Store a claim code, user, shop order, Sumi `API-TELE-...` order code, affected order
+   row, reason, status, timestamps, and an audit trail. Never expose another account from
+   the same batch in the ticket.
+4. Send the admin a structured ticket with buttons for `Da gui Sumi`, `Chap nhan`,
+   `Tu choi`, and `Tra tai khoan thay the`. The admin manually contacts Sumi while no
+   supplier endpoint exists.
+5. Encrypt replacement account data, deliver it once through the existing delivery path,
+   retain both old and replacement audit references, and prevent duplicate replacement or
+   wallet credit under concurrent admin actions.
+6. Add an admin warranty dashboard with pending/approved/replaced/rejected/expired tabs,
+   search by claim code, shop order, source order, Telegram ID, and username.
+
+Before implementation, recheck the Sumi website after maintenance. If submitting a real
+claim creates a documented and stable API request, ask Sumi for permission and official
+API details before integrating it. Do not automate a logged-in browser session or use a
+Telegram userbot as the production warranty transport.
