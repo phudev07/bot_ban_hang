@@ -87,6 +87,10 @@ LEHAI_PRODUCT_SEEDS: dict[str, dict[str, object]] = {
 CATEGORY_VI = "Gemini / Veo3 / Antigravity"
 CATEGORY_EN = "Gemini / Veo3 / Antigravity"
 REFUND_MATCH_WINDOW = timedelta(hours=48)
+LEHAI_PRODUCT_ALIASES: dict[str, tuple[str, ...]] = {
+    # Lê Hải publishes a temporary product ID during Jio 18M sale campaigns.
+    "cdk_ggpro_18m": ("sale_link18mgemini",),
+}
 
 
 @dataclass(frozen=True)
@@ -119,6 +123,7 @@ class LeHaiPremiumClient:
         self._http_client: httpx.AsyncClient | None = None
         self._snapshot_lock = asyncio.Lock()
         self._snapshots: dict[str, SupplierSnapshot] = {}
+        self._resolved_product_ids: dict[str, str] = {}
         self._snapshot_at = 0.0
 
     def _http(self) -> httpx.AsyncClient:
@@ -246,7 +251,7 @@ class LeHaiPremiumClient:
                     self.fetch_balance(),
                 )
                 owner_balance = max(0, balance)
-                self._snapshots = {
+                snapshots = {
                     product.product_id: SupplierSnapshot(
                         product_id=product.product_id,
                         name=product.name,
@@ -257,6 +262,38 @@ class LeHaiPremiumClient:
                     )
                     for product in products
                 }
+                resolved_product_ids = {
+                    product_id: product_id for product_id in snapshots
+                }
+                for canonical_id, aliases in LEHAI_PRODUCT_ALIASES.items():
+                    resolved_id = next(
+                        (
+                            candidate_id
+                            for candidate_id in (*aliases, canonical_id)
+                            if candidate_id in snapshots
+                        ),
+                        None,
+                    )
+                    if resolved_id is None:
+                        continue
+                    resolved_snapshot = snapshots[resolved_id]
+                    snapshots[canonical_id] = SupplierSnapshot(
+                        product_id=canonical_id,
+                        name=resolved_snapshot.name,
+                        description=resolved_snapshot.description,
+                        unit_price=resolved_snapshot.unit_price,
+                        source_stock=resolved_snapshot.source_stock,
+                        owner_balance=resolved_snapshot.owner_balance,
+                    )
+                    resolved_product_ids[canonical_id] = resolved_id
+                    if self._resolved_product_ids.get(canonical_id) != resolved_id:
+                        logger.info(
+                            "Resolved Le Hai product %s to live ID %s",
+                            canonical_id,
+                            resolved_id,
+                        )
+                self._snapshots = snapshots
+                self._resolved_product_ids = resolved_product_ids
                 self._snapshot_at = now
             snapshot = self._snapshots.get(product_id)
             if snapshot is None:
@@ -275,11 +312,12 @@ class LeHaiPremiumClient:
         idempotency_key: str | None = None,
     ) -> SupplierPurchase:
         request_key = idempotency_key or f"shop-{secrets.token_hex(12)}"
+        resolved_product_id = self._resolved_product_ids.get(product_id, product_id)
         payload = await self._post(
             "api/telegram-buyer/purchase",
             {
                 "key": self.api_key,
-                "product_id": product_id,
+                "product_id": resolved_product_id,
                 "quantity": quantity,
                 "idempotency_key": request_key,
             },

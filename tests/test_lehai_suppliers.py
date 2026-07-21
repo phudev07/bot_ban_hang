@@ -117,6 +117,77 @@ def test_lehai_snapshot_cache_reuses_product_list_and_connection() -> None:
     asyncio.run(scenario())
 
 
+def test_lehai_jio_uses_sale_id_then_returns_to_canonical_id() -> None:
+    sale_active = True
+    purchased_product_ids: list[str] = []
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal sale_active
+        if request.url.path.endswith("/balance"):
+            return httpx.Response(200, json={"success": True, "balance": 100_000})
+        if request.url.path.endswith("/products"):
+            payload = product_payload()
+            if sale_active:
+                payload["products"].append(  # type: ignore[union-attr]
+                    {
+                        "_id": "sale_link18mgemini",
+                        "product_name": "[SALE] Link GG Pro Jio 18M",
+                        "walletPricing": 20_000,
+                        "description": "Temporary Jio sale",
+                        "stats": {"available": 9_999},
+                    }
+                )
+            return httpx.Response(200, json=payload)
+        body = json.loads((await request.aread()).decode())
+        purchased_product_ids.append(body["product_id"])
+        unit_price = 20_000 if body["product_id"] == "sale_link18mgemini" else 27_000
+        return httpx.Response(
+            200,
+            json={
+                "success": True,
+                "orderCode": f"ORDER-{len(purchased_product_ids)}",
+                "amount": unit_price,
+                "deliveredAccounts": [{"user": f"https://offer.test/{len(purchased_product_ids)}"}],
+            },
+        )
+
+    async def scenario() -> None:
+        nonlocal sale_active
+        client = LeHaiPremiumClient(
+            "https://supplier.test",
+            "tgb_test",
+            transport=httpx.MockTransport(handler),
+        )
+
+        sale_snapshot = await client.fetch_snapshot("cdk_ggpro_18m")
+        sale_purchase = await client.buy(
+            "cdk_ggpro_18m",
+            1,
+            idempotency_key="sale-order",
+        )
+        assert sale_snapshot.product_id == "cdk_ggpro_18m"
+        assert sale_snapshot.unit_price == 20_000
+        assert sale_snapshot.source_stock == 9_999
+        assert sale_purchase.product_id == "cdk_ggpro_18m"
+        assert sale_purchase.unit_price == 20_000
+
+        sale_active = False
+        standard_snapshot = await client.fetch_snapshot("cdk_ggpro_18m")
+        standard_purchase = await client.buy(
+            "cdk_ggpro_18m",
+            1,
+            idempotency_key="standard-order",
+        )
+        assert standard_snapshot.product_id == "cdk_ggpro_18m"
+        assert standard_snapshot.unit_price == 27_000
+        assert standard_purchase.product_id == "cdk_ggpro_18m"
+        assert standard_purchase.unit_price == 27_000
+        assert purchased_product_ids == ["sale_link18mgemini", "cdk_ggpro_18m"]
+        await client.aclose()
+
+    asyncio.run(scenario())
+
+
 def test_lehai_temporary_refresh_failure_keeps_last_known_stock() -> None:
     class UnavailableSupplier:
         async def fetch_snapshot(self, product_id: str) -> SupplierSnapshot:
