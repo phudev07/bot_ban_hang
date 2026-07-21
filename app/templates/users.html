@@ -15,7 +15,18 @@
   <div class="table-wrap"><table><thead><tr><th>Khách hàng</th><th>Tham gia / Hoạt động</th><th>Số dư</th><th>Đã nạp</th><th>Đơn / Đã chi</th><th>Trạng thái</th><th>Điều chỉnh số dư</th></tr></thead><tbody>
   {% for row in users %}{% set user = row.user %}
   <tr>
-    <td><a class="text-link" href="/admin/users/{{ user.telegram_id }}">{{ user.full_name }}</a><small>@{{ user.username or '—' }}</small><code>{{ user.telegram_id }}</code><small><a class="text-link" href="/admin/users/{{ user.telegram_id }}">Xem phát sinh số dư →</a></small></td>
+    <td>
+      <a class="text-link" href="/admin/users/{{ user.telegram_id }}">{{ user.full_name }}</a>
+      <small>@{{ user.username or '—' }}</small><code>{{ user.telegram_id }}</code>
+      <div class="customer-row-actions">
+        <a class="text-link" href="/admin/users/{{ user.telegram_id }}">Xem phát sinh số dư →</a>
+        {% if user.username %}
+        <a class="button secondary compact" href="https://t.me/{{ user.username }}" target="_blank" rel="noreferrer" title="Mở cuộc trò chuyện Telegram với khách">💬 Mở trò chuyện</a>
+        {% else %}
+        <a class="button secondary compact" href="tg://user?id={{ user.telegram_id }}" title="Mở cuộc trò chuyện Telegram với khách">💬 Mở trò chuyện</a>
+        {% endif %}
+      </div>
+    </td>
     <td>{{ user.created_at|localtime }}<small>Đơn cuối: {{ row.last_order_at|localtime }}<br>Nạp cuối: {{ row.last_deposit_at|localtime }}</small></td>
     <td><strong>{{ user.balance|vnd }}</strong></td>
     <td>{{ row.deposited|vnd }}</td>

@@ -145,6 +145,7 @@ def test_admin_core_ledgers_paginate_all_rows(tmp_path) -> None:
         assert users_page.status_code == 200
         assert "PagedUser-104" in users_page.text
         assert "PagedUser-204" not in users_page.text
+        assert 'href="tg://user?id=7000000104"' in users_page.text
         assert "trên tổng <strong>205</strong> khách hàng" in users_page.text
         assert "Trang <strong>2/3</strong>" in users_page.text
 
@@ -175,6 +176,7 @@ def test_admin_core_ledgers_paginate_all_rows(tmp_path) -> None:
 
         user_detail_page = client.get("/admin/users/7000000000?page=2")
         assert user_detail_page.status_code == 200
+        assert 'href="tg://user?id=7000000000"' in user_detail_page.text
         assert "Ledger-005" in user_detail_page.text
         assert "Ledger-105" not in user_detail_page.text
         assert "trên tổng <strong>105</strong> phát sinh" in user_detail_page.text
@@ -302,6 +304,7 @@ def test_dashboard_login_catalog_inventory_and_balance(tmp_path) -> None:
         assert "Admin test user" in search_without_at.text
         assert "Admin test user" in search_with_at.text
         assert 'href="/admin/users/6799701918"' in search_with_at.text
+        assert 'href="https://t.me/nhattan02"' in search_with_at.text
 
         broadcasts_page = client.get("/admin/broadcasts")
         assert broadcasts_page.status_code == 200

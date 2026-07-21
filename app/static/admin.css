@@ -205,6 +205,8 @@ textarea { resize: vertical; }
 .customer-profile { padding: 22px; display: flex; align-items: center; gap: 13px; border-bottom: 1px solid var(--line); }
 .customer-profile strong, .customer-profile code { display: block; }
 .customer-profile code { margin-top: 5px; }
+.customer-row-actions { margin-top: 9px; display: flex; flex-wrap: wrap; align-items: center; gap: 7px; }
+.customer-row-actions .text-link { font-size: 11px; }
 .customer-ledger-hero { margin-bottom: 18px; padding: 24px 28px; border-radius: 20px; color: white; background: radial-gradient(circle at 82% 12%, rgba(217,244,124,.2), transparent 30%), linear-gradient(120deg, #17231f, #285342); box-shadow: var(--shadow); display: flex; align-items: center; justify-content: space-between; gap: 24px; }
 .customer-ledger-identity { display: flex; align-items: center; gap: 16px; }
 .customer-ledger-identity .avatar { width: 52px; height: 52px; border-radius: 16px; color: var(--ink); background: var(--lime); font-size: 26px; }

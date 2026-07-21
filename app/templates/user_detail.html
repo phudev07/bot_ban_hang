@@ -3,7 +3,11 @@
 {% block content %}
 <div class="detail-actions">
   <a class="button quiet" href="/admin/users">← Danh sách khách hàng</a>
-  {% if user.username %}<a class="button secondary" href="https://t.me/{{ user.username }}" target="_blank" rel="noreferrer">Nhắn @{{ user.username }}</a>{% endif %}
+  {% if user.username %}
+  <a class="button secondary" href="https://t.me/{{ user.username }}" target="_blank" rel="noreferrer">💬 Mở trò chuyện</a>
+  {% else %}
+  <a class="button secondary" href="tg://user?id={{ user.telegram_id }}">💬 Mở trò chuyện</a>
+  {% endif %}
   <a class="button primary" href="/admin/orders?q={{ user.telegram_id }}">Xem đơn hàng</a>
 </div>
 
