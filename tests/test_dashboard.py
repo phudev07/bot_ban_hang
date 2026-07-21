@@ -55,6 +55,7 @@ def test_admin_core_ledgers_paginate_all_rows(tmp_path) -> None:
                     telegram_id=7_000_000_000 + index,
                     full_name=f"PagedUser-{index:03d}",
                     balance=index,
+                    has_started=True,
                     created_at=now + timedelta(seconds=index),
                 )
                 for index in range(205)
@@ -115,6 +116,18 @@ def test_admin_core_ledgers_paginate_all_rows(tmp_path) -> None:
                     )
                 )
             await session.commit()
+            session.add(
+                SmsRental(
+                    user_id=users[1].telegram_id,
+                    shop_order_code="SMS-PAGED-1",
+                    provider_order_id="SMS-PROVIDER-PAGED-1",
+                    status="success",
+                    sale_amount=2_000,
+                    cost_amount=1_000,
+                    completed_at=now,
+                )
+            )
+            await session.commit()
         return engine, sessions
 
     engine, sessions = asyncio.run(setup_database())
@@ -157,6 +170,28 @@ def test_admin_core_ledgers_paginate_all_rows(tmp_path) -> None:
         assert "PagedUser-000" not in wallet_users_page.text
         assert "trên tổng <strong>204</strong> khách hàng" in wallet_users_page.text
         assert "Tổng số dư trong bộ lọc: <strong>20.910đ</strong>" in wallet_users_page.text
+
+        spent_users_page = client.get("/admin/users?status=spent")
+        assert spent_users_page.status_code == 200
+        assert 'value="spent" selected' in spent_users_page.text
+        assert "PagedUser-000" in spent_users_page.text
+        assert "PagedUser-001" in spent_users_page.text
+        assert "PagedUser-002" not in spent_users_page.text
+        assert "1 lượt SMS" in spent_users_page.text
+        assert spent_users_page.text.index("PagedUser-000") < spent_users_page.text.index(
+            "PagedUser-001"
+        )
+
+        potential_users_page = client.get("/admin/users?status=potential")
+        assert potential_users_page.status_code == 200
+        assert 'value="potential" selected' in potential_users_page.text
+        assert "PagedUser-204" in potential_users_page.text
+        assert "PagedUser-203" in potential_users_page.text
+        assert "PagedUser-000" not in potential_users_page.text
+        assert "PagedUser-001" not in potential_users_page.text
+        assert potential_users_page.text.index(
+            "PagedUser-204"
+        ) < potential_users_page.text.index("PagedUser-203")
 
         orders_page = client.get("/admin/orders?page=2")
         assert orders_page.status_code == 200

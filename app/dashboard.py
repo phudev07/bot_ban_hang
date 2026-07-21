@@ -2318,14 +2318,6 @@ def create_dashboard_router(
                     cast(User.telegram_id, String).ilike(needle),
                 )
             )
-        if status == "blocked":
-            user_conditions.append(User.is_blocked.is_(True))
-        elif status == "started":
-            user_conditions.append(User.has_started.is_(True))
-        elif status == "inactive":
-            user_conditions.append(User.has_started.is_(False))
-        elif status == "wallet":
-            user_conditions.append(User.balance > 0)
         async with session_factory() as session:
             order_stats = (
                 select(
@@ -2335,6 +2327,17 @@ def create_dashboard_router(
                     func.max(Order.created_at).label("last_order_at"),
                 )
                 .group_by(Order.user_id)
+                .subquery()
+            )
+            sms_stats = (
+                select(
+                    SmsRental.user_id.label("user_id"),
+                    func.count(SmsRental.id).label("sms_count"),
+                    func.coalesce(func.sum(SmsRental.sale_amount), 0).label("sms_spent"),
+                    func.max(SmsRental.completed_at).label("last_sms_at"),
+                )
+                .where(SmsRental.status == "success")
+                .group_by(SmsRental.user_id)
                 .subquery()
             )
             deposit_stats = (
@@ -2351,9 +2354,35 @@ def create_dashboard_router(
                 .group_by(PaymentTransaction.user_id)
                 .subquery()
             )
-            user_count_statement = select(
-                func.count(User.telegram_id),
-                func.coalesce(func.sum(User.balance), 0),
+            total_spent = (
+                func.coalesce(order_stats.c.spent, 0)
+                + func.coalesce(sms_stats.c.sms_spent, 0)
+            )
+            if status == "blocked":
+                user_conditions.append(User.is_blocked.is_(True))
+            elif status == "started":
+                user_conditions.append(User.has_started.is_(True))
+            elif status == "inactive":
+                user_conditions.append(User.has_started.is_(False))
+            elif status == "wallet":
+                user_conditions.append(User.balance > 0)
+            elif status == "spent":
+                user_conditions.append(total_spent > 0)
+            elif status == "potential":
+                user_conditions.extend(
+                    (
+                        User.has_started.is_(True),
+                        User.is_blocked.is_(False),
+                        total_spent == 0,
+                    )
+                )
+            user_count_statement = (
+                select(
+                    func.count(User.telegram_id),
+                    func.coalesce(func.sum(User.balance), 0),
+                )
+                .outerjoin(order_stats, order_stats.c.user_id == User.telegram_id)
+                .outerjoin(sms_stats, sms_stats.c.user_id == User.telegram_id)
             )
             if user_conditions:
                 user_count_statement = user_count_statement.where(*user_conditions)
@@ -2367,27 +2396,58 @@ def create_dashboard_router(
                     func.coalesce(order_stats.c.order_count, 0),
                     func.coalesce(order_stats.c.spent, 0),
                     order_stats.c.last_order_at,
+                    func.coalesce(sms_stats.c.sms_count, 0),
+                    func.coalesce(sms_stats.c.sms_spent, 0),
+                    sms_stats.c.last_sms_at,
                     func.coalesce(deposit_stats.c.deposited, 0),
                     deposit_stats.c.last_deposit_at,
                 )
                 .outerjoin(order_stats, order_stats.c.user_id == User.telegram_id)
+                .outerjoin(sms_stats, sms_stats.c.user_id == User.telegram_id)
                 .outerjoin(deposit_stats, deposit_stats.c.user_id == User.telegram_id)
-                .order_by(User.created_at.desc())
                 .offset(pager.offset)
                 .limit(ADMIN_PAGE_SIZE)
             )
             if user_conditions:
                 statement = statement.where(*user_conditions)
+            if status == "potential":
+                statement = statement.order_by(
+                    User.balance.desc(),
+                    func.coalesce(deposit_stats.c.deposited, 0).desc(),
+                    User.updated_at.desc(),
+                    User.created_at.desc(),
+                )
+            elif status == "spent":
+                statement = statement.order_by(
+                    total_spent.desc(),
+                    order_stats.c.last_order_at.desc(),
+                    sms_stats.c.last_sms_at.desc(),
+                    User.created_at.desc(),
+                )
+            else:
+                statement = statement.order_by(User.created_at.desc())
             user_rows = [
                 {
                     "user": user,
                     "order_count": int(order_count),
-                    "spent": int(spent),
+                    "spent": int(spent) + int(sms_spent),
                     "last_order_at": last_order_at,
+                    "sms_count": int(sms_count),
+                    "last_sms_at": last_sms_at,
                     "deposited": int(deposited),
                     "last_deposit_at": last_deposit_at,
                 }
-                for user, order_count, spent, last_order_at, deposited, last_deposit_at
+                for (
+                    user,
+                    order_count,
+                    spent,
+                    last_order_at,
+                    sms_count,
+                    sms_spent,
+                    last_sms_at,
+                    deposited,
+                    last_deposit_at,
+                )
                 in await session.execute(statement)
             ]
         return templates.TemplateResponse(
