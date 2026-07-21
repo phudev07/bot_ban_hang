@@ -25,7 +25,7 @@
 
 	handle {
 		reverse_proxy 127.0.0.1:8080 {
-			lb_try_duration 10s
+			lb_try_duration 30s
 			lb_try_interval 250ms
 		}
 	}
@@ -37,7 +37,7 @@ token.vietshare.site {
 	@api_docs path /docs /docs/
 	handle @api_docs {
 		reverse_proxy 127.0.0.1:8080 {
-			lb_try_duration 10s
+			lb_try_duration 30s
 			lb_try_interval 250ms
 		}
 	}
@@ -45,7 +45,7 @@ token.vietshare.site {
 	@warehouse_api path /v1 /v1/*
 	handle @warehouse_api {
 		reverse_proxy 127.0.0.1:8080 {
-			lb_try_duration 10s
+			lb_try_duration 30s
 			lb_try_interval 250ms
 		}
 	}
