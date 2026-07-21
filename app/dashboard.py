@@ -48,6 +48,7 @@ from app.models import (
     WalletTransaction,
 )
 from app.rentsim import RentSimClient
+from app.services import approve_wallet_deposit
 from app.sms_rentals import sms_availability
 from app.stock_alerts import stock_alert_mode
 from app.supplier_audit import PROVIDER, reconcile_supplier_balance
@@ -3553,7 +3554,7 @@ def create_dashboard_router(
             review_amount = int(
                 await session.scalar(
                     select(func.coalesce(func.sum(PaymentTransaction.amount), 0)).where(
-                        PaymentTransaction.credit_status != "credited"
+                        PaymentTransaction.credit_status.notin_(("credited", "manual_matched"))
                     )
                 )
                 or 0
@@ -3561,7 +3562,7 @@ def create_dashboard_router(
             review_count = int(
                 await session.scalar(
                     select(func.count(PaymentTransaction.id)).where(
-                        PaymentTransaction.credit_status != "credited"
+                        PaymentTransaction.credit_status.notin_(("credited", "manual_matched"))
                     )
                 )
                 or 0
@@ -3605,6 +3606,57 @@ def create_dashboard_router(
                 },
             ),
         )
+
+    @router.post("/admin/payments/deposits/{deposit_id}/approve")
+    async def approve_deposit_payment(
+        deposit_id: int,
+        request: Request,
+        csrf: str = Form(...),
+    ) -> RedirectResponse:
+        if not is_admin(request):
+            return redirect_to_login()
+        if not valid_csrf(request, csrf):
+            flash(request, "Phiên duyệt nạp không hợp lệ.", "error")
+            return RedirectResponse("/admin/payments", status_code=303)
+
+        result = await approve_wallet_deposit(
+            session_factory,
+            deposit_id,
+            admin_username=str(request.session["dashboard_admin"]),
+        )
+        if result.status != "approved":
+            messages = {
+                "not_found": "Không tìm thấy yêu cầu nạp.",
+                "invalid_kind": "Chỉ có thể duyệt thủ công yêu cầu nạp vào ví.",
+                "already_paid": "Yêu cầu này đã được thanh toán trước đó.",
+                "already_credited": "Tiền của yêu cầu này đã được cộng trước đó.",
+                "invalid_status": "Trạng thái yêu cầu không thể duyệt.",
+                "user_not_found": "Không tìm thấy khách hàng của yêu cầu nạp.",
+            }
+            flash(request, messages.get(result.status, "Không thể duyệt tiền vào ví."), "error")
+            return RedirectResponse("/admin/payments", status_code=303)
+
+        flash(
+            request,
+            f"Đã duyệt {format_vnd(result.amount)} vào ví mã {result.deposit_code}. "
+            f"Số dư mới {format_vnd(result.balance)}.",
+        )
+        if bot is not None and result.user_id is not None:
+            try:
+                await bot.send_message(
+                    result.user_id,
+                    "✅ <b>Khoản nạp đã được Admin duyệt</b>\n\n"
+                    f"• Mã nạp: <code>{escape(result.deposit_code)}</code>\n"
+                    f"• Đã cộng vào ví: <b>{format_vnd(result.amount)}</b>\n"
+                    f"• Số dư hiện tại: <b>{format_vnd(result.balance)}</b>\n\n"
+                    "Bạn có thể mua hàng ngay.",
+                )
+            except Exception:
+                logger.exception(
+                    "Could not notify user %s about manual deposit approval",
+                    result.user_id,
+                )
+        return RedirectResponse("/admin/payments", status_code=303)
 
     @router.get("/admin/sms-rentals", response_class=HTMLResponse)
     async def sms_rentals_page(

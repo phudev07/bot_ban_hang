@@ -6,11 +6,13 @@ from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from app.database import Base
 from app.models import (
+    BalanceAdjustment,
     Category,
     Deposit,
     DiscountCode,
     InventoryItem,
     Order,
+    PaymentTransaction,
     Product,
     QuantityDiscount,
     ReferralReward,
@@ -19,6 +21,7 @@ from app.models import (
     WalletTransaction,
 )
 from app.services import (
+    approve_wallet_deposit,
     available_stock,
     order_bundle,
     process_sepay_payment,
@@ -496,6 +499,73 @@ def test_sepay_payment_is_idempotent() -> None:
             assert wallet_transactions[0].amount == 100_000
             assert wallet_transactions[0].balance_before == 0
             assert wallet_transactions[0].balance_after == 100_000
+        await engine.dispose()
+
+    asyncio.run(scenario())
+
+
+def test_manual_deposit_approval_credits_once_and_late_webhook_only_matches() -> None:
+    async def scenario() -> None:
+        engine, sessions = await make_database()
+        async with sessions() as session:
+            user = User(telegram_id=321654, full_name="Manual approval buyer", balance=5_000)
+            deposit = Deposit(
+                user_id=user.telegram_id,
+                code="NAP321654MANU",
+                requested_amount=20_000,
+                status="pending",
+                expires_at=datetime.now(UTC) + timedelta(minutes=5),
+            )
+            session.add_all([user, deposit])
+            await session.commit()
+            deposit_id = deposit.id
+
+        approved = await approve_wallet_deposit(
+            sessions,
+            deposit_id,
+            admin_username="admin",
+        )
+        duplicate_approval = await approve_wallet_deposit(
+            sessions,
+            deposit_id,
+            admin_username="admin",
+        )
+        webhook = await process_sepay_payment(
+            sessions,
+            {
+                "id": "BANK-LATE-MANUAL",
+                "transferType": "in",
+                "transferAmount": 20_000,
+                "content": "NAP321654MANU",
+            },
+        )
+
+        assert approved.status == "approved"
+        assert approved.balance == 25_000
+        assert duplicate_approval.status == "already_paid"
+        assert webhook.status == "manual_approval_matched"
+        async with sessions() as session:
+            user = await session.get(User, 321654)
+            deposit = await session.get(Deposit, deposit_id)
+            transactions = list(
+                await session.scalars(
+                    select(PaymentTransaction).order_by(PaymentTransaction.id)
+                )
+            )
+            wallet_transactions = list(await session.scalars(select(WalletTransaction)))
+            adjustments = list(await session.scalars(select(BalanceAdjustment)))
+            assert user is not None and user.balance == 25_000
+            assert deposit is not None and deposit.status == "paid"
+            assert [item.credit_status for item in transactions] == [
+                "credited",
+                "manual_matched",
+            ]
+            assert len(wallet_transactions) == 1
+            assert wallet_transactions[0].amount == 20_000
+            assert wallet_transactions[0].balance_before == 5_000
+            assert wallet_transactions[0].balance_after == 25_000
+            assert len(adjustments) == 1
+            assert adjustments[0].admin_username == "admin"
         await engine.dispose()
 
     asyncio.run(scenario())

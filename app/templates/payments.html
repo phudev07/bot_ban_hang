@@ -19,7 +19,7 @@
 
 <section class="panel">
   <div class="panel-head"><div><span>PAYMENT REQUESTS</span><h2>Yêu cầu nạp tiền / mua QR</h2></div><small>Ai nạp, số tiền và thời gian đầy đủ</small></div>
-  <div class="table-wrap"><table><thead><tr><th>Yêu cầu</th><th>Khách hàng</th><th>Loại</th><th>Số tiền</th><th>Trạng thái</th><th>Tạo / hết hạn</th><th>Hoàn tất</th></tr></thead><tbody>
+  <div class="table-wrap"><table><thead><tr><th>Yêu cầu</th><th>Khách hàng</th><th>Loại</th><th>Số tiền</th><th>Trạng thái</th><th>Tạo / hết hạn</th><th>Hoàn tất</th><th>Thao tác</th></tr></thead><tbody>
     {% for row in deposits %}{% set item = row.deposit %}{% set user = row.user %}
     <tr>
       <td><strong><code>{{ item.code }}</code></strong><small>#{{ item.id }} · Sản phẩm {{ item.product_id or '—' }} · SL {{ item.quantity }}</small></td>
@@ -29,8 +29,9 @@
       <td><span class="status {{ 'on' if item.status == 'paid' else 'off' if item.status == 'failed' else 'wait' }}">{{ item.status }}</span>{% if item.failure_reason %}<small>Lý do: {{ item.failure_reason }}</small>{% endif %}</td>
       <td>{{ item.created_at|localtime }}<small>Hết hạn {{ item.expires_at|localtime }}</small></td>
       <td>{{ item.paid_at|localtime }}{% if item.failed_at %}<small>Thất bại {{ item.failed_at|localtime }}</small>{% endif %}</td>
+      <td>{% if item.payment_kind == 'wallet' and item.status in ('pending', 'failed') %}<form method="post" action="/admin/payments/deposits/{{ item.id }}/approve" onsubmit="return confirm('Chỉ duyệt khi bạn đã xác nhận tiền thực sự vào ngân hàng. Tiếp tục?')"><input type="hidden" name="csrf" value="{{ csrf_token }}"><button class="button primary compact">Duyệt +{{ item.requested_amount|vnd }}</button><small>Khóa giao dịch, không cộng trùng webhook</small></form>{% else %}<span class="status on">Đã xử lý</span>{% endif %}</td>
     </tr>
-    {% else %}<tr><td colspan="7" class="empty">Không có yêu cầu thanh toán phù hợp.</td></tr>{% endfor %}
+    {% else %}<tr><td colspan="8" class="empty">Không có yêu cầu thanh toán phù hợp.</td></tr>{% endfor %}
   </tbody></table></div>
   {{ render_pager(deposit_pager, 'yêu cầu thanh toán') }}
 </section>
@@ -39,7 +40,7 @@
   <div class="panel-head"><div><span>BANK EVENTS</span><h2>Giao dịch ngân hàng đã ghi nhận</h2></div><small>Mỗi mã giao dịch chỉ được xử lý một lần</small></div>
   <div class="table-wrap"><table><thead><tr><th>Giao dịch</th><th>Khách hàng</th><th>Yêu cầu nạp</th><th>Số tiền</th><th>Kết quả cộng tiền</th><th>Ghi nhận lúc</th></tr></thead><tbody>
     {% for row in transactions %}{% set item = row.transaction %}
-    <tr class="{{ 'audit-row-suspicious' if item.credit_status != 'credited' else '' }}"><td><strong><code>{{ item.provider_tx_id }}</code></strong><small>Internal #{{ item.id }}</small></td><td><strong>{{ row.user.full_name }}</strong><small>@{{ row.user.username or '—' }} · {{ row.user.telegram_id }}</small></td><td><code>{{ row.deposit.code }}</code><small>#{{ row.deposit.id }}</small></td><td><strong>{{ item.amount|vnd }}</strong></td><td><span class="status {{ 'on' if item.credit_status == 'credited' else 'off' }}">{{ item.credit_status }}</span></td><td>{{ item.created_at|localtime }}</td></tr>
+    <tr class="{{ 'audit-row-suspicious' if item.credit_status not in ('credited', 'manual_matched') else '' }}"><td><strong><code>{{ item.provider_tx_id }}</code></strong><small>Internal #{{ item.id }}</small></td><td><strong>{{ row.user.full_name }}</strong><small>@{{ row.user.username or '—' }} · {{ row.user.telegram_id }}</small></td><td><code>{{ row.deposit.code }}</code><small>#{{ row.deposit.id }}</small></td><td><strong>{{ item.amount|vnd }}</strong></td><td><span class="status {{ 'on' if item.credit_status in ('credited', 'manual_matched') else 'off' }}">{{ item.credit_status }}</span></td><td>{{ item.created_at|localtime }}</td></tr>
     {% else %}<tr><td colspan="6" class="empty">Chưa có giao dịch ngân hàng.</td></tr>{% endfor %}
   </tbody></table></div>
   {{ render_pager(transaction_pager, 'giao dịch ngân hàng') }}

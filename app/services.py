@@ -22,6 +22,7 @@ from app.flash_sales import (
 )
 from app.lehai_suppliers import LeHaiPremiumClient, refresh_lehai_product
 from app.models import (
+    BalanceAdjustment,
     Category,
     Deposit,
     DiscountCode,
@@ -36,6 +37,7 @@ from app.models import (
     SupplierPurchaseAttempt,
     SupplierRecoveryRequest,
     User,
+    WalletTransaction,
 )
 from app.price_alerts import apply_supplier_price
 from app.partner_services import award_referral_commission, ensure_referral_code
@@ -1283,6 +1285,105 @@ class PaymentResult:
     paid_at: datetime | None = None
 
 
+@dataclass(frozen=True)
+class ManualDepositApprovalResult:
+    status: str
+    user_id: int | None = None
+    amount: int = 0
+    balance: int = 0
+    deposit_code: str = ""
+    username: str | None = None
+    language: str = "vi"
+
+
+async def approve_wallet_deposit(
+    session_factory: async_sessionmaker[AsyncSession],
+    deposit_id: int,
+    *,
+    admin_username: str,
+) -> ManualDepositApprovalResult:
+    async with session_factory() as session:
+        async with session.begin():
+            deposit = await session.scalar(
+                select(Deposit).where(Deposit.id == deposit_id).with_for_update()
+            )
+            if deposit is None:
+                return ManualDepositApprovalResult("not_found")
+            if deposit.payment_kind != "wallet":
+                return ManualDepositApprovalResult("invalid_kind", deposit_code=deposit.code)
+            if deposit.status == "paid":
+                return ManualDepositApprovalResult("already_paid", deposit_code=deposit.code)
+            if deposit.status not in {"pending", "failed"}:
+                return ManualDepositApprovalResult("invalid_status", deposit_code=deposit.code)
+
+            existing_credit = await session.scalar(
+                select(PaymentTransaction.id).where(
+                    PaymentTransaction.deposit_id == deposit.id,
+                    PaymentTransaction.credit_status == "credited",
+                )
+            )
+            existing_ledger = await session.scalar(
+                select(WalletTransaction.id).where(
+                    WalletTransaction.event_key == f"deposit:{deposit.id}"
+                )
+            )
+            if existing_credit is not None or existing_ledger is not None:
+                return ManualDepositApprovalResult(
+                    "already_credited",
+                    deposit_code=deposit.code,
+                )
+
+            user = await session.scalar(
+                select(User).where(User.telegram_id == deposit.user_id).with_for_update()
+            )
+            if user is None:
+                return ManualDepositApprovalResult("user_not_found", deposit_code=deposit.code)
+
+            approved_at = datetime.now(UTC)
+            amount = int(deposit.requested_amount)
+            session.add(
+                PaymentTransaction(
+                    deposit_id=deposit.id,
+                    user_id=user.telegram_id,
+                    provider_tx_id=f"ADMIN-DEPOSIT-{deposit.id}",
+                    amount=amount,
+                    credit_status="credited",
+                )
+            )
+            session.add(
+                BalanceAdjustment(
+                    user_id=user.telegram_id,
+                    admin_username=admin_username,
+                    amount=amount,
+                    reason=f"Duyệt nạp thủ công mã {deposit.code}",
+                )
+            )
+            apply_wallet_change(
+                session,
+                user,
+                amount,
+                kind="deposit",
+                event_key=f"deposit:{deposit.id}",
+                reference_type="deposit",
+                reference_id=deposit.code,
+                description=f"Admin {admin_username} duyệt nạp thủ công mã {deposit.code}",
+            )
+            deposit.status = "paid"
+            deposit.paid_amount = amount
+            deposit.paid_at = approved_at
+            deposit.failed_at = None
+            deposit.failure_reason = None
+            return ManualDepositApprovalResult(
+                "approved",
+                user_id=user.telegram_id,
+                amount=amount,
+                balance=user.balance,
+                deposit_code=deposit.code,
+                username=user.username,
+                language=user.language,
+            )
+
+
 async def process_sepay_payment(
     session_factory: async_sessionmaker[AsyncSession],
     payload: dict[str, object],
@@ -1401,7 +1502,19 @@ async def _process_sepay_payment(
 
             rejected_status: str | None = None
             credit_status: str | None = None
-            if now >= expires_at:
+            manual_credit_exists = None
+            if deposit.status == "paid" and amount == deposit.requested_amount:
+                manual_credit_exists = await session.scalar(
+                    select(PaymentTransaction.id).where(
+                        PaymentTransaction.deposit_id == deposit.id,
+                        PaymentTransaction.provider_tx_id == f"ADMIN-DEPOSIT-{deposit.id}",
+                        PaymentTransaction.credit_status == "credited",
+                    )
+                )
+            if manual_credit_exists is not None:
+                rejected_status = "manual_approval_matched"
+                credit_status = "manual_matched"
+            elif now >= expires_at:
                 if deposit.status == "pending":
                     deposit.status = "failed"
                     deposit.failed_at = now

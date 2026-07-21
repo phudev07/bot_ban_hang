@@ -21,6 +21,7 @@ from app.models import (
     DiscountCode,
     InventoryItem,
     Order,
+    PaymentTransaction,
     Product,
     ProductPriceAlert,
     ProductStockAlert,
@@ -33,8 +34,11 @@ from app.utils import SecretCipher
 
 
 class FakeBot:
+    def __init__(self) -> None:
+        self.messages: list[tuple[tuple[object, ...], dict[str, object]]] = []
+
     async def send_message(self, *_args, **_kwargs) -> None:
-        return None
+        self.messages.append((_args, _kwargs))
 
 
 def test_admin_core_ledgers_paginate_all_rows(tmp_path) -> None:
@@ -589,6 +593,101 @@ def test_dashboard_login_catalog_inventory_and_balance(tmp_path) -> None:
             assert wallet_transaction.balance_after == 60_000
             assert discount_count == 0
             assert quantity_discount_count == 0
+        await engine.dispose()
+
+    asyncio.run(verify_database())
+
+
+def test_admin_can_approve_pending_wallet_deposit_once(tmp_path) -> None:
+    async def setup_database():
+        database_path = (tmp_path / "dashboard-manual-deposit.db").as_posix()
+        engine = create_async_engine(f"sqlite+aiosqlite:///{database_path}")
+        async with engine.begin() as connection:
+            await connection.run_sync(Base.metadata.create_all)
+        sessions = async_sessionmaker(engine, expire_on_commit=False)
+        async with sessions() as session:
+            user = User(
+                telegram_id=88990011,
+                full_name="Manual deposit user",
+                username="manualdeposit",
+                balance=5_000,
+            )
+            session.add(user)
+            await session.flush()
+            deposit = Deposit(
+                user_id=user.telegram_id,
+                code="NAP88990011MANU",
+                requested_amount=20_000,
+                status="pending",
+                expires_at=datetime.now(UTC) + timedelta(minutes=5),
+            )
+            session.add(deposit)
+            await session.commit()
+            return engine, sessions, deposit.id
+
+    engine, sessions, deposit_id = asyncio.run(setup_database())
+    encryption_key = Fernet.generate_key().decode()
+    settings = Settings(
+        _env_file=None,
+        bot_token="123456:ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghi",
+        inventory_encryption_key=encryption_key,
+        dashboard_enabled=True,
+        dashboard_username="admin",
+        dashboard_password_hash=hash_dashboard_password("dashboard-password"),
+        dashboard_session_secret="session-secret-long-enough-for-tests",
+    )
+    bot = FakeBot()
+    app = create_api(
+        settings,
+        sessions,
+        bot,  # type: ignore[arg-type]
+        SecretCipher(encryption_key),
+    )
+
+    with TestClient(app, base_url="https://testserver") as client:
+        client.post(
+            "/admin/login",
+            data={"username": "admin", "password": "dashboard-password"},
+        )
+        payments_page = client.get("/admin/payments")
+        csrf_match = re.search(r'name="csrf" value="([^"]+)"', payments_page.text)
+        assert csrf_match is not None
+        csrf = csrf_match.group(1)
+        assert f'action="/admin/payments/deposits/{deposit_id}/approve"' in payments_page.text
+        assert "Duyệt +20.000đ" in payments_page.text
+
+        approved = client.post(
+            f"/admin/payments/deposits/{deposit_id}/approve",
+            data={"csrf": csrf},
+            follow_redirects=False,
+        )
+        duplicate = client.post(
+            f"/admin/payments/deposits/{deposit_id}/approve",
+            data={"csrf": csrf},
+            follow_redirects=False,
+        )
+        assert approved.status_code == 303
+        assert approved.headers["location"] == "/admin/payments"
+        assert duplicate.status_code == 303
+        assert len(bot.messages) == 1
+        assert bot.messages[0][0][0] == 88990011
+        assert "Khoản nạp đã được Admin duyệt" in str(bot.messages[0][0][1])
+
+    async def verify_database() -> None:
+        async with sessions() as session:
+            user = await session.get(User, 88990011)
+            deposit = await session.get(Deposit, deposit_id)
+            payment_transactions = list(
+                await session.scalars(select(PaymentTransaction))
+            )
+            adjustments = list(await session.scalars(select(BalanceAdjustment)))
+            wallet_transactions = list(await session.scalars(select(WalletTransaction)))
+            assert user is not None and user.balance == 25_000
+            assert deposit is not None and deposit.status == "paid"
+            assert len(payment_transactions) == 1
+            assert payment_transactions[0].provider_tx_id == f"ADMIN-DEPOSIT-{deposit_id}"
+            assert len(adjustments) == 1
+            assert len(wallet_transactions) == 1
         await engine.dispose()
 
     asyncio.run(verify_database())
