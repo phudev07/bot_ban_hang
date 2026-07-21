@@ -41,6 +41,7 @@ from app.models import (
     WalletTransaction,
 )
 from app.price_alerts import apply_supplier_price
+from app.stock_alerts import apply_supplier_stock
 from app.partner_services import award_referral_commission, ensure_referral_code
 from app.supplier_audit import record_supplier_purchase
 from app.supplier_recovery import queue_supplier_recovery
@@ -973,8 +974,26 @@ async def _purchase_product(
                         exc.code,
                         str(exc),
                     )
-                    if exc.code == "INSUFFICIENT_STOCK":
-                        product.external_stock = 0
+                    purchase_is_blocked = getattr(
+                        external_client,
+                        "purchase_is_blocked",
+                        None,
+                    )
+                    if callable(purchase_is_blocked) and purchase_is_blocked(
+                        product.supplier_product_id
+                    ):
+                        product.external_stock = recovered_stock
+                        await apply_supplier_stock(
+                            session,
+                            product,
+                            0,
+                            notify_on_increase=False,
+                        )
+                    if exc.code in {
+                        "INSUFFICIENT_STOCK",
+                        "SUPPLIER_PURCHASE_BACKOFF",
+                    }:
+                        product.external_stock = recovered_stock
                         return PurchaseResult(False, "out_of_stock")
                     # A balance/provider failure is not proof that the catalog
                     # item is sold out. Keep the last known stock for the next
@@ -1725,6 +1744,20 @@ async def _process_sepay_payment(
                                     )
                                 except SupplierError:
                                     product.external_stock = recovered_stock
+                                    purchase_is_blocked = getattr(
+                                        external_client,
+                                        "purchase_is_blocked",
+                                        None,
+                                    )
+                                    if callable(
+                                        purchase_is_blocked
+                                    ) and purchase_is_blocked(product.supplier_product_id):
+                                        await apply_supplier_stock(
+                                            session,
+                                            product,
+                                            0,
+                                            notify_on_increase=False,
+                                        )
                                 else:
                                     now = datetime.now(UTC)
                                     supplier_unit_cost = max(

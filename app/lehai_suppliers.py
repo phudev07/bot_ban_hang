@@ -15,6 +15,7 @@ from app.models import (
     InventoryItem,
     Product,
     SupplierBalanceTransaction,
+    SupplierPurchaseAttempt,
 )
 from app.price_alerts import apply_supplier_price
 from app.stock_alerts import apply_supplier_stock
@@ -87,6 +88,7 @@ LEHAI_PRODUCT_SEEDS: dict[str, dict[str, object]] = {
 CATEGORY_VI = "Gemini / Veo3 / Antigravity"
 CATEGORY_EN = "Gemini / Veo3 / Antigravity"
 REFUND_MATCH_WINDOW = timedelta(hours=48)
+SALE_PURCHASE_BACKOFF_SECONDS = 10 * 60
 LEHAI_PRODUCT_ALIASES: dict[str, tuple[str, ...]] = {
     # Lê Hải publishes a temporary product ID during Jio 18M sale campaigns.
     "cdk_ggpro_18m": ("sale_link18mgemini",),
@@ -124,6 +126,8 @@ class LeHaiPremiumClient:
         self._snapshot_lock = asyncio.Lock()
         self._snapshots: dict[str, SupplierSnapshot] = {}
         self._resolved_product_ids: dict[str, str] = {}
+        self._purchase_backoff_until: dict[str, float] = {}
+        self._purchase_backoff_reason: dict[str, str] = {}
         self._snapshot_at = 0.0
 
     def _http(self) -> httpx.AsyncClient:
@@ -304,6 +308,33 @@ class LeHaiPremiumClient:
         self._snapshot_at = 0.0
         self._snapshots = {}
 
+    def purchase_is_blocked(self, product_id: str) -> bool:
+        blocked_until = self._purchase_backoff_until.get(product_id, 0.0)
+        if blocked_until > time.monotonic():
+            return True
+        self._purchase_backoff_until.pop(product_id, None)
+        self._purchase_backoff_reason.pop(product_id, None)
+        return False
+
+    def block_sale_purchase(
+        self,
+        product_id: str,
+        reason: str,
+        *,
+        duration_seconds: float = SALE_PURCHASE_BACKOFF_SECONDS,
+    ) -> None:
+        self._purchase_backoff_until[product_id] = (
+            time.monotonic() + max(1.0, duration_seconds)
+        )
+        self._purchase_backoff_reason[product_id] = reason
+        self.invalidate_snapshot_cache()
+
+    def _uses_temporary_alias(self, product_id: str) -> bool:
+        return self._resolved_product_ids.get(product_id) in LEHAI_PRODUCT_ALIASES.get(
+            product_id,
+            (),
+        )
+
     async def buy(
         self,
         product_id: str,
@@ -311,17 +342,36 @@ class LeHaiPremiumClient:
         *,
         idempotency_key: str | None = None,
     ) -> SupplierPurchase:
+        if self.purchase_is_blocked(product_id):
+            reason = self._purchase_backoff_reason.get(product_id, "sale_purchase_failed")
+            raise SupplierError(
+                "SUPPLIER_PURCHASE_BACKOFF",
+                f"Sale purchase is temporarily blocked after {reason}",
+            )
         request_key = idempotency_key or f"shop-{secrets.token_hex(12)}"
         resolved_product_id = self._resolved_product_ids.get(product_id, product_id)
-        payload = await self._post(
-            "api/telegram-buyer/purchase",
-            {
-                "key": self.api_key,
-                "product_id": resolved_product_id,
-                "quantity": quantity,
-                "idempotency_key": request_key,
-            },
-        )
+        uses_temporary_alias = self._uses_temporary_alias(product_id)
+        try:
+            payload = await self._post(
+                "api/telegram-buyer/purchase",
+                {
+                    "key": self.api_key,
+                    "product_id": resolved_product_id,
+                    "quantity": quantity,
+                    "idempotency_key": request_key,
+                },
+            )
+        except SupplierError as exc:
+            if uses_temporary_alias and exc.code.startswith("SUPPLIER_HTTP_5"):
+                self.block_sale_purchase(product_id, exc.code)
+                logger.error(
+                    "Le Hai sale purchase circuit opened for %s after %s; "
+                    "blocking purchase calls for %s seconds",
+                    product_id,
+                    exc.code,
+                    SALE_PURCHASE_BACKOFF_SECONDS,
+                )
+            raise
         self.invalidate_snapshot_cache()
         delivered = payload.get("deliveredAccounts") or payload.get("delivered_accounts")
         if not isinstance(delivered, list):
@@ -360,6 +410,46 @@ class LeHaiPremiumClient:
             product_id=product_id,
             provider=self.provider,
         )
+
+
+async def restore_recent_sale_purchase_backoff(
+    session: AsyncSession,
+    product: Product,
+    client: LeHaiPremiumClient,
+) -> bool:
+    """Restore a still-active breaker after an application restart."""
+    if product.supplier_product_id not in LEHAI_PRODUCT_ALIASES:
+        return False
+    attempt = await session.scalar(
+        select(SupplierPurchaseAttempt)
+        .where(
+            SupplierPurchaseAttempt.provider == "lehai",
+            SupplierPurchaseAttempt.product_id == product.id,
+            SupplierPurchaseAttempt.status == "failed",
+            SupplierPurchaseAttempt.error_code.like("SUPPLIER_HTTP_5%"),
+            SupplierPurchaseAttempt.completed_at.is_not(None),
+        )
+        .order_by(SupplierPurchaseAttempt.completed_at.desc())
+        .limit(1)
+    )
+    if attempt is None or attempt.completed_at is None:
+        return False
+    completed_at = attempt.completed_at
+    if completed_at.tzinfo is None:
+        completed_at = completed_at.replace(tzinfo=UTC)
+    remaining = (
+        completed_at
+        + timedelta(seconds=SALE_PURCHASE_BACKOFF_SECONDS)
+        - datetime.now(UTC)
+    ).total_seconds()
+    if remaining <= 0:
+        return False
+    client.block_sale_purchase(
+        product.supplier_product_id,
+        attempt.error_code or "SUPPLIER_HTTP_500",
+        duration_seconds=remaining,
+    )
+    return True
 
 
 async def _balance_increase_is_api_refund(
@@ -516,6 +606,27 @@ async def refresh_lehai_product(
     )
     if client is None:
         product.external_stock = recovered_stock
+        await session.flush()
+        return product.external_stock
+    purchase_is_blocked = getattr(client, "purchase_is_blocked", None)
+    blocked = callable(purchase_is_blocked) and purchase_is_blocked(
+        product.supplier_product_id
+    )
+    if (
+        not blocked
+        and isinstance(client, LeHaiPremiumClient)
+        and await restore_recent_sale_purchase_backoff(session, product, client)
+    ):
+        blocked = True
+    if blocked:
+        product.external_stock = recovered_stock
+        await apply_supplier_stock(
+            session,
+            product,
+            0,
+            notify_on_increase=False,
+        )
+        product.supplier_synced_at = datetime.now(UTC)
         await session.flush()
         return product.external_stock
     if supplier_refresh_is_backed_off(client, product.supplier_product_id):

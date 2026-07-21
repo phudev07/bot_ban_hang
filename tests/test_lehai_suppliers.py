@@ -1,6 +1,6 @@
 import asyncio
 import json
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 import httpx
 import pytest
@@ -184,6 +184,134 @@ def test_lehai_jio_uses_sale_id_then_returns_to_canonical_id() -> None:
         assert standard_purchase.unit_price == 27_000
         assert purchased_product_ids == ["sale_link18mgemini", "cdk_ggpro_18m"]
         await client.aclose()
+
+    asyncio.run(scenario())
+
+
+def test_lehai_sale_500_opens_circuit_and_stops_followup_requests() -> None:
+    catalog_requests = 0
+    balance_requests = 0
+    purchase_requests = 0
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal catalog_requests, balance_requests, purchase_requests
+        if request.url.path.endswith("/balance"):
+            balance_requests += 1
+            return httpx.Response(200, json={"success": True, "balance": 100_000})
+        if request.url.path.endswith("/products"):
+            catalog_requests += 1
+            payload = product_payload()
+            payload["products"].append(  # type: ignore[union-attr]
+                {
+                    "_id": "sale_link18mgemini",
+                    "product_name": "[SALE] Link GG Pro Jio 18M",
+                    "walletPricing": 20_000,
+                    "description": "Temporary Jio sale",
+                    "stats": {"available": 9_999},
+                }
+            )
+            return httpx.Response(200, json=payload)
+        purchase_requests += 1
+        return httpx.Response(
+            500,
+            json={"success": False, "message": "purchase failed"},
+        )
+
+    async def scenario() -> None:
+        engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+        async with engine.begin() as connection:
+            await connection.run_sync(Base.metadata.create_all)
+        sessions = async_sessionmaker(engine, expire_on_commit=False)
+        cipher = SecretCipher(Fernet.generate_key().decode())
+        client = LeHaiPremiumClient(
+            "https://supplier.test",
+            "tgb_test",
+            transport=httpx.MockTransport(handler),
+        )
+        async with sessions() as session:
+            category = Category(name_vi=CATEGORY_VI, name_en=CATEGORY_VI)
+            session.add(category)
+            await session.flush()
+            product = Product(
+                category_id=category.id,
+                name_vi="Link GG Pro Jio 18M",
+                name_en="Google Pro Jio 18M Link",
+                price=28_000,
+                allow_quantity=True,
+                max_quantity=100,
+                fulfillment_source="lehai",
+                supplier_product_id="cdk_ggpro_18m",
+                supplier_markup=8_000,
+                external_stock=5,
+            )
+            user = User(telegram_id=123456, full_name="Buyer", balance=100_000)
+            session.add_all([product, user])
+            await session.commit()
+
+        first = await purchase_product(
+            sessions,
+            user.telegram_id,
+            product.id,
+            cipher,
+            1,
+            lehai_client=client,
+            supplier_idempotency_key="sale-failure-first",
+        )
+        await client.aclose()
+        restarted_client = LeHaiPremiumClient(
+            "https://supplier.test",
+            "tgb_test",
+            transport=httpx.MockTransport(handler),
+        )
+        second = await purchase_product(
+            sessions,
+            user.telegram_id,
+            product.id,
+            cipher,
+            1,
+            lehai_client=restarted_client,
+            supplier_idempotency_key="sale-failure-second",
+        )
+
+        assert first.ok is False and first.message == "supplier_unavailable"
+        assert second.ok is False and second.message == "out_of_stock"
+        assert purchase_requests == 1
+        assert catalog_requests == 1
+        assert balance_requests == 1
+        assert restarted_client.purchase_is_blocked("cdk_ggpro_18m") is True
+        async with sessions() as session:
+            stored_product = await session.get(Product, product.id)
+            attempts = list(
+                await session.scalars(
+                    select(SupplierPurchaseAttempt).order_by(SupplierPurchaseAttempt.id)
+                )
+            )
+            stored_user = await session.get(User, user.telegram_id)
+            assert stored_product is not None
+            assert stored_product.external_stock == 0
+            assert stored_product.supplier_available_stock == 0
+            assert len(attempts) == 1
+            assert attempts[0].error_code == "SUPPLIER_HTTP_500"
+            assert stored_user is not None and stored_user.balance == 100_000
+            attempts[0].completed_at = datetime.now(UTC) - timedelta(minutes=11)
+            await session.commit()
+
+        # Simulate the ten-minute TTL expiring: the next sync may expose the
+        # product again, and only a new failed purchase can reopen the circuit.
+        restarted_client._purchase_backoff_until["cdk_ggpro_18m"] = 0.0
+        async with sessions() as session:
+            stored_product = await session.get(Product, product.id)
+            assert stored_product is not None
+            assert await refresh_lehai_product(
+                session,
+                stored_product,
+                restarted_client,
+            ) == 5
+            await session.commit()
+        assert catalog_requests == 2
+        assert balance_requests == 2
+        await restarted_client.aclose()
+        await engine.dispose()
 
     asyncio.run(scenario())
 
