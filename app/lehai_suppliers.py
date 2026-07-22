@@ -530,8 +530,8 @@ async def ensure_lehai_products(
             )
         )
         for product in existing_products:
-            product.active = product.supplier_product_id in configured_ids
-            if not product.active:
+            if product.supplier_product_id not in configured_ids:
+                product.active = False
                 product.external_stock = 0
 
         if not settings.lehai_enabled:

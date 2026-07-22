@@ -744,6 +744,52 @@ def test_lehai_catalog_is_created_in_gemini_store_and_synced_dynamically() -> No
     asyncio.run(scenario())
 
 
+def test_lehai_startup_preserves_products_hidden_by_admin() -> None:
+    async def scenario() -> None:
+        engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+        async with engine.begin() as connection:
+            await connection.run_sync(Base.metadata.create_all)
+        sessions = async_sessionmaker(engine, expire_on_commit=False)
+        settings = Settings(
+            _env_file=None,
+            bot_token="123456:ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghi",
+            inventory_encryption_key=Fernet.generate_key().decode(),
+            sepay_enabled=False,
+            lehai_enabled=True,
+            lehai_api_key="tgb_test",
+        )
+        async with sessions() as session:
+            category = Category(name_vi=CATEGORY_VI, name_en=CATEGORY_VI)
+            session.add(category)
+            await session.flush()
+            hidden = Product(
+                category_id=category.id,
+                name_vi="Link GG Pro Jio 18M",
+                name_en="Google Pro Jio 18M Link",
+                price=35_000,
+                fulfillment_source="lehai",
+                supplier_product_id="cdk_ggpro_18m",
+                supplier_markup=8_000,
+                supplier_price=27_000,
+                external_stock=10,
+                active=False,
+            )
+            session.add(hidden)
+            await session.commit()
+            hidden_id = hidden.id
+
+        await ensure_lehai_products(sessions, settings)
+
+        async with sessions() as session:
+            stored = await session.get(Product, hidden_id)
+            assert stored is not None
+            assert stored.active is False
+            assert stored.external_stock == 10
+        await engine.dispose()
+
+    asyncio.run(scenario())
+
+
 class FakeLeHaiSupplier:
     provider = "lehai"
 
