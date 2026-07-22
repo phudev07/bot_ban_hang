@@ -3592,7 +3592,14 @@ def create_dashboard_router(
                     User.username.ilike(needle),
                 )
             )
-        if status in {"pending", "paid", "failed"}:
+        if status == "expired":
+            deposit_conditions.extend(
+                (
+                    Deposit.status == "failed",
+                    Deposit.failure_reason == "expired",
+                )
+            )
+        elif status in {"pending", "paid", "failed"}:
             deposit_conditions.append(Deposit.status == status)
         periods = dashboard_periods()
         async with session_factory() as session:

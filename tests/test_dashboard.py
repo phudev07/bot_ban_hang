@@ -754,11 +754,20 @@ def test_admin_can_cancel_pending_wallet_deposit_once(tmp_path) -> None:
                 status="pending",
                 expires_at=datetime.now(UTC) + timedelta(minutes=5),
             )
-            session.add(deposit)
+            expired = Deposit(
+                user_id=user.telegram_id,
+                code="NAP88990012EXPD",
+                requested_amount=15_000,
+                status="failed",
+                failure_reason="expired",
+                failed_at=datetime.now(UTC),
+                expires_at=datetime.now(UTC) - timedelta(minutes=1),
+            )
+            session.add_all([deposit, expired])
             await session.commit()
-            return engine, sessions, deposit.id
+            return engine, sessions, deposit.id, expired.id
 
-    engine, sessions, deposit_id = asyncio.run(setup_database())
+    engine, sessions, deposit_id, expired_id = asyncio.run(setup_database())
     encryption_key = Fernet.generate_key().decode()
     settings = Settings(
         _env_file=None,
@@ -788,6 +797,9 @@ def test_admin_can_cancel_pending_wallet_deposit_once(tmp_path) -> None:
         csrf = csrf_match.group(1)
         assert f'action="/admin/payments/deposits/{deposit_id}/approve"' in payments_page.text
         assert f'action="/admin/payments/deposits/{deposit_id}/cancel"' in payments_page.text
+        assert f'action="/admin/payments/deposits/{expired_id}/approve"' in payments_page.text
+        assert f'action="/admin/payments/deposits/{expired_id}/cancel"' in payments_page.text
+        assert "Đã hết hạn" in payments_page.text
         assert ">Hủy<" in payments_page.text
 
         cancelled = client.post(
@@ -800,21 +812,31 @@ def test_admin_can_cancel_pending_wallet_deposit_once(tmp_path) -> None:
             data={"csrf": csrf},
             follow_redirects=False,
         )
+        expired_cancelled = client.post(
+            f"/admin/payments/deposits/{expired_id}/cancel",
+            data={"csrf": csrf},
+            follow_redirects=False,
+        )
         assert cancelled.status_code == 303
         assert cancelled.headers["location"] == "/admin/payments"
         assert duplicate.status_code == 303
-        assert len(bot.messages) == 1
+        assert expired_cancelled.status_code == 303
+        assert len(bot.messages) == 2
         assert bot.messages[0][0][0] == 88990012
         assert "Admin hủy" in str(bot.messages[0][0][1])
+        assert "NAP88990012EXPD" in str(bot.messages[1][0][1])
 
     async def verify_database() -> None:
         async with sessions() as session:
             user = await session.get(User, 88990012)
             deposit = await session.get(Deposit, deposit_id)
+            expired = await session.get(Deposit, expired_id)
             assert user is not None and user.balance == 5_000
             assert deposit is not None and deposit.status == "failed"
             assert deposit.failure_reason == "admin_cancelled"
             assert deposit.failed_at is not None
+            assert expired is not None and expired.status == "failed"
+            assert expired.failure_reason == "admin_cancelled"
             assert await session.scalar(select(PaymentTransaction.id)) is None
             assert await session.scalar(select(BalanceAdjustment.id)) is None
             assert await session.scalar(select(WalletTransaction.id)) is None

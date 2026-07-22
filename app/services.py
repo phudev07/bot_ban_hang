@@ -1485,7 +1485,12 @@ async def cancel_wallet_deposit(
                     "already_cancelled",
                     deposit_code=deposit.code,
                 )
-            if deposit.status != "pending":
+            if deposit.status == "failed" and deposit.failure_reason != "expired":
+                return ManualDepositCancellationResult(
+                    "invalid_status",
+                    deposit_code=deposit.code,
+                )
+            if deposit.status not in {"pending", "failed"}:
                 return ManualDepositCancellationResult(
                     "invalid_status",
                     deposit_code=deposit.code,

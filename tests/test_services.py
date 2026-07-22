@@ -629,6 +629,40 @@ def test_manual_deposit_cancellation_is_idempotent_and_never_credits_wallet() ->
     asyncio.run(scenario())
 
 
+def test_manual_deposit_cancellation_allows_expired_requests() -> None:
+    async def scenario() -> None:
+        engine, sessions = await make_database()
+        async with sessions() as session:
+            user = User(telegram_id=321656, full_name="Expired deposit buyer", balance=5_000)
+            deposit = Deposit(
+                user_id=user.telegram_id,
+                code="NAP321656EXPD",
+                requested_amount=20_000,
+                status="failed",
+                failure_reason="expired",
+                failed_at=datetime.now(UTC),
+                expires_at=datetime.now(UTC) - timedelta(minutes=1),
+            )
+            session.add_all([user, deposit])
+            await session.commit()
+            deposit_id = deposit.id
+
+        cancelled = await cancel_wallet_deposit(sessions, deposit_id)
+        assert cancelled.status == "cancelled"
+        async with sessions() as session:
+            user = await session.get(User, 321656)
+            deposit = await session.get(Deposit, deposit_id)
+            assert user is not None and user.balance == 5_000
+            assert deposit is not None
+            assert deposit.status == "failed"
+            assert deposit.failure_reason == "admin_cancelled"
+            assert await session.scalar(select(PaymentTransaction.id)) is None
+            assert await session.scalar(select(WalletTransaction.id)) is None
+        await engine.dispose()
+
+    asyncio.run(scenario())
+
+
 def test_direct_purchase_payment_delivers_without_using_wallet() -> None:
     async def scenario() -> None:
         engine, sessions = await make_database()
