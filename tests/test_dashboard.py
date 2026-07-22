@@ -824,6 +824,10 @@ def test_admin_can_cancel_pending_wallet_deposit_once(tmp_path) -> None:
         assert len(bot.messages) == 1
         assert bot.messages[0][0][0] == 88990012
         assert "NAP88990012EXPD" in str(bot.messages[0][0][1])
+        cancelled_page = client.get("/admin/payments")
+        assert f'action="/admin/payments/deposits/{expired_id}/approve"' not in cancelled_page.text
+        assert f'action="/admin/payments/deposits/{expired_id}/cancel"' not in cancelled_page.text
+        assert "Đã hủy" in cancelled_page.text
 
     async def verify_database() -> None:
         async with sessions() as session:
