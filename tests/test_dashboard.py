@@ -977,6 +977,7 @@ def test_admin_can_import_recovered_external_inventory(tmp_path) -> None:
         inventory_page = client.get("/admin/inventory")
         assert inventory_page.status_code == 200
         assert f'<option value="{product_id}">' in inventory_page.text
+        assert 'name="lock_sale_price"' in inventory_page.text
         csrf = re.search(r'name="csrf" value="([^"]+)"', inventory_page.text).group(1)
         imported = client.post(
             "/admin/inventory",
@@ -984,6 +985,7 @@ def test_admin_can_import_recovered_external_inventory(tmp_path) -> None:
                 "csrf": csrf,
                 "product_id": str(product_id),
                 "items": "mics.retry-6h+5frux@icloud.com|password|key",
+                "lock_sale_price": "1",
             },
             follow_redirects=False,
         )
@@ -995,6 +997,9 @@ def test_admin_can_import_recovered_external_inventory(tmp_path) -> None:
             assert item is not None
             assert item.product_id == product_id
             assert item.cost_amount == 10_000
+            product = await session.get(Product, product_id)
+            assert product is not None and product.price_lock_enabled is True
+            assert product.external_stock == 1
         await engine.dispose()
 
     asyncio.run(verify_database())

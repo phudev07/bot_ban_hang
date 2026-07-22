@@ -362,3 +362,94 @@ def test_manual_stock_zero_updates_dynamic_price_without_sale_alert() -> None:
         await engine.dispose()
 
     asyncio.run(scenario())
+
+
+def test_inventory_price_lock_tracks_cost_without_changing_price_or_alerting() -> None:
+    async def scenario() -> None:
+        engine, sessions = await make_database()
+        async with sessions() as session:
+            category = Category(name_vi="API", name_en="API")
+            session.add(category)
+            await session.flush()
+            product = Product(
+                category_id=category.id,
+                name_vi="Hàng ôm",
+                name_en="Stocked item",
+                price=28_000,
+                fulfillment_source="lehai",
+                supplier_product_id="cdk_ggpro_18m",
+                supplier_price=20_000,
+                supplier_markup=8_000,
+                price_lock_enabled=True,
+                supplier_synced_at=datetime.now(UTC),
+            )
+            session.add(product)
+            await session.flush()
+            pending = ProductPriceAlert(
+                product_id=product.id,
+                provider="lehai",
+                supplier_price_before=27_000,
+                supplier_price_after=20_000,
+                sale_price_before=35_000,
+                sale_price_after=28_000,
+            )
+            session.add(pending)
+            await session.commit()
+
+            assert await apply_supplier_price(session, product, 18_000) is False
+            await session.commit()
+
+            assert product.price == 28_000
+            assert product.supplier_price == 18_000
+            assert pending.status == "superseded"
+            assert len(list(await session.scalars(select(ProductPriceAlert)))) == 1
+        await engine.dispose()
+
+    asyncio.run(scenario())
+
+
+def test_sale_alert_is_cancelled_while_inventory_price_is_locked() -> None:
+    async def scenario() -> None:
+        engine, sessions = await make_database()
+        async with sessions() as session:
+            category = Category(name_vi="API", name_en="API")
+            session.add(category)
+            await session.flush()
+            product = Product(
+                category_id=category.id,
+                name_vi="Hàng ôm",
+                name_en="Stocked item",
+                price=28_000,
+                fulfillment_source="lehai",
+                supplier_product_id="cdk_ggpro_18m",
+                supplier_price=20_000,
+                supplier_markup=8_000,
+                price_lock_enabled=True,
+                external_stock=1,
+            )
+            session.add(product)
+            await session.flush()
+            session.add_all(
+                [
+                    User(telegram_id=1, full_name="Buyer", has_started=True),
+                    ProductPriceAlert(
+                        product_id=product.id,
+                        provider="lehai",
+                        supplier_price_before=27_000,
+                        supplier_price_after=20_000,
+                        sale_price_before=35_000,
+                        sale_price_after=28_000,
+                    ),
+                ]
+            )
+            await session.commit()
+
+        bot = FakeSaleBot()
+        assert await deliver_pending_sale_alerts(sessions, bot, throttle_seconds=0) == 0
+        assert bot.calls == []
+        async with sessions() as session:
+            alert = await session.scalar(select(ProductPriceAlert))
+            assert alert is not None and alert.status == "superseded"
+        await engine.dispose()
+
+    asyncio.run(scenario())

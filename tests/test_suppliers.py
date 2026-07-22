@@ -117,6 +117,75 @@ def test_sumistore_stock_includes_recovered_local_inventory() -> None:
     asyncio.run(scenario())
 
 
+def test_locked_inventory_hides_supplier_stock_and_keeps_sale_price() -> None:
+    async def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path.endswith("/tele-balance"):
+            return httpx.Response(200, json={"success": True, "owner": {"balance": 250_000}})
+        return httpx.Response(
+            200,
+            json={
+                "success": True,
+                "product": {
+                    "id": "SP-GEF55PBV",
+                    "name": "ChatGPT Plus",
+                    "description": "Test",
+                    "price": 25_000,
+                    "stock": 100,
+                },
+            },
+        )
+
+    async def scenario() -> None:
+        engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+        async with engine.begin() as connection:
+            await connection.run_sync(Base.metadata.create_all)
+        sessions = async_sessionmaker(engine, expire_on_commit=False)
+        client = SumistoreClient(
+            "https://supplier.test/api",
+            "TAPI-test",
+            transport=httpx.MockTransport(handler),
+        )
+        async with sessions() as session:
+            category = Category(name_vi="ChatGPT", name_en="ChatGPT")
+            session.add(category)
+            await session.flush()
+            product = Product(
+                category_id=category.id,
+                name_vi="ChatGPT Plus",
+                name_en="ChatGPT Plus",
+                price=28_000,
+                fulfillment_source="sumistore",
+                supplier_product_id="SP-GEF55PBV",
+                supplier_markup=8_000,
+                supplier_price=20_000,
+                price_lock_enabled=True,
+            )
+            session.add(product)
+            await session.flush()
+            session.add(
+                InventoryItem(
+                    product_id=product.id,
+                    encrypted_secret="encrypted",
+                    cost_amount=20_000,
+                )
+            )
+            await session.flush()
+
+            stock = await refresh_external_product(session, product, client)
+            await session.commit()
+
+            assert stock == 1
+            assert product.external_stock == 1
+            assert product.supplier_available_stock == 10
+            assert product.supplier_price == 25_000
+            assert product.price == 28_000
+            assert product.price_lock_enabled is True
+        await client.aclose()
+        await engine.dispose()
+
+    asyncio.run(scenario())
+
+
 def test_price_drop_does_not_create_a_stock_alert_without_balance_topup() -> None:
     class PriceDropSupplier:
         async def fetch_snapshot(self, product_id: str) -> SupplierSnapshot:

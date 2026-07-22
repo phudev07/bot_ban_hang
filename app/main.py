@@ -176,6 +176,12 @@ async def initialize_database(engine, session_factory, seed_demo_data: bool) -> 
         )
         await connection.execute(
             text(
+                "ALTER TABLE deposits ADD COLUMN IF NOT EXISTS "
+                "inventory_price_locked BOOLEAN NOT NULL DEFAULT FALSE"
+            )
+        )
+        await connection.execute(
+            text(
                 "CREATE INDEX IF NOT EXISTS ix_orders_flash_sale_id "
                 "ON orders (flash_sale_id)"
             )
@@ -267,6 +273,12 @@ async def initialize_database(engine, session_factory, seed_demo_data: bool) -> 
         )
         await connection.execute(
             text("ALTER TABLE products ADD COLUMN IF NOT EXISTS supplier_price BIGINT NULL")
+        )
+        await connection.execute(
+            text(
+                "ALTER TABLE products ADD COLUMN IF NOT EXISTS "
+                "price_lock_enabled BOOLEAN NOT NULL DEFAULT FALSE"
+            )
         )
         await connection.execute(
             text(

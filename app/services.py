@@ -40,7 +40,7 @@ from app.models import (
     User,
     WalletTransaction,
 )
-from app.price_alerts import apply_supplier_price
+from app.price_alerts import apply_supplier_price, release_price_lock_if_inventory_empty
 from app.stock_alerts import apply_supplier_stock
 from app.partner_services import award_referral_commission, ensure_referral_code
 from app.supplier_audit import record_supplier_purchase
@@ -937,6 +937,7 @@ async def _purchase_product(
                         commission_percent=referral_commission_percent,
                     )
                     consume_flash_sale(pricing.flash_sale, quantity)
+                    await release_price_lock_if_inventory_empty(session, product)
                     await session.flush()
                     return PurchaseResult(
                         True,
@@ -988,6 +989,7 @@ async def _purchase_product(
                             product,
                             0,
                             notify_on_increase=False,
+                            local_inventory_stock=recovered_stock,
                         )
                     if exc.code in {
                         "INSUFFICIENT_STOCK",
@@ -1238,6 +1240,15 @@ async def create_deposit(
     if user is None:
         raise ValueError("User does not exist")
 
+    inventory_price_locked = False
+    if payment_kind == "direct_purchase" and product_id is not None:
+        deposit_product = await session.scalar(
+            select(Product).where(Product.id == product_id).with_for_update()
+        )
+        inventory_price_locked = bool(
+            deposit_product is not None and deposit_product.price_lock_enabled
+        )
+
     # Reuse identical QR requests created in the last 30 seconds instead of growing the table.
     reusable_after = now + timedelta(seconds=max(1, expiry_seconds - 30))
     existing = await session.scalar(
@@ -1253,6 +1264,7 @@ async def create_deposit(
             Deposit.quantity == quantity,
             Deposit.discount_code_id == discount_code_id,
             Deposit.flash_sale_id == flash_sale_id,
+            Deposit.inventory_price_locked == inventory_price_locked,
         )
         .order_by(Deposit.id.desc())
         .limit(1)
@@ -1308,6 +1320,7 @@ async def create_deposit(
         flash_sale_quantity=(
             max(1, flash_sale_quantity or quantity) if flash_sale is not None else 0
         ),
+        inventory_price_locked=inventory_price_locked,
         expires_at=now + timedelta(seconds=max(1, expiry_seconds)),
     )
     session.add(deposit)
@@ -1677,6 +1690,7 @@ async def _process_sepay_payment(
                     and product.active
                     and not product.force_out_of_stock
                     and flash_sale_can_fulfill
+                    and deposit.inventory_price_locked == product.price_lock_enabled
                 ):
                     if deposit.quantity == 1 or product.allow_quantity:
                         external_client = supplier_client_for_source(
@@ -1685,6 +1699,7 @@ async def _process_sepay_payment(
                             lehai_client,
                         )
                         if product.fulfillment_source in EXTERNAL_FULFILLMENT_SOURCES:
+                            supplier_stock = 0
                             items = await reserve_available_inventory(
                                 session,
                                 product.id,
@@ -1698,38 +1713,41 @@ async def _process_sepay_payment(
                             else:
                                 recovered_stock = len(items)
                                 items = []
-                                await notify_fulfillment_started(
-                                    on_fulfillment_started,
-                                    user.telegram_id,
-                                    user.language,
-                                )
-                                await refresh_product_from_supplier(
-                                    session,
-                                    product,
-                                    supplier_client,
-                                    lehai_client,
-                                )
-                                if deposit_campaign is not None:
-                                    unsafe_status = stop_unsafe_flash_sale(
-                                        deposit_campaign,
+                                if deposit.inventory_price_locked:
+                                    product.external_stock = recovered_stock
+                                else:
+                                    await notify_fulfillment_started(
+                                        on_fulfillment_started,
+                                        user.telegram_id,
+                                        user.language,
+                                    )
+                                    await refresh_product_from_supplier(
+                                        session,
                                         product,
+                                        supplier_client,
+                                        lehai_client,
                                     )
-                                    flash_sale_can_fulfill = bool(
-                                        unsafe_status is None
-                                        and deposit_campaign.status
-                                        not in {"cost_exceeded", "price_invalid"}
-                                        and int(product.supplier_price or 0)
-                                        <= deposit_campaign.sale_price
-                                        and deposit_campaign.sale_price < product.price
+                                    if deposit_campaign is not None:
+                                        unsafe_status = stop_unsafe_flash_sale(
+                                            deposit_campaign,
+                                            product,
+                                        )
+                                        flash_sale_can_fulfill = bool(
+                                            unsafe_status is None
+                                            and deposit_campaign.status
+                                            not in {"cost_exceeded", "price_invalid"}
+                                            and int(product.supplier_price or 0)
+                                            <= deposit_campaign.sale_price
+                                            and deposit_campaign.sale_price < product.price
+                                        )
+                                    supplier_stock = max(
+                                        0,
+                                        product.external_stock - recovered_stock,
                                     )
-                                supplier_stock = max(
-                                    0,
-                                    product.external_stock - recovered_stock,
-                                )
                             if not items and (
                                 flash_sale_can_fulfill
-                                and
-                                cipher is not None
+                                and not deposit.inventory_price_locked
+                                and cipher is not None
                                 and external_client is not None
                                 and product.supplier_product_id
                                 and supplier_stock >= deposit.quantity
@@ -1757,6 +1775,7 @@ async def _process_sepay_payment(
                                             product,
                                             0,
                                             notify_on_increase=False,
+                                            local_inventory_stock=recovered_stock,
                                         )
                                 else:
                                     now = datetime.now(UTC)
@@ -1894,6 +1913,8 @@ async def _process_sepay_payment(
                         commission_percent=referral_commission_percent,
                     )
                     await complete_deposit_flash_sale(session, deposit)
+                    if product.fulfillment_source in EXTERNAL_FULFILLMENT_SOURCES:
+                        await release_price_lock_if_inventory_empty(session, product)
                     deposit.status = "paid"
                     deposit.paid_amount = amount
                     deposit.paid_at = now

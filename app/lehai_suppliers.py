@@ -17,7 +17,7 @@ from app.models import (
     SupplierBalanceTransaction,
     SupplierPurchaseAttempt,
 )
-from app.price_alerts import apply_supplier_price
+from app.price_alerts import apply_supplier_price, release_price_lock_if_inventory_empty
 from app.stock_alerts import apply_supplier_stock
 from app.suppliers import (
     DEFINITIVE_PRODUCT_UNAVAILABLE_CODES,
@@ -604,6 +604,8 @@ async def refresh_lehai_product(
         )
         or 0
     )
+    if product.price_lock_enabled and recovered_stock <= 0:
+        await release_price_lock_if_inventory_empty(session, product)
     if client is None:
         product.external_stock = recovered_stock
         await session.flush()
@@ -625,19 +627,28 @@ async def refresh_lehai_product(
             product,
             0,
             notify_on_increase=False,
+            local_inventory_stock=recovered_stock,
         )
         product.supplier_synced_at = datetime.now(UTC)
         await session.flush()
         return product.external_stock
     if supplier_refresh_is_backed_off(client, product.supplier_product_id):
-        product.external_stock = max(0, product.external_stock, recovered_stock)
+        product.external_stock = (
+            recovered_stock
+            if product.price_lock_enabled
+            else max(0, product.external_stock, recovered_stock)
+        )
         return product.external_stock
     try:
         snapshot = await client.fetch_snapshot(product.supplier_product_id)
     except SupplierError as exc:
         # Do not turn a temporary API/network error into a false sold-out
         # state. The purchase path will still ask the provider for the truth.
-        product.external_stock = max(0, product.external_stock, recovered_stock)
+        product.external_stock = (
+            recovered_stock
+            if product.price_lock_enabled
+            else max(0, product.external_stock, recovered_stock)
+        )
         definitive = exc.code in DEFINITIVE_PRODUCT_UNAVAILABLE_CODES
         mark_supplier_refresh_failure(
             client,
@@ -646,7 +657,12 @@ async def refresh_lehai_product(
         )
         if definitive:
             product.external_stock = recovered_stock
-            await apply_supplier_stock(session, product, 0)
+            await apply_supplier_stock(
+                session,
+                product,
+                0,
+                local_inventory_stock=recovered_stock,
+            )
             product.supplier_synced_at = datetime.now(UTC)
         await session.flush()
         logger.warning(
@@ -671,7 +687,11 @@ async def refresh_lehai_product(
         )
     )
     product.supplier_owner_balance = current_owner_balance
-    product.external_stock = snapshot.effective_stock + recovered_stock
+    product.external_stock = (
+        recovered_stock
+        if product.price_lock_enabled
+        else snapshot.effective_stock + recovered_stock
+    )
     await apply_supplier_price(session, product, snapshot.unit_price)
     await apply_supplier_stock(
         session,
@@ -681,6 +701,7 @@ async def refresh_lehai_product(
             product.notify_stock_without_balance_topup
             or (balance_increased and not refund_increase)
         ),
+        local_inventory_stock=recovered_stock,
     )
     product.supplier_synced_at = datetime.now(UTC)
     await session.flush()

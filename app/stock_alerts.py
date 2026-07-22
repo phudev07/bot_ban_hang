@@ -4,6 +4,7 @@ from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models import Product, ProductStockAlert
+from app.price_alerts import release_price_lock_if_inventory_empty
 
 
 # Only these featured products send automatic "back in stock" notifications.
@@ -35,8 +36,9 @@ async def apply_supplier_stock(
     supplier_available_stock: int,
     *,
     notify_on_increase: bool = True,
+    local_inventory_stock: int | None = None,
 ) -> bool:
-    """Store supplier stock and optionally queue a balance-funded alert."""
+    """Store supplier stock, release exhausted stock locks and optionally queue an alert."""
     if product.id is None:
         return False
 
@@ -54,6 +56,12 @@ async def apply_supplier_stock(
     was_initialized = locked_product.supplier_available_stock_initialized
     locked_product.supplier_available_stock = new_stock
     locked_product.supplier_available_stock_initialized = True
+    if (
+        local_inventory_stock is not None
+        and int(local_inventory_stock) <= 0
+        and locked_product.price_lock_enabled
+    ):
+        await release_price_lock_if_inventory_empty(session, locked_product)
 
     if locked_product.force_out_of_stock:
         await session.execute(

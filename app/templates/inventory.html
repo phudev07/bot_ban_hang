@@ -14,6 +14,11 @@
       <label>Dữ liệu kho
         <textarea name="items" rows="14" placeholder="user1:password1&#10;user2:password2&#10;&#10;Hoặc ngăn dữ liệu nhiều dòng bằng dòng ---" required></textarea>
       </label>
+      <label class="check wide">
+        <input type="checkbox" name="lock_sale_price" value="1">
+        <span>Khóa cứng giá bán hiện tại cho lô hàng ôm này</span>
+        <small>Chỉ áp dụng với sản phẩm API. Bot chỉ bán hàng đang nằm trong kho nhập, không gọi thêm từ API; bán hết kho nhập sẽ tự mở khóa và trở lại giá động.</small>
+      </label>
       <p class="hint">Mỗi dòng là một món. Nếu một món có nhiều dòng, ngăn các món bằng dòng <code>---</code>. Dữ liệu được mã hóa trước khi lưu.</p>
       <button class="button primary" type="submit" {{ 'disabled' if not import_products else '' }}>Mã hóa và nhập kho</button>
     </form>
@@ -21,7 +26,7 @@
   <section class="panel">
     <div class="panel-head"><div><span>STOCK LEVELS</span><h2>Tồn kho hiện tại</h2></div></div>
     <div class="stack-list">
-      {% for row in products %}<article><div><strong>{{ row.product.name_vi }}</strong><small>#{{ row.product.id }} · {{ row.product.product_type }} · {{ 'Kho bot' if row.product.fulfillment_source == 'local' else ('Sumistore' if row.product.fulfillment_source == 'sumistore' else 'Lê Hải') }}</small></div><span class="big-number">{{ row.stock }}</span></article>{% else %}<p class="empty">Hãy tạo sản phẩm trước khi nhập kho.</p>{% endfor %}
+      {% for row in products %}<article><div><strong>{{ row.product.name_vi }}</strong><small>#{{ row.product.id }} · {{ row.product.product_type }} · {{ 'Kho bot' if row.product.fulfillment_source == 'local' else ('Sumistore' if row.product.fulfillment_source == 'sumistore' else 'Lê Hải') }}{% if row.product.price_lock_enabled %} · Đang khóa giá theo kho nhập{% endif %}</small></div><span class="big-number">{{ row.stock }}</span></article>{% else %}<p class="empty">Hãy tạo sản phẩm trước khi nhập kho.</p>{% endfor %}
     </div>
   </section>
 </div>

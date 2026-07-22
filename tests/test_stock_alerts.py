@@ -7,7 +7,14 @@ from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from app.broadcasts import deliver_pending_stock_alerts
 from app.database import Base
-from app.models import Category, Product, ProductAlertDelivery, ProductStockAlert, User
+from app.models import (
+    Category,
+    InventoryItem,
+    Product,
+    ProductAlertDelivery,
+    ProductStockAlert,
+    User,
+)
 from app.stock_alerts import apply_supplier_stock, stock_alert_enabled
 
 
@@ -387,6 +394,61 @@ def test_manual_stock_zero_updates_source_stock_without_announcing() -> None:
 
             assert product.supplier_available_stock == 20
             assert await session.scalar(select(ProductStockAlert.id)) is None
+        await engine.dispose()
+
+    asyncio.run(scenario())
+
+
+def test_price_lock_releases_only_after_imported_inventory_is_empty() -> None:
+    async def scenario() -> None:
+        engine, sessions = await make_database()
+        async with sessions() as session:
+            category = Category(name_vi="API", name_en="API")
+            session.add(category)
+            await session.flush()
+            product = Product(
+                category_id=category.id,
+                name_vi="Hàng ôm",
+                name_en="Stocked item",
+                price=28_000,
+                fulfillment_source="lehai",
+                supplier_product_id="cdk_ggpro_18m",
+                supplier_price=27_000,
+                supplier_markup=8_000,
+                price_lock_enabled=True,
+                external_stock=1,
+            )
+            session.add(product)
+            await session.flush()
+            item = InventoryItem(
+                product_id=product.id,
+                encrypted_secret="encrypted",
+                cost_amount=20_000,
+            )
+            session.add(item)
+            await session.commit()
+
+            await apply_supplier_stock(
+                session,
+                product,
+                10,
+                local_inventory_stock=0,
+            )
+            await session.commit()
+            assert product.price_lock_enabled is True
+            assert product.price == 28_000
+
+            item.status = "sold"
+            await session.flush()
+            await apply_supplier_stock(
+                session,
+                product,
+                10,
+                local_inventory_stock=0,
+            )
+            await session.commit()
+            assert product.price_lock_enabled is False
+            assert product.price == 35_000
         await engine.dispose()
 
     asyncio.run(scenario())

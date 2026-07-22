@@ -850,6 +850,7 @@ async def _claim_sale_alert(
         for alert, product in rows:
             if (
                 not product.active
+                or product.price_lock_enabled
                 or product.price != alert.sale_price_after
                 or product.fulfillment_source != alert.provider
             ):

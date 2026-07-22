@@ -17,7 +17,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.config import Settings
 from app.models import Category, InventoryItem, Product
-from app.price_alerts import apply_supplier_price
+from app.price_alerts import apply_supplier_price, release_price_lock_if_inventory_empty
 from app.stock_alerts import apply_supplier_stock
 
 
@@ -548,12 +548,18 @@ async def refresh_external_product(
         )
         or 0
     )
+    if product.price_lock_enabled and recovered_stock <= 0:
+        await release_price_lock_if_inventory_empty(session, product)
     if client is None:
         product.external_stock = recovered_stock
         await session.flush()
         return product.external_stock
     if supplier_refresh_is_backed_off(client, product.supplier_product_id):
-        product.external_stock = max(0, product.external_stock, recovered_stock)
+        product.external_stock = (
+            recovered_stock
+            if product.price_lock_enabled
+            else max(0, product.external_stock, recovered_stock)
+        )
         return product.external_stock
     try:
         snapshot = await client.fetch_snapshot(product.supplier_product_id)
@@ -561,7 +567,11 @@ async def refresh_external_product(
         # Keep the last successful supplier stock during a transient outage.
         # Clearing it here makes a healthy product look sold out and blocks a
         # purchase before the provider can return its real result.
-        product.external_stock = max(0, product.external_stock, recovered_stock)
+        product.external_stock = (
+            recovered_stock
+            if product.price_lock_enabled
+            else max(0, product.external_stock, recovered_stock)
+        )
         definitive = exc.code in DEFINITIVE_PRODUCT_UNAVAILABLE_CODES
         mark_supplier_refresh_failure(
             client,
@@ -570,7 +580,12 @@ async def refresh_external_product(
         )
         if definitive:
             product.external_stock = recovered_stock
-            await apply_supplier_stock(session, product, 0)
+            await apply_supplier_stock(
+                session,
+                product,
+                0,
+                local_inventory_stock=recovered_stock,
+            )
             product.supplier_synced_at = datetime.now(UTC)
         await session.flush()
         logger.warning(
@@ -587,7 +602,11 @@ async def refresh_external_product(
         and current_owner_balance > previous_owner_balance
     )
     product.supplier_owner_balance = current_owner_balance
-    product.external_stock = snapshot.effective_stock + recovered_stock
+    product.external_stock = (
+        recovered_stock
+        if product.price_lock_enabled
+        else snapshot.effective_stock + recovered_stock
+    )
     await apply_supplier_price(session, product, snapshot.unit_price)
     await apply_supplier_stock(
         session,
@@ -596,6 +615,7 @@ async def refresh_external_product(
         notify_on_increase=(
             balance_increased or product.notify_stock_without_balance_topup
         ),
+        local_inventory_stock=recovered_stock,
     )
     product.supplier_synced_at = datetime.now(UTC)
     await session.flush()

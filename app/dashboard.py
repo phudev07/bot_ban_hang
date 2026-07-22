@@ -50,6 +50,7 @@ from app.models import (
 from app.partner_services import normalize_allowed_ips
 from app.rentsim import RentSimClient
 from app.services import approve_wallet_deposit
+from app.price_alerts import release_price_lock_if_inventory_empty
 from app.sms_rentals import sms_availability
 from app.stock_alerts import stock_alert_mode
 from app.supplier_audit import PROVIDER, reconcile_supplier_balance
@@ -1153,6 +1154,7 @@ def create_dashboard_router(
             select(
                 InventoryItem.product_id,
                 func.count(InventoryItem.id).label("stock"),
+                func.avg(InventoryItem.cost_amount).label("average_cost"),
             )
             .where(InventoryItem.status == "available")
             .group_by(InventoryItem.product_id)
@@ -1172,6 +1174,7 @@ def create_dashboard_router(
                 Product,
                 Category,
                 func.coalesce(stock_query.c.stock, 0),
+                func.coalesce(stock_query.c.average_cost, 0),
                 func.coalesce(coupon_query.c.coupon_count, 0),
             )
             .join(Category, Category.id == Product.category_id)
@@ -1204,17 +1207,24 @@ def create_dashboard_router(
                 "coupon_count": int(coupon_count),
                 "stock_alert_mode": stock_alert_mode(product),
                 "unit_cost": (
-                    int(product.supplier_price or 0)
+                    int(average_cost or 0)
+                    if product.price_lock_enabled
+                    else int(product.supplier_price or 0)
                     if product.fulfillment_source in EXTERNAL_FULFILLMENT_SOURCES
                     else 0
                 ),
                 "unit_profit": (
-                    product.price - int(product.supplier_price or 0)
+                    product.price
+                    - (
+                        int(average_cost or 0)
+                        if product.price_lock_enabled
+                        else int(product.supplier_price or 0)
+                    )
                     if product.fulfillment_source in EXTERNAL_FULFILLMENT_SOURCES
                     else product.price
                 ),
             }
-            for product, category, stock, coupon_count in rows
+            for product, category, stock, average_cost, coupon_count in rows
         ]
 
     @router.get("/admin/products", response_class=HTMLResponse)
@@ -1414,6 +1424,7 @@ def create_dashboard_router(
             if normalized_source == "local":
                 product.supplier_price = None
                 product.external_stock = 0
+                product.price_lock_enabled = False
             product.notify_stock_without_balance_topup = (
                 notify_stock_without_balance_topup is not None
                 and normalized_source in EXTERNAL_FULFILLMENT_SOURCES
@@ -2244,14 +2255,18 @@ def create_dashboard_router(
         csrf: str = Form(...),
         product_id: int = Form(...),
         items: str = Form(...),
+        lock_sale_price: str | None = Form(None),
     ) -> RedirectResponse:
         if not is_admin(request):
             return redirect_to_login()
         if not valid_csrf(request, csrf):
             return RedirectResponse("/admin/inventory", status_code=303)
         parsed_items = split_inventory_items(items)
+        lock_applied = False
         async with session_factory() as session:
-            product = await session.get(Product, product_id)
+            product = await session.scalar(
+                select(Product).where(Product.id == product_id).with_for_update()
+            )
             if (
                 product is None
                 or product.fulfillment_source not in SELLABLE_FULFILLMENT_SOURCES
@@ -2274,8 +2289,34 @@ def create_dashboard_router(
                     for item in parsed_items
                 ]
             )
+            await session.flush()
+            if (
+                lock_sale_price is not None
+                and product.fulfillment_source in EXTERNAL_FULFILLMENT_SOURCES
+            ):
+                product.price_lock_enabled = True
+                lock_applied = True
+                await session.execute(
+                    update(ProductPriceAlert)
+                    .where(
+                        ProductPriceAlert.product_id == product.id,
+                        ProductPriceAlert.status == "pending",
+                    )
+                    .values(status="superseded")
+                )
+            if product.price_lock_enabled:
+                product.external_stock = int(
+                    await session.scalar(
+                        select(func.count(InventoryItem.id)).where(
+                            InventoryItem.product_id == product.id,
+                            InventoryItem.status == "available",
+                        )
+                    )
+                    or 0
+                )
             await session.commit()
-        flash(request, f"Đã thêm {len(parsed_items)} sản phẩm vào kho.")
+        lock_note = " và đã khóa giá bán" if lock_applied else ""
+        flash(request, f"Đã thêm {len(parsed_items)} sản phẩm vào kho{lock_note}.")
         return RedirectResponse("/admin/inventory", status_code=303)
 
     @router.post("/admin/inventory/{item_id}/delete")
@@ -2289,11 +2330,28 @@ def create_dashboard_router(
         if not valid_csrf(request, csrf):
             return RedirectResponse("/admin/inventory", status_code=303)
         async with session_factory() as session:
-            item = await session.get(InventoryItem, item_id)
+            item = await session.scalar(
+                select(InventoryItem).where(InventoryItem.id == item_id).with_for_update()
+            )
             if item is None or item.status != "available":
                 flash(request, "Chỉ có thể xóa mục kho chưa bán.", "error")
                 return RedirectResponse("/admin/inventory", status_code=303)
+            product = await session.scalar(
+                select(Product).where(Product.id == item.product_id).with_for_update()
+            )
             await session.delete(item)
+            await session.flush()
+            if product is not None and product.price_lock_enabled:
+                product.external_stock = int(
+                    await session.scalar(
+                        select(func.count(InventoryItem.id)).where(
+                            InventoryItem.product_id == product.id,
+                            InventoryItem.status == "available",
+                        )
+                    )
+                    or 0
+                )
+                await release_price_lock_if_inventory_empty(session, product)
             await session.commit()
         flash(request, f"Đã xóa mục kho #{item_id}.")
         return RedirectResponse("/admin/inventory", status_code=303)

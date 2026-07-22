@@ -66,6 +66,9 @@ class Product(Base):
     supplier_product_id: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
     supplier_markup: Mapped[int] = mapped_column(BigInteger, default=0)
     supplier_price: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    price_lock_enabled: Mapped[bool] = mapped_column(
+        Boolean, default=False, server_default="false"
+    )
     external_stock: Mapped[int] = mapped_column(default=0)
     force_out_of_stock: Mapped[bool] = mapped_column(
         Boolean, default=False, server_default="false"
@@ -382,6 +385,9 @@ class Deposit(Base):
         index=True,
     )
     flash_sale_quantity: Mapped[int] = mapped_column(default=0, server_default="0")
+    inventory_price_locked: Mapped[bool] = mapped_column(
+        Boolean, default=False, server_default="false"
+    )
     status: Mapped[str] = mapped_column(String(20), default="pending", index=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
