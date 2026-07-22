@@ -3696,7 +3696,9 @@ def create_dashboard_router(
             review_amount = int(
                 await session.scalar(
                     select(func.coalesce(func.sum(PaymentTransaction.amount), 0)).where(
-                        PaymentTransaction.credit_status.notin_(("credited", "manual_matched"))
+                        PaymentTransaction.credit_status.notin_(
+                            ("credited", "manual_matched", "expired")
+                        )
                     )
                 )
                 or 0
@@ -3704,7 +3706,9 @@ def create_dashboard_router(
             review_count = int(
                 await session.scalar(
                     select(func.count(PaymentTransaction.id)).where(
-                        PaymentTransaction.credit_status.notin_(("credited", "manual_matched"))
+                        PaymentTransaction.credit_status.notin_(
+                            ("credited", "manual_matched", "expired")
+                        )
                     )
                 )
                 or 0

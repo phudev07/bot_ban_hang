@@ -767,6 +767,16 @@ def test_admin_can_cancel_pending_wallet_deposit_once(tmp_path) -> None:
                 expires_at=datetime.now(UTC) - timedelta(minutes=1),
             )
             session.add_all([deposit, expired])
+            await session.flush()
+            session.add(
+                PaymentTransaction(
+                    deposit_id=expired.id,
+                    user_id=user.telegram_id,
+                    provider_tx_id="EXPIRED-CHECK-88990012",
+                    amount=15_000,
+                    credit_status="expired",
+                )
+            )
             await session.commit()
             return engine, sessions, deposit.id, expired.id
 
@@ -804,6 +814,7 @@ def test_admin_can_cancel_pending_wallet_deposit_once(tmp_path) -> None:
         assert f'action="/admin/payments/deposits/{expired_id}/cancel"' in payments_page.text
         assert "Đã hết hạn" in payments_page.text
         assert ">Hủy<" in payments_page.text
+        assert "1 giao dịch không cộng tiền" not in payments_page.text
 
         cancelled = client.post(
             f"/admin/payments/deposits/{deposit_id}/cancel",
@@ -844,7 +855,8 @@ def test_admin_can_cancel_pending_wallet_deposit_once(tmp_path) -> None:
             assert deposit.failed_at is None
             assert expired is not None and expired.status == "failed"
             assert expired.failure_reason == "admin_cancelled"
-            assert await session.scalar(select(PaymentTransaction.id)) is None
+            transaction = await session.scalar(select(PaymentTransaction))
+            assert transaction is not None and transaction.credit_status == "expired"
             assert await session.scalar(select(BalanceAdjustment.id)) is None
             assert await session.scalar(select(WalletTransaction.id)) is None
         await engine.dispose()
