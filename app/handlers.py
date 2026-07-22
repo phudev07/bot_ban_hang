@@ -1089,11 +1089,17 @@ def create_router(
             f"• Maximum per order: <b>{maximum}</b>"
         )
         if quantity_discounts and not (pricing and pricing.flash_sale):
-            tier_summary = " · ".join(
-                f"{tier.min_quantity}+: -{tier.discount_percent}%"
+            tier_summary = "\n".join(
+                (
+                    f"🎁 Mua từ <b>{tier.min_quantity}+</b> nick giảm "
+                    f"<b>{tier.discount_percent}%</b>"
+                    if user.language == "vi"
+                    else f"🎁 Buy <b>{tier.min_quantity}+</b> accounts and save "
+                    f"<b>{tier.discount_percent}%</b>"
+                )
                 for tier in quantity_discounts
             )
-            text += f"\n\n🎁 {tier_summary}"
+            text += f"\n\n{tier_summary}"
         if callback.message:
             await callback.message.edit_text(
                 text,
