@@ -646,8 +646,13 @@ def create_public_api_router(
                     "price_changed": 409,
                     "not_found": 404,
                 }
+                status_code = (
+                    400
+                    if result.message.startswith("coupon_")
+                    else status_map.get(result.message, 400)
+                )
                 raise api_error(
-                    status_map.get(result.message, 400),
+                    status_code,
                     result.message.upper(),
                     "Order could not be completed",
                 )

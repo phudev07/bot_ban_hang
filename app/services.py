@@ -471,6 +471,63 @@ def normalize_discount_code(value: str) -> str:
     return value.strip().upper()
 
 
+class CouponValidationError(ValueError):
+    def __init__(self, code: str) -> None:
+        super().__init__(code)
+        self.code = code
+
+
+async def resolve_discount_code(
+    session: AsyncSession,
+    product: Product,
+    *,
+    coupon_code: str | None = None,
+    coupon_id: int | None = None,
+    user_id: int | None = None,
+    lock_coupon: bool = False,
+) -> DiscountCode:
+    normalized_code = normalize_discount_code(coupon_code or "")
+    if coupon_id is None and not normalized_code:
+        raise CouponValidationError("coupon_empty")
+
+    statement = select(DiscountCode)
+    if coupon_id is not None:
+        statement = statement.where(DiscountCode.id == coupon_id)
+    else:
+        statement = statement.where(DiscountCode.code == normalized_code)
+    if lock_coupon:
+        statement = statement.with_for_update()
+    coupon = await session.scalar(statement)
+    if coupon is None:
+        raise CouponValidationError("coupon_not_found")
+    if coupon.product_id != product.id:
+        raise CouponValidationError("coupon_wrong_product")
+
+    now = datetime.now(UTC)
+    starts_at = _as_utc(coupon.starts_at)
+    expires_at = _as_utc(coupon.expires_at)
+    if not coupon.active:
+        raise CouponValidationError("coupon_inactive")
+    if starts_at is not None and starts_at > now:
+        raise CouponValidationError("coupon_not_started")
+    if expires_at is not None and expires_at <= now:
+        raise CouponValidationError("coupon_expired")
+    if user_id is not None:
+        previous_order = await session.scalar(
+            select(Order.id)
+            .where(
+                Order.user_id == user_id,
+                Order.discount_code_id == coupon.id,
+            )
+            .limit(1)
+        )
+        if previous_order is not None:
+            raise CouponValidationError("coupon_already_used")
+    if coupon.max_uses > 0 and coupon.used_count >= coupon.max_uses:
+        raise CouponValidationError("coupon_exhausted")
+    return coupon
+
+
 def _as_utc(value: datetime | None) -> datetime | None:
     if value is None:
         return None
@@ -498,9 +555,11 @@ async def product_pricing(
     coupon_code: str | None = None,
     coupon_id: int | None = None,
     quantity: int = 1,
+    user_id: int | None = None,
     lock_coupon: bool = False,
     lock_flash_sale: bool = False,
     expected_flash_sale_id: int | None = None,
+    raise_coupon_error: bool = False,
 ) -> ProductPricing | None:
     flash_sale = await active_flash_sale(
         session,
@@ -521,25 +580,19 @@ async def product_pricing(
 
     coupon: DiscountCode | None = None
     coupon_discount = 0
-    if coupon_code or coupon_id is not None:
-        statement = select(DiscountCode).where(DiscountCode.product_id == product.id)
-        if coupon_id is not None:
-            statement = statement.where(DiscountCode.id == coupon_id)
-        else:
-            statement = statement.where(
-                DiscountCode.code == normalize_discount_code(coupon_code or "")
+    if coupon_code is not None or coupon_id is not None:
+        try:
+            coupon = await resolve_discount_code(
+                session,
+                product,
+                coupon_code=coupon_code,
+                coupon_id=coupon_id,
+                user_id=user_id,
+                lock_coupon=lock_coupon,
             )
-        if lock_coupon:
-            statement = statement.with_for_update()
-        coupon = await session.scalar(statement)
-        now = datetime.now(UTC)
-        if (
-            coupon is None
-            or not coupon.active
-            or (_as_utc(coupon.starts_at) is not None and _as_utc(coupon.starts_at) > now)
-            or (_as_utc(coupon.expires_at) is not None and _as_utc(coupon.expires_at) <= now)
-            or (coupon.max_uses > 0 and coupon.used_count >= coupon.max_uses)
-        ):
+        except CouponValidationError:
+            if raise_coupon_error:
+                raise
             return None
 
         if coupon.discount_type == "percent":
@@ -834,16 +887,21 @@ async def _purchase_product(
                         or supplier_stock < quantity
                     ):
                         return PurchaseResult(False, "out_of_stock")
-            pricing = await product_pricing(
-                session,
-                product,
-                coupon_code=coupon_code,
-                coupon_id=coupon_id,
-                quantity=quantity,
-                lock_coupon=bool(coupon_code or coupon_id is not None),
-                lock_flash_sale=True,
-                expected_flash_sale_id=expected_flash_sale_id,
-            )
+            try:
+                pricing = await product_pricing(
+                    session,
+                    product,
+                    coupon_code=coupon_code,
+                    coupon_id=coupon_id,
+                    quantity=quantity,
+                    user_id=user.telegram_id,
+                    lock_coupon=bool(coupon_code or coupon_id is not None),
+                    lock_flash_sale=True,
+                    expected_flash_sale_id=expected_flash_sale_id,
+                    raise_coupon_error=True,
+                )
+            except CouponValidationError as exc:
+                return PurchaseResult(False, exc.code)
             if pricing is None:
                 return PurchaseResult(
                     False,
@@ -1742,6 +1800,31 @@ async def _process_sepay_payment(
                     .where(Product.id == deposit.product_id)
                     .with_for_update()
                 )
+                reserved_coupon: DiscountCode | None = None
+                coupon_can_fulfill = True
+                if deposit.discount_code_id is not None:
+                    reserved_coupon = await session.scalar(
+                        select(DiscountCode)
+                        .where(DiscountCode.id == deposit.discount_code_id)
+                        .with_for_update()
+                    )
+                    previous_coupon_order = await session.scalar(
+                        select(Order.id)
+                        .where(
+                            Order.user_id == user.telegram_id,
+                            Order.discount_code_id == deposit.discount_code_id,
+                        )
+                        .limit(1)
+                    )
+                    coupon_can_fulfill = bool(
+                        reserved_coupon is not None
+                        and reserved_coupon.product_id == deposit.product_id
+                        and previous_coupon_order is None
+                        and (
+                            reserved_coupon.max_uses <= 0
+                            or reserved_coupon.used_count < reserved_coupon.max_uses
+                        )
+                    )
                 flash_sale_can_fulfill = True
                 deposit_campaign: FlashSaleCampaign | None = None
                 if deposit.flash_sale_id is not None:
@@ -1778,6 +1861,7 @@ async def _process_sepay_payment(
                     product is not None
                     and product.active
                     and not product.force_out_of_stock
+                    and coupon_can_fulfill
                     and flash_sale_can_fulfill
                     and deposit.inventory_price_locked == product.price_lock_enabled
                 ):
@@ -1981,14 +2065,8 @@ async def _process_sepay_payment(
                             quantity=deposit.quantity,
                             provider=supplier_purchase.provider,
                         )
-                    if deposit.discount_code_id is not None:
-                        coupon = await session.scalar(
-                            select(DiscountCode)
-                            .where(DiscountCode.id == deposit.discount_code_id)
-                            .with_for_update()
-                        )
-                        if coupon is not None:
-                            coupon.used_count += 1
+                    if reserved_coupon is not None:
+                        reserved_coupon.used_count += 1
                     await award_referral_commission(
                         session,
                         user,

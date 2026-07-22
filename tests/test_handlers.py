@@ -1,7 +1,19 @@
 import asyncio
 from unittest.mock import AsyncMock
 
-from app.handlers import edit_or_send_text
+from app.handlers import coupon_error_message, edit_or_send_text
+
+
+def test_coupon_errors_explain_the_exact_reason() -> None:
+    assert coupon_error_message("coupon_not_found", "vi") == "Mã giảm giá không tồn tại."
+    assert (
+        coupon_error_message("coupon_exhausted", "vi")
+        == "Mã giảm giá đã hết lượt sử dụng."
+    )
+    assert (
+        coupon_error_message("coupon_already_used", "vi")
+        == "Bạn đã sử dụng mã giảm giá này rồi."
+    )
 
 
 def test_edit_or_send_text_edits_normal_messages() -> None:

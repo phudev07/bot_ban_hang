@@ -52,6 +52,7 @@ from app.services import (
     active_products,
     active_quantity_discounts,
     available_stock,
+    CouponValidationError,
     create_deposit,
     ensure_user,
     order_bundle,
@@ -72,6 +73,53 @@ from app.sms_rentals import (
 from app.states import DepositStates, PurchaseStates
 from app.suppliers import EXTERNAL_FULFILLMENT_SOURCES, SumistoreClient
 from app.utils import SecretCipher, build_sepay_qr_url, format_vnd, parse_vnd
+
+
+COUPON_ERROR_MESSAGES = {
+    "coupon_empty": (
+        "Bạn chưa nhập mã giảm giá.",
+        "Please enter a discount code.",
+    ),
+    "coupon_not_found": (
+        "Mã giảm giá không tồn tại.",
+        "This discount code does not exist.",
+    ),
+    "coupon_wrong_product": (
+        "Mã giảm giá không áp dụng cho sản phẩm này.",
+        "This discount code does not apply to this product.",
+    ),
+    "coupon_inactive": (
+        "Mã giảm giá hiện đang bị tắt.",
+        "This discount code is currently disabled.",
+    ),
+    "coupon_not_started": (
+        "Mã giảm giá chưa đến thời gian sử dụng.",
+        "This discount code is not active yet.",
+    ),
+    "coupon_expired": (
+        "Mã giảm giá đã hết hạn.",
+        "This discount code has expired.",
+    ),
+    "coupon_already_used": (
+        "Bạn đã sử dụng mã giảm giá này rồi.",
+        "You have already used this discount code.",
+    ),
+    "coupon_exhausted": (
+        "Mã giảm giá đã hết lượt sử dụng.",
+        "This discount code has no uses remaining.",
+    ),
+}
+
+
+def coupon_error_message(code: str, language: str) -> str:
+    messages = COUPON_ERROR_MESSAGES.get(code)
+    if messages is None:
+        return (
+            "Không thể áp dụng mã giảm giá. Vui lòng thử lại."
+            if language == "vi"
+            else "The discount code could not be applied. Please try again."
+        )
+    return messages[0] if language == "vi" else messages[1]
 
 
 def home_text(user: User, settings: Settings) -> str:
@@ -868,6 +916,9 @@ def create_router(
                         ),
                     )
                 return result.message
+            if result.message.startswith("coupon_"):
+                await target.answer(coupon_error_message(result.message, user.language))
+                return result.message
             labels = messages_en if user.language == "en" else messages_vi
             await target.answer(labels.get(result.message, "Error"))
             return result.message
@@ -977,16 +1028,17 @@ def create_router(
             refresh_external=True,
             refresh_max_age_seconds=settings.supplier_ui_cache_seconds,
         )
-        pricing = await product_pricing(
-            session,
-            product,
-            coupon_code=message.text or "",
-        )
-        if pricing is None:
+        try:
+            pricing = await product_pricing(
+                session,
+                product,
+                coupon_code=message.text or "",
+                user_id=user.telegram_id,
+                raise_coupon_error=True,
+            )
+        except CouponValidationError as exc:
             await message.answer(
-                "Mã không hợp lệ, đã hết hạn hoặc hết lượt. Hãy kiểm tra và nhập lại."
-                if user.language == "vi"
-                else "The code is invalid, expired, or fully used. Please try again."
+                coupon_error_message(exc.code, user.language)
             )
             return
         if stock <= 0:
@@ -1221,9 +1273,19 @@ def create_router(
         if product is None or not product.active or not product.allow_quantity:
             await callback.answer("Sản phẩm không hợp lệ.", show_alert=True)
             return
-        pricing = await product_pricing(session, product, coupon_id=int(coupon_id_text))
-        if pricing is None:
-            await callback.answer("Mã giảm giá không còn hiệu lực.", show_alert=True)
+        try:
+            pricing = await product_pricing(
+                session,
+                product,
+                coupon_id=int(coupon_id_text),
+                user_id=user.telegram_id,
+                raise_coupon_error=True,
+            )
+        except CouponValidationError as exc:
+            await callback.answer(
+                coupon_error_message(exc.code, user.language),
+                show_alert=True,
+            )
             return
         stock = await available_stock(
             session,
@@ -1385,13 +1447,22 @@ def create_router(
             await callback.answer("Sản phẩm vừa hết hàng.", show_alert=True)
             return
 
-        pricing = await product_pricing(
-            session,
-            product,
-            coupon_id=coupon_id,
-            quantity=quantity,
-            expected_flash_sale_id=expected_flash_sale_id,
-        )
+        try:
+            pricing = await product_pricing(
+                session,
+                product,
+                coupon_id=coupon_id,
+                quantity=quantity,
+                user_id=user.telegram_id,
+                expected_flash_sale_id=expected_flash_sale_id,
+                raise_coupon_error=True,
+            )
+        except CouponValidationError as exc:
+            await callback.answer(
+                coupon_error_message(exc.code, user.language),
+                show_alert=True,
+            )
+            return
         if pricing is None:
             if expected_flash_sale_id is not None:
                 await callback.answer(

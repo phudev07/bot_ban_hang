@@ -24,6 +24,7 @@ from app.services import (
     approve_wallet_deposit,
     available_stock,
     cancel_wallet_deposit,
+    CouponValidationError,
     create_deposit,
     order_bundle,
     process_sepay_payment,
@@ -240,6 +241,124 @@ def test_purchase_is_atomic_and_delivers_stock() -> None:
     asyncio.run(scenario())
 
 
+def test_coupon_validation_reports_the_exact_failure_reason() -> None:
+    async def scenario() -> None:
+        engine, sessions = await make_database()
+        now = datetime.now(UTC)
+        async with sessions() as session:
+            category = Category(name_vi="Test", name_en="Test")
+            session.add(category)
+            await session.flush()
+            product = Product(
+                category_id=category.id,
+                name_vi="San pham A",
+                name_en="Product A",
+                price=50_000,
+            )
+            other_product = Product(
+                category_id=category.id,
+                name_vi="San pham B",
+                name_en="Product B",
+                price=50_000,
+            )
+            user = User(telegram_id=123456, full_name="Buyer", balance=100_000)
+            session.add_all([product, other_product, user])
+            await session.flush()
+            coupons = [
+                DiscountCode(
+                    product_id=other_product.id,
+                    code="WRONGPRODUCT",
+                    discount_type="fixed",
+                    discount_value=5_000,
+                ),
+                DiscountCode(
+                    product_id=product.id,
+                    code="INACTIVE",
+                    discount_type="fixed",
+                    discount_value=5_000,
+                    active=False,
+                ),
+                DiscountCode(
+                    product_id=product.id,
+                    code="FUTURE",
+                    discount_type="fixed",
+                    discount_value=5_000,
+                    starts_at=now + timedelta(days=1),
+                ),
+                DiscountCode(
+                    product_id=product.id,
+                    code="EXPIRED",
+                    discount_type="fixed",
+                    discount_value=5_000,
+                    expires_at=now - timedelta(days=1),
+                ),
+                DiscountCode(
+                    product_id=product.id,
+                    code="EXHAUSTED",
+                    discount_type="fixed",
+                    discount_value=5_000,
+                    max_uses=1,
+                    used_count=1,
+                ),
+                DiscountCode(
+                    product_id=product.id,
+                    code="USEDONCE",
+                    discount_type="fixed",
+                    discount_value=5_000,
+                    max_uses=10,
+                    used_count=1,
+                ),
+            ]
+            session.add_all(coupons)
+            await session.flush()
+            used_coupon = coupons[-1]
+            item = InventoryItem(product_id=product.id, encrypted_secret="unused")
+            session.add(item)
+            await session.flush()
+            session.add(
+                Order(
+                    user_id=user.telegram_id,
+                    product_id=product.id,
+                    inventory_item_id=item.id,
+                    amount=45_000,
+                    discount_code_id=used_coupon.id,
+                    discount_code=used_coupon.code,
+                    status="completed",
+                )
+            )
+            await session.commit()
+
+        expected_errors = {
+            "": "coupon_empty",
+            "MISSING": "coupon_not_found",
+            "WRONGPRODUCT": "coupon_wrong_product",
+            "INACTIVE": "coupon_inactive",
+            "FUTURE": "coupon_not_started",
+            "EXPIRED": "coupon_expired",
+            "EXHAUSTED": "coupon_exhausted",
+            "USEDONCE": "coupon_already_used",
+        }
+        async with sessions() as session:
+            product = await session.scalar(select(Product).where(Product.name_en == "Product A"))
+            assert product is not None
+            for code, expected_error in expected_errors.items():
+                try:
+                    await product_pricing(
+                        session,
+                        product,
+                        coupon_code=code,
+                        user_id=123456,
+                        raise_coupon_error=True,
+                    )
+                except CouponValidationError as exc:
+                    assert exc.code == expected_error
+                else:
+                    raise AssertionError(f"Expected coupon error {expected_error}")
+        await engine.dispose()
+
+    asyncio.run(scenario())
+
+
 def test_product_coupon_reduces_each_item_and_tracks_usage() -> None:
     async def scenario() -> None:
         engine, sessions = await make_database()
@@ -290,6 +409,16 @@ def test_product_coupon_reduces_each_item_and_tracks_usage() -> None:
         assert result.total_amount == 90_000
         assert result.discount_amount == 10_000
         assert result.coupon_code == "SAVE5K"
+
+        repeated = await purchase_product(
+            sessions,
+            user.telegram_id,
+            product.id,
+            cipher,
+            coupon_code="SAVE5K",
+        )
+        assert repeated.ok is False
+        assert repeated.message == "coupon_already_used"
 
         async with sessions() as session:
             user = await session.get(User, user.telegram_id)
@@ -804,6 +933,94 @@ def test_direct_purchase_honors_reserved_coupon_price() -> None:
             assert order.discount_amount == 5_000
             assert order.discount_code == "QR5K"
             assert coupon is not None and coupon.used_count == 1
+        await engine.dispose()
+
+    asyncio.run(scenario())
+
+
+def test_direct_purchase_does_not_reuse_a_coupon_for_the_same_user() -> None:
+    async def scenario() -> None:
+        engine, sessions = await make_database()
+        async with sessions() as session:
+            category = Category(name_vi="Test", name_en="Test")
+            session.add(category)
+            await session.flush()
+            product = Product(
+                category_id=category.id,
+                name_vi="Tai khoan",
+                name_en="Account",
+                price=50_000,
+            )
+            user = User(telegram_id=123456, full_name="Buyer", balance=0)
+            session.add_all([product, user])
+            await session.flush()
+            coupon = DiscountCode(
+                product_id=product.id,
+                code="ONCEONLY",
+                discount_type="fixed",
+                discount_value=5_000,
+                max_uses=10,
+                used_count=1,
+            )
+            session.add(coupon)
+            await session.flush()
+            sold_item = InventoryItem(
+                product_id=product.id,
+                encrypted_secret="sold",
+                status="sold",
+            )
+            available_item = InventoryItem(
+                product_id=product.id,
+                encrypted_secret="available",
+            )
+            session.add_all([sold_item, available_item])
+            await session.flush()
+            session.add_all(
+                [
+                    Order(
+                        user_id=user.telegram_id,
+                        product_id=product.id,
+                        inventory_item_id=sold_item.id,
+                        amount=45_000,
+                        discount_code_id=coupon.id,
+                        discount_code=coupon.code,
+                        status="completed",
+                    ),
+                    Deposit(
+                        user_id=user.telegram_id,
+                        code="NAP123456CDEF",
+                        requested_amount=45_000,
+                        payment_kind="direct_purchase",
+                        product_id=product.id,
+                        discount_amount=5_000,
+                        discount_code_id=coupon.id,
+                        discount_code=coupon.code,
+                    ),
+                ]
+            )
+            await session.commit()
+            available_item_id = available_item.id
+
+        result = await process_sepay_payment(
+            sessions,
+            {
+                "id": 22334,
+                "transferType": "in",
+                "transferAmount": 45_000,
+                "content": "NAP123456CDEF",
+            },
+        )
+        assert result.status == "direct_purchase_fallback"
+
+        async with sessions() as session:
+            stored_user = await session.get(User, 123456)
+            stored_coupon = await session.scalar(select(DiscountCode))
+            available_item = await session.get(InventoryItem, available_item_id)
+            order_count = int(await session.scalar(select(func.count(Order.id))) or 0)
+            assert stored_user is not None and stored_user.balance == 45_000
+            assert stored_coupon is not None and stored_coupon.used_count == 1
+            assert available_item is not None and available_item.status == "available"
+            assert order_count == 1
         await engine.dispose()
 
     asyncio.run(scenario())
