@@ -28,6 +28,7 @@ from app.services import (
     order_bundle,
     process_sepay_payment,
     product_pricing,
+    purchase_quantity_limit,
     purchase_product,
     recent_orders,
     user_activity_stats,
@@ -41,6 +42,14 @@ async def make_database():
     async with engine.begin() as connection:
         await connection.run_sync(Base.metadata.create_all)
     return engine, async_sessionmaker(engine, expire_on_commit=False)
+
+
+def test_purchase_quantity_limit_never_exceeds_current_stock() -> None:
+    product = Product(max_quantity=100)
+
+    assert purchase_quantity_limit(product, 24) == 24
+    assert purchase_quantity_limit(product, 150) == 100
+    assert purchase_quantity_limit(product, 0) == 0
 
 
 class FakeSupplier:

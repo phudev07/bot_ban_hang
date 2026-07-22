@@ -57,6 +57,7 @@ from app.services import (
     order_bundle,
     PendingDepositLimitReached,
     product_pricing,
+    purchase_quantity_limit,
     purchase_product,
     recent_orders,
     user_activity_stats,
@@ -1065,8 +1066,9 @@ def create_router(
         menu_stock = stock
         if pricing is not None and pricing.flash_sale is not None:
             menu_stock = min(stock, flash_sale_remaining(pricing.flash_sale))
+        maximum = purchase_quantity_limit(product, menu_stock)
         quantity_discounts = await active_quantity_discounts(session, product.id)
-        if stock <= 0:
+        if maximum <= 0:
             if callback.message:
                 await callback.message.edit_reply_markup(
                     reply_markup=product_detail(product, user.language, 0)
@@ -1078,13 +1080,13 @@ def create_router(
             f"• Sản phẩm: <b>{escape(product.name_vi)}</b>\n"
             f"• Đơn giá: <b>{format_vnd(display_price)}</b>\n"
             f"• Còn hàng: <b>{stock}</b>\n"
-            f"• Tối đa mỗi lần: <b>{product.max_quantity}</b>"
+            f"• Tối đa mỗi lần: <b>{maximum}</b>"
             if user.language == "vi"
             else f"🧮 <b>Choose quantity</b>\n\n"
             f"• Product: <b>{escape(product.name_en)}</b>\n"
             f"• Unit price: <b>{format_vnd(display_price)}</b>\n"
             f"• In stock: <b>{stock}</b>\n"
-            f"• Maximum per order: <b>{product.max_quantity}</b>"
+            f"• Maximum per order: <b>{maximum}</b>"
         )
         if quantity_discounts and not (pricing and pricing.flash_sale):
             tier_summary = " · ".join(
@@ -1148,7 +1150,7 @@ def create_router(
             if pricing is not None and pricing.flash_sale is not None
             else stock
         )
-        maximum = min(product.max_quantity, stock, flash_limit)
+        maximum = min(purchase_quantity_limit(product, stock), flash_limit)
         await state.set_state(PurchaseStates.waiting_for_quantity)
         await state.update_data(
             product_id=product.id,
@@ -1225,7 +1227,7 @@ def create_router(
             refresh_external=True,
             refresh_max_age_seconds=settings.supplier_ui_cache_seconds,
         )
-        maximum = min(product.max_quantity, stock)
+        maximum = purchase_quantity_limit(product, stock)
         if maximum <= 0:
             await callback.answer("Sản phẩm đã hết hàng.", show_alert=True)
             return

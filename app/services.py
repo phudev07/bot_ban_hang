@@ -462,6 +462,11 @@ async def available_stock(
     )
 
 
+def purchase_quantity_limit(product: Product, stock: int) -> int:
+    """Return the largest quantity that can be selected from current stock."""
+    return max(0, min(max(1, int(product.max_quantity)), max(0, int(stock))))
+
+
 def normalize_discount_code(value: str) -> str:
     return value.strip().upper()
 
