@@ -9,6 +9,7 @@ from app.broadcasts import deliver_pending_stock_alerts
 from app.database import Base
 from app.models import (
     Category,
+    FlashSaleCampaign,
     InventoryItem,
     Product,
     ProductAlertDelivery,
@@ -95,6 +96,7 @@ def test_stock_return_is_queued_once_and_sent_to_started_users() -> None:
         assert processed == 1
         assert [call[0] for call in bot.calls] == [1, 2, 3]
         assert "HÀNG MỚI VỀ" in bot.calls[0][1]
+        assert "FLASH SALE" not in bot.calls[0][1]
         assert "Kho vừa có: <b>6</b>" in bot.calls[0][1]
         assert "PRODUCT BACK IN STOCK" in bot.calls[1][1]
         assert bot.calls[0][2].inline_keyboard[0][0].callback_data == f"prod:{product.id}"
@@ -120,6 +122,76 @@ def test_stock_return_is_queued_once_and_sent_to_started_users() -> None:
             assert alerts[0].message_en == bot.calls[1][1]
             assert [delivery.status for delivery in deliveries] == ["sent", "sent", "failed"]
             assert blocked is not None and blocked.has_started is False
+        await engine.dispose()
+
+    asyncio.run(scenario())
+
+
+def test_stock_return_during_flash_sale_uses_campaign_price_and_remaining_quantity() -> None:
+    async def scenario() -> None:
+        engine, sessions = await make_database()
+        async with sessions() as session:
+            category = Category(name_vi="ChatGPT", name_en="ChatGPT")
+            session.add(category)
+            await session.flush()
+            product = Product(
+                category_id=category.id,
+                name_vi="GPT Plus Flash",
+                name_en="GPT Plus Flash",
+                price=20_000,
+                fulfillment_source="sumistore",
+                supplier_product_id="SP-GEF55PBV",
+                supplier_price=10_000,
+                external_stock=0,
+                supplier_available_stock=0,
+                supplier_available_stock_initialized=True,
+            )
+            session.add(product)
+            await session.flush()
+            session.add(
+                FlashSaleCampaign(
+                    product_id=product.id,
+                    original_price=20_000,
+                    sale_price=15_000,
+                    total_quantity=20,
+                    sold_quantity=4,
+                    reserved_quantity=3,
+                    message_text="Flash campaign",
+                    notification_status="sent",
+                )
+            )
+            session.add(
+                User(telegram_id=1, full_name="Buyer", language="vi", has_started=True)
+            )
+            await session.commit()
+
+            assert await apply_supplier_stock(session, product, 9) is True
+            product.external_stock = 9
+            await session.commit()
+
+        bot = FakeStockBot()
+        assert await deliver_pending_stock_alerts(
+            sessions,
+            bot,  # type: ignore[arg-type]
+            throttle_seconds=0,
+        ) == 1
+        assert len(bot.calls) == 1
+        message = bot.calls[0][1]
+        keyboard = bot.calls[0][2]
+        assert "HÀNG MỚI VỀ · FLASH SALE" in message
+        assert "Giá Flash Sale: <b>15.000đ</b>" in message
+        assert "Còn lại: <b>13 đơn Flash Sale</b>" in message
+        assert "20.000đ" not in message
+        assert "15.000đ" in keyboard.inline_keyboard[0][0].text
+        assert keyboard.inline_keyboard[0][0].callback_data == f"prod:{product.id}"
+
+        async with sessions() as session:
+            alert = await session.scalar(select(ProductStockAlert))
+            assert alert is not None
+            assert alert.status == "sent"
+            assert alert.sale_price == 15_000
+            assert alert.message_vi == message
+            assert "13 đơn Flash Sale" in str(alert.message_vi)
         await engine.dispose()
 
     asyncio.run(scenario())

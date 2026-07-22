@@ -49,7 +49,7 @@ from app.models import (
 )
 from app.partner_services import normalize_allowed_ips
 from app.rentsim import RentSimClient
-from app.services import approve_wallet_deposit
+from app.services import approve_wallet_deposit, cancel_wallet_deposit
 from app.price_alerts import release_price_lock_if_inventory_empty
 from app.sms_rentals import sms_availability
 from app.stock_alerts import stock_alert_mode
@@ -3785,6 +3785,57 @@ def create_dashboard_router(
             except Exception:
                 logger.exception(
                     "Could not notify user %s about manual deposit approval",
+                    result.user_id,
+                )
+        return RedirectResponse("/admin/payments", status_code=303)
+
+    @router.post("/admin/payments/deposits/{deposit_id}/cancel")
+    async def cancel_deposit_payment(
+        deposit_id: int,
+        request: Request,
+        csrf: str = Form(...),
+    ) -> RedirectResponse:
+        if not is_admin(request):
+            return redirect_to_login()
+        if not valid_csrf(request, csrf):
+            flash(request, "Phiên hủy yêu cầu nạp không hợp lệ.", "error")
+            return RedirectResponse("/admin/payments", status_code=303)
+
+        result = await cancel_wallet_deposit(session_factory, deposit_id)
+        if result.status != "cancelled":
+            messages = {
+                "not_found": "Không tìm thấy yêu cầu nạp.",
+                "invalid_kind": "Chỉ có thể hủy yêu cầu nạp vào ví.",
+                "already_paid": "Yêu cầu này đã được thanh toán nên không thể hủy.",
+                "already_credited": "Tiền của yêu cầu này đã được cộng nên không thể hủy.",
+                "already_cancelled": "Yêu cầu nạp này đã được hủy trước đó.",
+                "invalid_status": "Trạng thái yêu cầu không thể hủy.",
+                "user_not_found": "Không tìm thấy khách hàng của yêu cầu nạp.",
+            }
+            flash(
+                request,
+                messages.get(result.status, "Không thể hủy yêu cầu nạp."),
+                "error",
+            )
+            return RedirectResponse("/admin/payments", status_code=303)
+
+        flash(
+            request,
+            f"Đã hủy yêu cầu nạp {format_vnd(result.amount)} mã {result.deposit_code}.",
+        )
+        if bot is not None and result.user_id is not None:
+            try:
+                await bot.send_message(
+                    result.user_id,
+                    "❌ <b>Yêu cầu nạp tiền đã được Admin hủy</b>\n\n"
+                    f"• Mã nạp: <code>{escape(result.deposit_code)}</code>\n"
+                    f"• Số tiền: <b>{format_vnd(result.amount)}</b>\n\n"
+                    "Yêu cầu này không còn hiệu lực. Nếu bạn đã chuyển khoản, "
+                    "hãy liên hệ Admin để được kiểm tra.",
+                )
+            except Exception:
+                logger.exception(
+                    "Could not notify user %s about manual deposit cancellation",
                     result.user_id,
                 )
         return RedirectResponse("/admin/payments", status_code=303)

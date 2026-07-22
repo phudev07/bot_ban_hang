@@ -10,7 +10,7 @@ from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 from sqlalchemy import func, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from app.flash_sales import stop_unsafe_flash_sale
+from app.flash_sales import active_flash_sale, flash_sale_remaining, stop_unsafe_flash_sale
 from app.models import (
     BroadcastDelivery,
     BroadcastLog,
@@ -109,6 +109,8 @@ class StockAlertPayload:
     price: int
     stock: int
     recipients: tuple[tuple[int, str], ...]
+    flash_sale_price: int | None = None
+    flash_sale_remaining: int | None = None
 
 
 @dataclass(frozen=True)
@@ -167,6 +169,28 @@ def sale_alert_text(payload: SaleAlertPayload, language: str) -> str:
 
 
 def stock_alert_text(payload: StockAlertPayload, language: str) -> str:
+    if (
+        payload.flash_sale_price is not None
+        and payload.flash_sale_remaining is not None
+        and payload.flash_sale_remaining > 0
+    ):
+        if language == "en":
+            return (
+                "📦 <b>PRODUCT BACK IN STOCK · FLASH SALE</b>\n\n"
+                f"• Product: <b>{safe_html(payload.name_en)}</b>\n"
+                f"• Flash Sale price: <b>{format_vnd(payload.flash_sale_price)}</b>\n"
+                f"• Available now: <b>{payload.stock}</b>\n"
+                f"• Flash Sale orders left: <b>{payload.flash_sale_remaining}</b>\n\n"
+                "Flash Sale quantity is limited. Buy now while the offer is active."
+            )
+        return (
+            "📦 <b>HÀNG MỚI VỀ · FLASH SALE</b>\n\n"
+            f"• Sản phẩm: <b>{safe_html(payload.name_vi)}</b>\n"
+            f"• Giá Flash Sale: <b>{format_vnd(payload.flash_sale_price)}</b>\n"
+            f"• Kho vừa có: <b>{payload.stock}</b>\n"
+            f"• Còn lại: <b>{payload.flash_sale_remaining} đơn Flash Sale</b>\n\n"
+            "Số lượng Flash Sale có hạn. Mua ngay khi ưu đãi đang còn."
+        )
     if language == "en":
         return (
             "📦 <b>PRODUCT BACK IN STOCK</b>\n\n"
@@ -1017,9 +1041,16 @@ async def _claim_stock_alert(
                 alert_type="stock",
                 alert_id=alert.id,
             )
+            campaign = await active_flash_sale(session, product.id)
+            remaining_flash_sale = (
+                flash_sale_remaining(campaign) if campaign is not None else None
+            )
+            notification_price = (
+                int(campaign.sale_price) if campaign is not None else int(product.price)
+            )
             alert.status = "sending"
             alert.stock_after = product.external_stock
-            alert.sale_price = product.price
+            alert.sale_price = notification_price
             alert.started_at = alert.started_at or now
             alert.total_recipients = recipient_count
             alert.last_error = None
@@ -1028,9 +1059,11 @@ async def _claim_stock_alert(
                 product_id=product.id,
                 name_vi=product.name_vi,
                 name_en=product.name_en,
-                price=product.price,
+                price=notification_price,
                 stock=product.external_stock,
                 recipients=(),
+                flash_sale_price=(notification_price if campaign is not None else None),
+                flash_sale_remaining=remaining_flash_sale,
             )
             # Snapshot the outgoing content so the admin history remains an
             # accurate audit trail even after the product name or price changes.

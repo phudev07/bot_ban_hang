@@ -23,6 +23,7 @@ from app.models import (
 from app.services import (
     approve_wallet_deposit,
     available_stock,
+    cancel_wallet_deposit,
     create_deposit,
     order_bundle,
     process_sepay_payment,
@@ -567,6 +568,62 @@ def test_manual_deposit_approval_credits_once_and_late_webhook_only_matches() ->
             assert wallet_transactions[0].balance_after == 25_000
             assert len(adjustments) == 1
             assert adjustments[0].admin_username == "admin"
+        await engine.dispose()
+
+    asyncio.run(scenario())
+
+
+def test_manual_deposit_cancellation_is_idempotent_and_never_credits_wallet() -> None:
+    async def scenario() -> None:
+        engine, sessions = await make_database()
+        async with sessions() as session:
+            user = User(telegram_id=321655, full_name="Cancelled deposit buyer", balance=5_000)
+            deposit = Deposit(
+                user_id=user.telegram_id,
+                code="NAP321655CANC",
+                requested_amount=20_000,
+                status="pending",
+                expires_at=datetime.now(UTC) + timedelta(minutes=5),
+            )
+            session.add_all([user, deposit])
+            await session.commit()
+            deposit_id = deposit.id
+
+        cancelled = await cancel_wallet_deposit(sessions, deposit_id)
+        duplicate_cancellation = await cancel_wallet_deposit(sessions, deposit_id)
+
+        assert cancelled.status == "cancelled"
+        assert cancelled.balance == 5_000
+        assert duplicate_cancellation.status == "already_cancelled"
+        async with sessions() as session:
+            user = await session.get(User, 321655)
+            deposit = await session.get(Deposit, deposit_id)
+            assert user is not None and user.balance == 5_000
+            assert deposit is not None and deposit.status == "failed"
+            assert deposit.failure_reason == "admin_cancelled"
+            assert deposit.failed_at is not None
+            assert await session.scalar(select(PaymentTransaction.id)) is None
+            assert await session.scalar(select(WalletTransaction.id)) is None
+            assert await session.scalar(select(BalanceAdjustment.id)) is None
+
+        webhook = await process_sepay_payment(
+            sessions,
+            {
+                "id": "BANK-LATE-CANCELLED",
+                "transferType": "in",
+                "transferAmount": 20_000,
+                "content": "NAP321655CANC",
+            },
+        )
+        assert webhook.status == "failed_request_payment"
+        async with sessions() as session:
+            user = await session.get(User, 321655)
+            transaction = await session.scalar(select(PaymentTransaction))
+            assert user is not None and user.balance == 5_000
+            assert transaction is not None
+            assert transaction.credit_status == "failed_request"
+            assert await session.scalar(select(WalletTransaction.id)) is None
+            assert await session.scalar(select(BalanceAdjustment.id)) is None
         await engine.dispose()
 
     asyncio.run(scenario())

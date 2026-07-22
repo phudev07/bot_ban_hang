@@ -1360,6 +1360,17 @@ class ManualDepositApprovalResult:
     language: str = "vi"
 
 
+@dataclass(frozen=True)
+class ManualDepositCancellationResult:
+    status: str
+    user_id: int | None = None
+    amount: int = 0
+    balance: int = 0
+    deposit_code: str = ""
+    username: str | None = None
+    language: str = "vi"
+
+
 async def approve_wallet_deposit(
     session_factory: async_sessionmaker[AsyncSession],
     deposit_id: int,
@@ -1442,6 +1453,79 @@ async def approve_wallet_deposit(
                 user_id=user.telegram_id,
                 amount=amount,
                 balance=user.balance,
+                deposit_code=deposit.code,
+                username=user.username,
+                language=user.language,
+            )
+
+
+async def cancel_wallet_deposit(
+    session_factory: async_sessionmaker[AsyncSession],
+    deposit_id: int,
+) -> ManualDepositCancellationResult:
+    async with session_factory() as session:
+        async with session.begin():
+            deposit = await session.scalar(
+                select(Deposit).where(Deposit.id == deposit_id).with_for_update()
+            )
+            if deposit is None:
+                return ManualDepositCancellationResult("not_found")
+            if deposit.payment_kind != "wallet":
+                return ManualDepositCancellationResult(
+                    "invalid_kind",
+                    deposit_code=deposit.code,
+                )
+            if deposit.status == "paid":
+                return ManualDepositCancellationResult(
+                    "already_paid",
+                    deposit_code=deposit.code,
+                )
+            if deposit.status == "failed" and deposit.failure_reason == "admin_cancelled":
+                return ManualDepositCancellationResult(
+                    "already_cancelled",
+                    deposit_code=deposit.code,
+                )
+            if deposit.status != "pending":
+                return ManualDepositCancellationResult(
+                    "invalid_status",
+                    deposit_code=deposit.code,
+                )
+
+            existing_credit = await session.scalar(
+                select(PaymentTransaction.id).where(
+                    PaymentTransaction.deposit_id == deposit.id,
+                    PaymentTransaction.credit_status == "credited",
+                )
+            )
+            existing_ledger = await session.scalar(
+                select(WalletTransaction.id).where(
+                    WalletTransaction.event_key == f"deposit:{deposit.id}"
+                )
+            )
+            if existing_credit is not None or existing_ledger is not None:
+                return ManualDepositCancellationResult(
+                    "already_credited",
+                    deposit_code=deposit.code,
+                )
+
+            user = await session.scalar(
+                select(User).where(User.telegram_id == deposit.user_id).with_for_update()
+            )
+            if user is None:
+                return ManualDepositCancellationResult(
+                    "user_not_found",
+                    deposit_code=deposit.code,
+                )
+
+            cancelled_at = datetime.now(UTC)
+            deposit.status = "failed"
+            deposit.failed_at = cancelled_at
+            deposit.failure_reason = "admin_cancelled"
+            return ManualDepositCancellationResult(
+                "cancelled",
+                user_id=user.telegram_id,
+                amount=int(deposit.requested_amount),
+                balance=int(user.balance),
                 deposit_code=deposit.code,
                 username=user.username,
                 language=user.language,
