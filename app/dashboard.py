@@ -13,7 +13,7 @@ from aiogram import Bot
 from aiogram.exceptions import TelegramBadRequest
 from aiogram.types import BufferedInputFile
 from fastapi import APIRouter, File, Form, Request, UploadFile
-from fastapi.responses import HTMLResponse, RedirectResponse, Response
+from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Response
 from fastapi.templating import Jinja2Templates
 from sqlalchemy import String, cast, delete, func, literal, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
@@ -491,6 +491,10 @@ def csrf_token(request: Request) -> str:
 def valid_csrf(request: Request, submitted: str) -> bool:
     expected = str(request.session.get("csrf_token") or "")
     return bool(submitted and expected and hmac.compare_digest(submitted, expected))
+
+
+def wants_dashboard_json(request: Request) -> bool:
+    return request.headers.get("x-requested-with", "").lower() == "xmlhttprequest"
 
 
 def flash(request: Request, message: str, level: str = "success") -> None:
@@ -3750,10 +3754,16 @@ def create_dashboard_router(
         deposit_id: int,
         request: Request,
         csrf: str = Form(...),
-    ) -> RedirectResponse:
+    ) -> Response:
+        wants_json = wants_dashboard_json(request)
         if not is_admin(request):
             return redirect_to_login()
         if not valid_csrf(request, csrf):
+            if wants_json:
+                return JSONResponse(
+                    {"ok": False, "status": "invalid_csrf", "message": "Phiên duyệt nạp không hợp lệ."},
+                    status_code=400,
+                )
             flash(request, "Phiên duyệt nạp không hợp lệ.", "error")
             return RedirectResponse("/admin/payments", status_code=303)
 
@@ -3771,14 +3781,21 @@ def create_dashboard_router(
                 "invalid_status": "Trạng thái yêu cầu không thể duyệt.",
                 "user_not_found": "Không tìm thấy khách hàng của yêu cầu nạp.",
             }
-            flash(request, messages.get(result.status, "Không thể duyệt tiền vào ví."), "error")
+            message = messages.get(result.status, "Không thể duyệt tiền vào ví.")
+            if wants_json:
+                return JSONResponse(
+                    {"ok": False, "status": result.status, "message": message},
+                    status_code=409,
+                )
+            flash(request, message, "error")
             return RedirectResponse("/admin/payments", status_code=303)
 
-        flash(
-            request,
+        message = (
             f"Đã duyệt {format_vnd(result.amount)} vào ví mã {result.deposit_code}. "
-            f"Số dư mới {format_vnd(result.balance)}.",
+            f"Số dư mới {format_vnd(result.balance)}."
         )
+        if not wants_json:
+            flash(request, message)
         if bot is not None and result.user_id is not None:
             try:
                 await bot.send_message(
@@ -3794,6 +3811,16 @@ def create_dashboard_router(
                     "Could not notify user %s about manual deposit approval",
                     result.user_id,
                 )
+        if wants_json:
+            return JSONResponse(
+                {
+                    "ok": True,
+                    "status": "approved",
+                    "deposit_id": deposit_id,
+                    "message": message,
+                    "balance": result.balance,
+                }
+            )
         return RedirectResponse("/admin/payments", status_code=303)
 
     @router.post("/admin/payments/deposits/{deposit_id}/cancel")
@@ -3801,10 +3828,16 @@ def create_dashboard_router(
         deposit_id: int,
         request: Request,
         csrf: str = Form(...),
-    ) -> RedirectResponse:
+    ) -> Response:
+        wants_json = wants_dashboard_json(request)
         if not is_admin(request):
             return redirect_to_login()
         if not valid_csrf(request, csrf):
+            if wants_json:
+                return JSONResponse(
+                    {"ok": False, "status": "invalid_csrf", "message": "Phiên hủy yêu cầu nạp không hợp lệ."},
+                    status_code=400,
+                )
             flash(request, "Phiên hủy yêu cầu nạp không hợp lệ.", "error")
             return RedirectResponse("/admin/payments", status_code=303)
 
@@ -3819,17 +3852,18 @@ def create_dashboard_router(
                 "invalid_status": "Trạng thái yêu cầu không thể hủy.",
                 "user_not_found": "Không tìm thấy khách hàng của yêu cầu nạp.",
             }
-            flash(
-                request,
-                messages.get(result.status, "Không thể hủy yêu cầu nạp."),
-                "error",
-            )
+            message = messages.get(result.status, "Không thể hủy yêu cầu nạp.")
+            if wants_json:
+                return JSONResponse(
+                    {"ok": False, "status": result.status, "message": message},
+                    status_code=409,
+                )
+            flash(request, message, "error")
             return RedirectResponse("/admin/payments", status_code=303)
 
-        flash(
-            request,
-            f"Đã hủy yêu cầu nạp {format_vnd(result.amount)} mã {result.deposit_code}.",
-        )
+        message = f"Đã hủy yêu cầu nạp {format_vnd(result.amount)} mã {result.deposit_code}."
+        if not wants_json:
+            flash(request, message)
         if bot is not None and result.user_id is not None:
             try:
                 await bot.send_message(
@@ -3845,6 +3879,15 @@ def create_dashboard_router(
                     "Could not notify user %s about manual deposit cancellation",
                     result.user_id,
                 )
+        if wants_json:
+            return JSONResponse(
+                {
+                    "ok": True,
+                    "status": "cancelled",
+                    "deposit_id": deposit_id,
+                    "message": message,
+                }
+            )
         return RedirectResponse("/admin/payments", status_code=303)
 
     @router.get("/admin/sms-rentals", response_class=HTMLResponse)

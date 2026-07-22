@@ -95,5 +95,73 @@
       });
     })();
   </script>
+  <script>
+    (() => {
+      const forms = document.querySelectorAll('form[data-async-payment]');
+      if (!forms.length) return;
+
+      const showFlash = (message, level = 'success') => {
+        const main = document.querySelector('.main');
+        if (!main) return;
+        const current = main.querySelector('.flash[data-async-flash]');
+        if (current) current.remove();
+        const node = document.createElement('div');
+        node.className = `flash ${level}`;
+        node.dataset.asyncFlash = 'true';
+        node.textContent = message;
+        const anchor = main.querySelector('.topbar');
+        anchor?.insertAdjacentElement('afterend', node);
+      };
+
+      const updateRow = (form, payload) => {
+        const row = form.closest('tr');
+        if (!row) return;
+        const statusCell = row.cells[4];
+        const actionCell = row.cells[7];
+        if (payload.status === 'approved') {
+          statusCell.innerHTML = '<span class="status on">paid</span>';
+          actionCell.innerHTML = '<span class="status on">Đã xử lý</span>';
+        } else if (payload.status === 'cancelled') {
+          statusCell.innerHTML = '<span class="status off">Đã hủy</span><small>Lý do: admin_cancelled</small>';
+          actionCell.innerHTML = '<span class="status off">Đã hủy</span>';
+        }
+      };
+
+      forms.forEach((form) => {
+        form.addEventListener('submit', async (event) => {
+          event.preventDefault();
+          const button = form.querySelector('button');
+          const original = button?.textContent || '';
+          if (button) {
+            button.disabled = true;
+            button.textContent = 'Đang xử lý...';
+          }
+          try {
+            const response = await fetch(form.action, {
+              method: 'POST',
+              body: new FormData(form),
+              credentials: 'same-origin',
+              headers: {
+                'Accept': 'application/json',
+                'X-Requested-With': 'XMLHttpRequest',
+              },
+            });
+            const payload = await response.json();
+            if (!response.ok || !payload.ok) {
+              throw new Error(payload.message || 'Không thể xử lý yêu cầu.');
+            }
+            updateRow(form, payload);
+            showFlash(payload.message || 'Đã cập nhật.');
+          } catch (error) {
+            showFlash(error instanceof Error ? error.message : 'Không thể xử lý yêu cầu.', 'error');
+            if (button) {
+              button.disabled = false;
+              button.textContent = original;
+            }
+          }
+        });
+      });
+    })();
+  </script>
 </body>
 </html>

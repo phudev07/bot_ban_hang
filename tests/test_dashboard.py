@@ -693,10 +693,12 @@ def test_admin_can_approve_pending_wallet_deposit_once(tmp_path) -> None:
         csrf = csrf_match.group(1)
         assert f'action="/admin/payments/deposits/{deposit_id}/approve"' in payments_page.text
         assert "Duyệt +20.000đ" in payments_page.text
+        assert "data-async-payment" in payments_page.text
 
         approved = client.post(
             f"/admin/payments/deposits/{deposit_id}/approve",
             data={"csrf": csrf},
+            headers={"X-Requested-With": "XMLHttpRequest", "Accept": "application/json"},
             follow_redirects=False,
         )
         duplicate = client.post(
@@ -704,8 +706,9 @@ def test_admin_can_approve_pending_wallet_deposit_once(tmp_path) -> None:
             data={"csrf": csrf},
             follow_redirects=False,
         )
-        assert approved.status_code == 303
-        assert approved.headers["location"] == "/admin/payments"
+        assert approved.status_code == 200
+        assert approved.json()["ok"] is True
+        assert approved.json()["status"] == "approved"
         assert duplicate.status_code == 303
         assert len(bot.messages) == 1
         assert bot.messages[0][0][0] == 88990011
@@ -810,6 +813,7 @@ def test_admin_can_cancel_pending_wallet_deposit_once(tmp_path) -> None:
         expired_cancelled = client.post(
             f"/admin/payments/deposits/{expired_id}/cancel",
             data={"csrf": csrf},
+            headers={"X-Requested-With": "XMLHttpRequest", "Accept": "application/json"},
             follow_redirects=False,
         )
         expired_duplicate = client.post(
@@ -819,7 +823,9 @@ def test_admin_can_cancel_pending_wallet_deposit_once(tmp_path) -> None:
         )
         assert cancelled.status_code == 303
         assert cancelled.headers["location"] == "/admin/payments"
-        assert expired_cancelled.status_code == 303
+        assert expired_cancelled.status_code == 200
+        assert expired_cancelled.json()["ok"] is True
+        assert expired_cancelled.json()["status"] == "cancelled"
         assert expired_duplicate.status_code == 303
         assert len(bot.messages) == 1
         assert bot.messages[0][0][0] == 88990012
