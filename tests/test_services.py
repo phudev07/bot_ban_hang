@@ -573,7 +573,7 @@ def test_manual_deposit_approval_credits_once_and_late_webhook_only_matches() ->
     asyncio.run(scenario())
 
 
-def test_manual_deposit_cancellation_is_idempotent_and_never_credits_wallet() -> None:
+def test_manual_deposit_cancellation_rejects_pending_requests() -> None:
     async def scenario() -> None:
         engine, sessions = await make_database()
         async with sessions() as session:
@@ -590,18 +590,14 @@ def test_manual_deposit_cancellation_is_idempotent_and_never_credits_wallet() ->
             deposit_id = deposit.id
 
         cancelled = await cancel_wallet_deposit(sessions, deposit_id)
-        duplicate_cancellation = await cancel_wallet_deposit(sessions, deposit_id)
-
-        assert cancelled.status == "cancelled"
-        assert cancelled.balance == 5_000
-        assert duplicate_cancellation.status == "already_cancelled"
+        assert cancelled.status == "invalid_status"
         async with sessions() as session:
             user = await session.get(User, 321655)
             deposit = await session.get(Deposit, deposit_id)
             assert user is not None and user.balance == 5_000
-            assert deposit is not None and deposit.status == "failed"
-            assert deposit.failure_reason == "admin_cancelled"
-            assert deposit.failed_at is not None
+            assert deposit is not None and deposit.status == "pending"
+            assert deposit.failure_reason is None
+            assert deposit.failed_at is None
             assert await session.scalar(select(PaymentTransaction.id)) is None
             assert await session.scalar(select(WalletTransaction.id)) is None
             assert await session.scalar(select(BalanceAdjustment.id)) is None
@@ -615,14 +611,16 @@ def test_manual_deposit_cancellation_is_idempotent_and_never_credits_wallet() ->
                 "content": "NAP321655CANC",
             },
         )
-        assert webhook.status == "failed_request_payment"
+        assert webhook.status == "credited"
         async with sessions() as session:
             user = await session.get(User, 321655)
             transaction = await session.scalar(select(PaymentTransaction))
-            assert user is not None and user.balance == 5_000
+            assert user is not None and user.balance == 25_000
             assert transaction is not None
-            assert transaction.credit_status == "failed_request"
-            assert await session.scalar(select(WalletTransaction.id)) is None
+            assert transaction.credit_status == "credited"
+            wallet_transaction = await session.scalar(select(WalletTransaction))
+            assert wallet_transaction is not None
+            assert wallet_transaction.amount == 20_000
             assert await session.scalar(select(BalanceAdjustment.id)) is None
         await engine.dispose()
 

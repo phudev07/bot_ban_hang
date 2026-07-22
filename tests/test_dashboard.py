@@ -796,7 +796,7 @@ def test_admin_can_cancel_pending_wallet_deposit_once(tmp_path) -> None:
         assert csrf_match is not None
         csrf = csrf_match.group(1)
         assert f'action="/admin/payments/deposits/{deposit_id}/approve"' in payments_page.text
-        assert f'action="/admin/payments/deposits/{deposit_id}/cancel"' in payments_page.text
+        assert f'action="/admin/payments/deposits/{deposit_id}/cancel"' not in payments_page.text
         assert f'action="/admin/payments/deposits/{expired_id}/approve"' in payments_page.text
         assert f'action="/admin/payments/deposits/{expired_id}/cancel"' in payments_page.text
         assert "Đã hết hạn" in payments_page.text
@@ -807,24 +807,23 @@ def test_admin_can_cancel_pending_wallet_deposit_once(tmp_path) -> None:
             data={"csrf": csrf},
             follow_redirects=False,
         )
-        duplicate = client.post(
-            f"/admin/payments/deposits/{deposit_id}/cancel",
+        expired_cancelled = client.post(
+            f"/admin/payments/deposits/{expired_id}/cancel",
             data={"csrf": csrf},
             follow_redirects=False,
         )
-        expired_cancelled = client.post(
+        expired_duplicate = client.post(
             f"/admin/payments/deposits/{expired_id}/cancel",
             data={"csrf": csrf},
             follow_redirects=False,
         )
         assert cancelled.status_code == 303
         assert cancelled.headers["location"] == "/admin/payments"
-        assert duplicate.status_code == 303
         assert expired_cancelled.status_code == 303
-        assert len(bot.messages) == 2
+        assert expired_duplicate.status_code == 303
+        assert len(bot.messages) == 1
         assert bot.messages[0][0][0] == 88990012
-        assert "Admin hủy" in str(bot.messages[0][0][1])
-        assert "NAP88990012EXPD" in str(bot.messages[1][0][1])
+        assert "NAP88990012EXPD" in str(bot.messages[0][0][1])
 
     async def verify_database() -> None:
         async with sessions() as session:
@@ -832,9 +831,9 @@ def test_admin_can_cancel_pending_wallet_deposit_once(tmp_path) -> None:
             deposit = await session.get(Deposit, deposit_id)
             expired = await session.get(Deposit, expired_id)
             assert user is not None and user.balance == 5_000
-            assert deposit is not None and deposit.status == "failed"
-            assert deposit.failure_reason == "admin_cancelled"
-            assert deposit.failed_at is not None
+            assert deposit is not None and deposit.status == "pending"
+            assert deposit.failure_reason is None
+            assert deposit.failed_at is None
             assert expired is not None and expired.status == "failed"
             assert expired.failure_reason == "admin_cancelled"
             assert await session.scalar(select(PaymentTransaction.id)) is None
