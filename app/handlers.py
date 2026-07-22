@@ -425,7 +425,7 @@ def create_router(
                 "Chỉ thanh toán bằng số dư ví, không có QR thanh toán trực tiếp.\n\n"
                 "Nếu không có OTP có thể thuê số khác sau 60 giây.\n"
                 "Các số thuê không nhận được OTP sẽ được hoàn tiền về ví.\n\n"
-                "OTP có thể về sau 8-10 phút. Nếu bạn thuê số mới và số cũ sau đó vẫn nhận "
+                "OTP có thể về chậm. Nếu bạn thuê số mới và số cũ sau đó vẫn nhận "
                 "được mã, cả hai lượt thuê đều được tính phí."
             )
         if callback.message:
@@ -582,7 +582,7 @@ def create_router(
             else "⏳ <b>Đang chờ OTP ChatGPT...</b>\n\n"
             "Bot đang tự kiểm tra OTP. Nếu không nhận được mã, tiền thuê sẽ tự động hoàn "
             "về ví. Bạn có thể thuê số khác sau 60 giây.\n\n"
-            "OTP có thể về sau 8-10 phút. Nếu bạn thuê số mới và số cũ sau đó vẫn nhận "
+            "OTP có thể về chậm. Nếu bạn thuê số mới và số cũ sau đó vẫn nhận "
             "được mã, cả hai lượt thuê đều được tính phí."
         )
         if callback.message:
