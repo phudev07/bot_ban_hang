@@ -3864,21 +3864,6 @@ def create_dashboard_router(
         message = f"Đã hủy yêu cầu nạp {format_vnd(result.amount)} mã {result.deposit_code}."
         if not wants_json:
             flash(request, message)
-        if bot is not None and result.user_id is not None:
-            try:
-                await bot.send_message(
-                    result.user_id,
-                    "❌ <b>Yêu cầu nạp tiền đã được Admin hủy</b>\n\n"
-                    f"• Mã nạp: <code>{escape(result.deposit_code)}</code>\n"
-                    f"• Số tiền: <b>{format_vnd(result.amount)}</b>\n\n"
-                    "Yêu cầu này không còn hiệu lực. Nếu bạn đã chuyển khoản, "
-                    "hãy liên hệ Admin để được kiểm tra.",
-                )
-            except Exception:
-                logger.exception(
-                    "Could not notify user %s about manual deposit cancellation",
-                    result.user_id,
-                )
         if wants_json:
             return JSONResponse(
                 {
