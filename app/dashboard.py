@@ -2305,7 +2305,7 @@ def create_dashboard_router(
                     .values(status="superseded")
                 )
             if product.price_lock_enabled:
-                product.external_stock = int(
+                local_stock = int(
                     await session.scalar(
                         select(func.count(InventoryItem.id)).where(
                             InventoryItem.product_id == product.id,
@@ -2313,6 +2313,9 @@ def create_dashboard_router(
                         )
                     )
                     or 0
+                )
+                product.external_stock = (
+                    local_stock + max(0, int(product.supplier_available_stock))
                 )
             await session.commit()
         lock_note = " và đã khóa giá bán" if lock_applied else ""
@@ -2342,7 +2345,7 @@ def create_dashboard_router(
             await session.delete(item)
             await session.flush()
             if product is not None and product.price_lock_enabled:
-                product.external_stock = int(
+                local_stock = int(
                     await session.scalar(
                         select(func.count(InventoryItem.id)).where(
                             InventoryItem.product_id == product.id,
@@ -2350,6 +2353,9 @@ def create_dashboard_router(
                         )
                     )
                     or 0
+                )
+                product.external_stock = (
+                    local_stock + max(0, int(product.supplier_available_stock))
                 )
                 await release_price_lock_if_inventory_empty(session, product)
             await session.commit()

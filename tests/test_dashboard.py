@@ -947,6 +947,8 @@ def test_admin_can_import_recovered_external_inventory(tmp_path) -> None:
                 supplier_product_id="SP-GEF55PBV",
                 supplier_price=10_000,
                 supplier_markup=5_000,
+                supplier_available_stock=5,
+                external_stock=5,
                 active=True,
             )
             session.add(product)
@@ -999,7 +1001,7 @@ def test_admin_can_import_recovered_external_inventory(tmp_path) -> None:
             assert item.cost_amount == 10_000
             product = await session.get(Product, product_id)
             assert product is not None and product.price_lock_enabled is True
-            assert product.external_stock == 1
+            assert product.external_stock == 6
         await engine.dispose()
 
     asyncio.run(verify_database())

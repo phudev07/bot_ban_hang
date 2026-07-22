@@ -20,6 +20,7 @@ from app.lehai_suppliers import (
 from app.models import (
     Category,
     Deposit,
+    InventoryItem,
     Order,
     Product,
     ProductStockAlert,
@@ -353,6 +354,67 @@ def test_lehai_temporary_refresh_failure_keeps_last_known_stock() -> None:
             assert stock == 6
             assert product.external_stock == 6
             assert product.supplier_available_stock == 6
+        await engine.dispose()
+
+    asyncio.run(scenario())
+
+
+def test_lehai_price_lock_includes_supplier_stock() -> None:
+    class AvailableSupplier:
+        async def fetch_snapshot(self, product_id: str) -> SupplierSnapshot:
+            return SupplierSnapshot(
+                product_id=product_id,
+                name="Link GG Pro Jio 18M",
+                description="Test",
+                unit_price=25_000,
+                source_stock=100,
+                owner_balance=250_000,
+            )
+
+    async def scenario() -> None:
+        engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+        async with engine.begin() as connection:
+            await connection.run_sync(Base.metadata.create_all)
+        sessions = async_sessionmaker(engine, expire_on_commit=False)
+        async with sessions() as session:
+            category = Category(name_vi=CATEGORY_VI, name_en=CATEGORY_VI)
+            session.add(category)
+            await session.flush()
+            product = Product(
+                category_id=category.id,
+                name_vi="Link GG Pro Jio 18M",
+                name_en="Link GG Pro Jio 18M",
+                price=28_000,
+                fulfillment_source="lehai",
+                supplier_product_id="cdk_ggpro_18m",
+                supplier_price=20_000,
+                supplier_markup=8_000,
+                price_lock_enabled=True,
+            )
+            session.add(product)
+            await session.flush()
+            session.add(
+                InventoryItem(
+                    product_id=product.id,
+                    encrypted_secret="encrypted",
+                    cost_amount=20_000,
+                )
+            )
+            await session.flush()
+
+            stock = await refresh_lehai_product(
+                session,
+                product,
+                AvailableSupplier(),  # type: ignore[arg-type]
+            )
+            await session.commit()
+
+            assert stock == 11
+            assert product.external_stock == 11
+            assert product.supplier_available_stock == 10
+            assert product.supplier_price == 25_000
+            assert product.price == 28_000
+            assert product.price_lock_enabled is True
         await engine.dispose()
 
     asyncio.run(scenario())

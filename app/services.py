@@ -1713,40 +1713,36 @@ async def _process_sepay_payment(
                             else:
                                 recovered_stock = len(items)
                                 items = []
-                                if deposit.inventory_price_locked:
-                                    product.external_stock = recovered_stock
-                                else:
-                                    await notify_fulfillment_started(
-                                        on_fulfillment_started,
-                                        user.telegram_id,
-                                        user.language,
-                                    )
-                                    await refresh_product_from_supplier(
-                                        session,
+                                await notify_fulfillment_started(
+                                    on_fulfillment_started,
+                                    user.telegram_id,
+                                    user.language,
+                                )
+                                await refresh_product_from_supplier(
+                                    session,
+                                    product,
+                                    supplier_client,
+                                    lehai_client,
+                                )
+                                if deposit_campaign is not None:
+                                    unsafe_status = stop_unsafe_flash_sale(
+                                        deposit_campaign,
                                         product,
-                                        supplier_client,
-                                        lehai_client,
                                     )
-                                    if deposit_campaign is not None:
-                                        unsafe_status = stop_unsafe_flash_sale(
-                                            deposit_campaign,
-                                            product,
-                                        )
-                                        flash_sale_can_fulfill = bool(
-                                            unsafe_status is None
-                                            and deposit_campaign.status
-                                            not in {"cost_exceeded", "price_invalid"}
-                                            and int(product.supplier_price or 0)
-                                            <= deposit_campaign.sale_price
-                                            and deposit_campaign.sale_price < product.price
-                                        )
-                                    supplier_stock = max(
-                                        0,
-                                        product.external_stock - recovered_stock,
+                                    flash_sale_can_fulfill = bool(
+                                        unsafe_status is None
+                                        and deposit_campaign.status
+                                        not in {"cost_exceeded", "price_invalid"}
+                                        and int(product.supplier_price or 0)
+                                        <= deposit_campaign.sale_price
+                                        and deposit_campaign.sale_price < product.price
                                     )
+                                supplier_stock = max(
+                                    0,
+                                    product.external_stock - recovered_stock,
+                                )
                             if not items and (
                                 flash_sale_can_fulfill
-                                and not deposit.inventory_price_locked
                                 and cipher is not None
                                 and external_client is not None
                                 and product.supplier_product_id

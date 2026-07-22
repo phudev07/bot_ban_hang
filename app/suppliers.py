@@ -555,10 +555,10 @@ async def refresh_external_product(
         await session.flush()
         return product.external_stock
     if supplier_refresh_is_backed_off(client, product.supplier_product_id):
-        product.external_stock = (
-            recovered_stock
-            if product.price_lock_enabled
-            else max(0, product.external_stock, recovered_stock)
+        product.external_stock = max(
+            0,
+            product.external_stock,
+            product.supplier_available_stock + recovered_stock,
         )
         return product.external_stock
     try:
@@ -567,10 +567,10 @@ async def refresh_external_product(
         # Keep the last successful supplier stock during a transient outage.
         # Clearing it here makes a healthy product look sold out and blocks a
         # purchase before the provider can return its real result.
-        product.external_stock = (
-            recovered_stock
-            if product.price_lock_enabled
-            else max(0, product.external_stock, recovered_stock)
+        product.external_stock = max(
+            0,
+            product.external_stock,
+            product.supplier_available_stock + recovered_stock,
         )
         definitive = exc.code in DEFINITIVE_PRODUCT_UNAVAILABLE_CODES
         mark_supplier_refresh_failure(
@@ -602,11 +602,7 @@ async def refresh_external_product(
         and current_owner_balance > previous_owner_balance
     )
     product.supplier_owner_balance = current_owner_balance
-    product.external_stock = (
-        recovered_stock
-        if product.price_lock_enabled
-        else snapshot.effective_stock + recovered_stock
-    )
+    product.external_stock = snapshot.effective_stock + recovered_stock
     await apply_supplier_price(session, product, snapshot.unit_price)
     await apply_supplier_stock(
         session,

@@ -1174,7 +1174,7 @@ def test_last_locked_inventory_item_releases_dynamic_price() -> None:
     asyncio.run(scenario())
 
 
-def test_locked_inventory_never_fills_missing_quantity_from_api() -> None:
+def test_locked_inventory_can_fill_missing_quantity_from_api() -> None:
     async def scenario() -> None:
         engine, sessions = await make_database()
         cipher = SecretCipher(Fernet.generate_key().decode())
@@ -1217,9 +1217,9 @@ def test_locked_inventory_never_fills_missing_quantity_from_api() -> None:
             supplier,  # type: ignore[arg-type]
         )
 
-        assert result.ok is False
-        assert result.message == "out_of_stock"
-        assert supplier.buy_calls == 0
+        assert result.ok is True
+        assert result.total_amount == 56_000
+        assert supplier.buy_calls == 1
         async with sessions() as session:
             stored_product = await session.get(Product, product.id)
             available_items = int(
@@ -1232,7 +1232,7 @@ def test_locked_inventory_never_fills_missing_quantity_from_api() -> None:
                 or 0
             )
             assert stored_product is not None and stored_product.price_lock_enabled is True
-            assert stored_product.external_stock == 1
+            assert stored_product.external_stock == 65
             assert available_items == 1
         await engine.dispose()
 
@@ -1483,6 +1483,85 @@ def test_locked_inventory_qr_never_falls_through_to_supplier_api() -> None:
         async with sessions() as session:
             stored_user = await session.get(User, user.telegram_id)
             assert stored_user is not None and stored_user.balance == 28_000
+        await engine.dispose()
+
+    asyncio.run(scenario())
+
+
+def test_locked_inventory_qr_can_use_supplier_stock() -> None:
+    async def scenario() -> None:
+        engine, sessions = await make_database()
+        cipher = SecretCipher(Fernet.generate_key().decode())
+        supplier = FakeSupplier(balance=1_000_000, stock=100)
+        async with sessions() as session:
+            category = Category(name_vi="API", name_en="API")
+            session.add(category)
+            await session.flush()
+            product = Product(
+                category_id=category.id,
+                name_vi="Stocked item",
+                name_en="Stocked item",
+                price=28_000,
+                allow_quantity=True,
+                fulfillment_source="sumistore",
+                supplier_product_id="SP-GEF55PBV",
+                supplier_price=20_000,
+                supplier_markup=8_000,
+                price_lock_enabled=True,
+                external_stock=1,
+            )
+            user = User(telegram_id=123456, full_name="Buyer", balance=0)
+            session.add_all([product, user])
+            await session.flush()
+            session.add(
+                InventoryItem(
+                    product_id=product.id,
+                    encrypted_secret=cipher.encrypt("stocked:password"),
+                    cost_amount=20_000,
+                )
+            )
+            await session.commit()
+
+            deposit = await create_deposit(
+                session,
+                user.telegram_id,
+                56_000,
+                payment_kind="direct_purchase",
+                product_id=product.id,
+                quantity=2,
+            )
+            assert deposit.inventory_price_locked is True
+
+        result = await process_sepay_payment(
+            sessions,
+            {
+                "id": 55556,
+                "transferType": "in",
+                "transferAmount": 56_000,
+                "content": deposit.code,
+            },
+            cipher=cipher,
+            supplier_client=supplier,  # type: ignore[arg-type]
+        )
+
+        assert result.status == "direct_purchase_completed"
+        assert result.quantity == 2
+        assert supplier.buy_calls == 1
+        async with sessions() as session:
+            stored_product = await session.get(Product, product.id)
+            available_items = int(
+                await session.scalar(
+                    select(func.count(InventoryItem.id)).where(
+                        InventoryItem.product_id == product.id,
+                        InventoryItem.status == "available",
+                    )
+                )
+                or 0
+            )
+            assert stored_product is not None
+            assert stored_product.price_lock_enabled is True
+            assert stored_product.external_stock == 65
+            assert available_items == 1
         await engine.dispose()
 
     asyncio.run(scenario())

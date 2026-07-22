@@ -117,7 +117,7 @@ def test_sumistore_stock_includes_recovered_local_inventory() -> None:
     asyncio.run(scenario())
 
 
-def test_locked_inventory_hides_supplier_stock_and_keeps_sale_price() -> None:
+def test_locked_inventory_includes_supplier_stock_and_keeps_sale_price() -> None:
     async def handler(request: httpx.Request) -> httpx.Response:
         if request.url.path.endswith("/tele-balance"):
             return httpx.Response(200, json={"success": True, "owner": {"balance": 250_000}})
@@ -174,8 +174,8 @@ def test_locked_inventory_hides_supplier_stock_and_keeps_sale_price() -> None:
             stock = await refresh_external_product(session, product, client)
             await session.commit()
 
-            assert stock == 1
-            assert product.external_stock == 1
+            assert stock == 11
+            assert product.external_stock == 11
             assert product.supplier_available_stock == 10
             assert product.supplier_price == 25_000
             assert product.price == 28_000

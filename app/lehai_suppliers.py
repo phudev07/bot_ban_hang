@@ -633,10 +633,10 @@ async def refresh_lehai_product(
         await session.flush()
         return product.external_stock
     if supplier_refresh_is_backed_off(client, product.supplier_product_id):
-        product.external_stock = (
-            recovered_stock
-            if product.price_lock_enabled
-            else max(0, product.external_stock, recovered_stock)
+        product.external_stock = max(
+            0,
+            product.external_stock,
+            product.supplier_available_stock + recovered_stock,
         )
         return product.external_stock
     try:
@@ -644,10 +644,10 @@ async def refresh_lehai_product(
     except SupplierError as exc:
         # Do not turn a temporary API/network error into a false sold-out
         # state. The purchase path will still ask the provider for the truth.
-        product.external_stock = (
-            recovered_stock
-            if product.price_lock_enabled
-            else max(0, product.external_stock, recovered_stock)
+        product.external_stock = max(
+            0,
+            product.external_stock,
+            product.supplier_available_stock + recovered_stock,
         )
         definitive = exc.code in DEFINITIVE_PRODUCT_UNAVAILABLE_CODES
         mark_supplier_refresh_failure(
@@ -687,11 +687,7 @@ async def refresh_lehai_product(
         )
     )
     product.supplier_owner_balance = current_owner_balance
-    product.external_stock = (
-        recovered_stock
-        if product.price_lock_enabled
-        else snapshot.effective_stock + recovered_stock
-    )
+    product.external_stock = snapshot.effective_stock + recovered_stock
     await apply_supplier_price(session, product, snapshot.unit_price)
     await apply_supplier_stock(
         session,
