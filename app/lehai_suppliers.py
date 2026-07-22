@@ -154,7 +154,12 @@ class LeHaiPremiumClient:
         detail = payload.get("detail")
         if isinstance(detail, dict):
             message = str(detail.get("message") or detail.get("error") or detail)
-            code = str(detail.get("code") or payload.get("code") or fallback)
+            code = str(
+                detail.get("code")
+                or payload.get("errorCode")
+                or payload.get("code")
+                or fallback
+            )
         else:
             message = str(
                 payload.get("message")
@@ -162,7 +167,7 @@ class LeHaiPremiumClient:
                 or detail
                 or fallback
             )
-            code = str(payload.get("code") or fallback)
+            code = str(payload.get("errorCode") or payload.get("code") or fallback)
         normalized = f"{code} {message}".lower()
         if "stock" in normalized or "hết hàng" in normalized or "out of stock" in normalized:
             code = "INSUFFICIENT_STOCK"
@@ -174,7 +179,7 @@ class LeHaiPremiumClient:
         try:
             response = await self._http().get(
                 f"{self.base_url}/{path.lstrip('/')}",
-                params={"key": self.api_key},
+                headers={"X-API-Key": self.api_key},
             )
         except httpx.HTTPError as exc:
             raise SupplierError("SUPPLIER_UNAVAILABLE", type(exc).__name__) from exc
@@ -185,6 +190,7 @@ class LeHaiPremiumClient:
             response = await self._http().post(
                 f"{self.base_url}/{path.lstrip('/')}",
                 json=body,
+                headers={"X-API-Key": self.api_key},
             )
         except httpx.HTTPError as exc:
             raise SupplierError("SUPPLIER_UNAVAILABLE", type(exc).__name__) from exc
@@ -197,7 +203,10 @@ class LeHaiPremiumClient:
         except ValueError as exc:
             raise SupplierError("SUPPLIER_INVALID_RESPONSE") from exc
         if response.is_error or not isinstance(payload, dict) or payload.get("success") is False:
-            raise cls._payload_error(payload, f"SUPPLIER_HTTP_{response.status_code}")
+            raise cls._payload_error(
+                payload,
+                response.headers.get("X-Error-Code") or f"SUPPLIER_HTTP_{response.status_code}",
+            )
         return payload
 
     async def fetch_products(self) -> tuple[LeHaiProduct, ...]:
@@ -355,7 +364,6 @@ class LeHaiPremiumClient:
             payload = await self._post(
                 "api/telegram-buyer/purchase",
                 {
-                    "key": self.api_key,
                     "product_id": resolved_product_id,
                     "quantity": quantity,
                     "idempotency_key": request_key,

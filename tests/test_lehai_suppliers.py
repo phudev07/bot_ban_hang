@@ -65,7 +65,8 @@ def product_payload() -> dict[str, object]:
 
 def test_lehai_snapshot_limits_stock_by_wallet_balance() -> None:
     async def handler(request: httpx.Request) -> httpx.Response:
-        assert request.url.params["key"] == "tgb_test"
+        assert request.headers["X-API-Key"] == "tgb_test"
+        assert "key" not in request.url.params
         if request.url.path.endswith("/balance"):
             return httpx.Response(200, json={"success": True, "balance": 100_000})
         return httpx.Response(200, json=product_payload())
@@ -578,11 +579,11 @@ def test_lehai_purchase_uses_idempotency_and_extracts_delivered_items() -> None:
     async def handler(request: httpx.Request) -> httpx.Response:
         body = json.loads((await request.aread()).decode())
         assert body == {
-            "key": "tgb_test",
             "product_id": "cdk_ggpro_18m",
             "quantity": 2,
             "idempotency_key": "shop-order-123",
         }
+        assert request.headers["X-API-Key"] == "tgb_test"
         return httpx.Response(
             200,
             json={
@@ -615,6 +616,41 @@ def test_lehai_purchase_uses_idempotency_and_extracts_delivered_items() -> None:
             "https://offer.test/two",
         )
         assert purchase.provider == "lehai"
+
+    asyncio.run(scenario())
+
+
+def test_lehai_client_preserves_v14_error_codes_from_body_or_header() -> None:
+    async def scenario() -> None:
+        responses = [
+            httpx.Response(
+                401,
+                headers={"X-Error-Code": "INVALID_API_KEY"},
+                json={"detail": "invalid api key", "errorCode": "INVALID_API_KEY"},
+            ),
+            httpx.Response(
+                403,
+                json={
+                    "detail": "channel required",
+                    "errorCode": "CHANNEL_MEMBERSHIP_REQUIRED",
+                },
+            ),
+        ]
+
+        async def handler(request: httpx.Request) -> httpx.Response:
+            return responses.pop(0)
+
+        client = LeHaiPremiumClient(
+            "https://supplier.test",
+            "tgb_test",
+            transport=httpx.MockTransport(handler),
+        )
+        with pytest.raises(SupplierError, match="invalid api key") as invalid_key:
+            await client.fetch_balance()
+        assert invalid_key.value.code == "INVALID_API_KEY"
+        with pytest.raises(SupplierError, match="channel required") as membership:
+            await client.fetch_products()
+        assert membership.value.code == "CHANNEL_MEMBERSHIP_REQUIRED"
 
     asyncio.run(scenario())
 
