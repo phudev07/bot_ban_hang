@@ -35,14 +35,19 @@
 <div class="dashboard-grid chart-layout">
   <section class="panel trend-panel">
     <div class="panel-head"><div><span>14-DAY PERFORMANCE</span><h2>Doanh thu và lợi nhuận 14 ngày</h2></div><div class="chart-legend"><i class="revenue-dot"></i>Doanh thu<i class="profit-dot"></i>Lợi nhuận</div></div>
-    <div class="trend-chart detailed">
+    <div class="trend-chart detailed" data-trend-chart aria-label="Biểu đồ doanh thu và lợi nhuận 14 ngày">
       {% for point in sales_trend %}
-      <div class="trend-column" title="{{ point.label }} · Doanh thu {{ point.amount|vnd }} · Lợi nhuận {{ point.profit|vnd }}">
+      <button class="trend-column" id="trend-day-{{ loop.index }}" type="button" title="{{ point.label }} · Doanh thu {{ point.amount|vnd }} · Lợi nhuận {{ point.profit|vnd }}" aria-label="{{ point.label }}, doanh thu {{ point.amount|vnd }}, lợi nhuận {{ point.profit|vnd }}" aria-pressed="false" data-label="{{ point.label }}" data-revenue="{{ point.amount|vnd }}" data-profit="{{ point.profit|vnd }}">
         <div class="trend-value">{{ point.amount|vnd }}</div>
         <div class="trend-track"><i class="revenue-bar" style="height: {{ point.height }}%"></i><i class="profit-bar" style="height: {{ point.profit_height }}%"></i></div>
         <small>{{ point.label }}</small>
-      </div>
+      </button>
       {% endfor %}
+    </div>
+    <div class="chart-touch-detail" data-trend-detail aria-live="polite">
+      <span>Chạm vào một ngày để xem số liệu</span>
+      <div><small>Doanh thu</small><strong data-trend-revenue>—</strong></div>
+      <div><small>Lợi nhuận</small><strong data-trend-profit>—</strong></div>
     </div>
   </section>
 
@@ -117,4 +122,33 @@
     {% else %}<p class="empty">Chưa có thành viên.</p>{% endfor %}
   </div>
 </section>
+<script>
+  (() => {
+    const chart = document.querySelector('[data-trend-chart]');
+    const detail = document.querySelector('[data-trend-detail]');
+    if (!chart || !detail) return;
+    const columns = Array.from(chart.querySelectorAll('.trend-column'));
+    const label = detail.querySelector('span');
+    const revenue = detail.querySelector('[data-trend-revenue]');
+    const profit = detail.querySelector('[data-trend-profit]');
+    const selectPoint = (column) => {
+      columns.forEach((item) => {
+        const selected = item === column;
+        item.classList.toggle('is-selected', selected);
+        item.setAttribute('aria-pressed', String(selected));
+      });
+      label.textContent = column.dataset.label || '';
+      revenue.textContent = column.dataset.revenue || '—';
+      profit.textContent = column.dataset.profit || '—';
+    };
+    columns.forEach((column) => {
+      column.addEventListener('click', () => selectPoint(column));
+      column.addEventListener('focus', () => selectPoint(column));
+    });
+    if (columns.length && window.matchMedia('(max-width: 1050px)').matches) {
+      selectPoint(columns[columns.length - 1]);
+      chart.scrollLeft = chart.scrollWidth;
+    }
+  })();
+</script>
 {% endblock %}

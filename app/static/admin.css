@@ -313,6 +313,9 @@ textarea { resize: vertical; }
 .trend-chart.detailed .trend-track i { position: absolute; bottom: 0; min-height: 3px; border-radius: 5px 5px 0 0; }
 .trend-chart.detailed .trend-track .revenue-bar { left: 14%; width: 34%; background: linear-gradient(180deg, #f29a63, var(--orange)); }
 .trend-chart.detailed .trend-track .profit-bar { right: 14%; width: 34%; background: linear-gradient(180deg, #69ab8d, var(--green)); }
+.trend-column { appearance: none; margin: 0; border: 0; padding: 0; color: inherit; background: transparent; font: inherit; cursor: pointer; }
+.trend-column:focus-visible .trend-track, .trend-column.is-selected .trend-track { box-shadow: 0 0 0 3px rgba(23,107,80,.2); }
+.chart-touch-detail { display: none; }
 .financial-table td:nth-child(n+3) { font-variant-numeric: tabular-nums; }
 .profit-text { color: var(--green) !important; }
 .profit-text.loss { color: var(--red) !important; }
@@ -860,4 +863,69 @@ tbody tr:hover { background: rgba(215, 241, 113, .12); }
   .flash-sale-form-panel .panel-head { align-items: flex-start; flex-direction: column; gap: 6px; }
   .flash-sale-form-panel .form-grid { padding: 15px; }
   .flash-sale-form-panel .button.primary { width: 100%; }
+}
+
+/* Final mobile rules stay last so page-specific desktop layouts cannot override them. */
+@media (max-width: 1050px) {
+  .dashboard-grid, .chart-layout, .lower-grid, .detail-grid, .referral-layout { grid-template-columns: minmax(0, 1fr); }
+  .dashboard-grid > *, .chart-layout > *, .lower-grid > *, .detail-grid > * { min-width: 0; }
+  .chart-touch-detail {
+    margin: 0 14px 15px;
+    padding: 12px;
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 8px;
+    border: 1px solid #d9e1d9;
+    border-radius: 11px;
+    background: #f1f6f1;
+  }
+  .chart-touch-detail > span { grid-column: 1 / -1; color: var(--muted); font-size: 11px; font-weight: 700; }
+  .chart-touch-detail div { min-width: 0; padding: 9px 10px; border-radius: 8px; background: white; }
+  .chart-touch-detail small, .chart-touch-detail strong { display: block; }
+  .chart-touch-detail small { color: var(--muted); font-size: 9px; text-transform: uppercase; letter-spacing: .06em; }
+  .chart-touch-detail strong { margin-top: 4px; overflow: hidden; font-size: 15px; white-space: nowrap; text-overflow: ellipsis; }
+  .chart-touch-detail div:last-child strong { color: var(--green); }
+}
+
+@media (max-width: 780px) {
+  .main { min-width: 0; overflow-x: clip; }
+  .panel-head { align-items: flex-start; }
+  .chart-layout { display: grid; }
+  .trend-panel { min-width: 0; overflow: hidden; }
+  .trend-panel .panel-head { align-items: flex-start; flex-direction: column; }
+  .chart-legend { flex-wrap: wrap; }
+  .trend-chart.detailed {
+    width: 100%;
+    min-width: 0;
+    height: 300px;
+    padding: 20px 14px 14px;
+    grid-template-columns: repeat(14, 48px);
+    gap: 8px;
+    overflow-x: auto;
+    overscroll-behavior-inline: contain;
+    scroll-snap-type: x proximity;
+    -webkit-overflow-scrolling: touch;
+  }
+  .trend-chart.detailed .trend-column { min-width: 0; scroll-snap-align: center; }
+  .trend-chart.detailed .trend-track { min-height: 168px; }
+  .trend-chart.detailed .trend-value { display: none; }
+  .health-list { padding-inline: 16px; }
+  .health-list div { align-items: flex-start; }
+  .table-wrap { position: relative; max-width: 100%; overscroll-behavior-inline: contain; -webkit-overflow-scrolling: touch; }
+  .stack-list { padding-inline: 15px; }
+  .notification-preview pre { width: min(440px, 82vw); }
+}
+
+@media (max-width: 520px) {
+  .topbar { align-items: stretch; flex-direction: column; gap: 11px; }
+  .topbar-actions { width: 100%; }
+  .topbar-actions .button { flex: 1; }
+  .page-intro .quick-actions { grid-template-columns: 1fr; }
+  .finance-card-head { align-items: flex-start; flex-direction: column; }
+  .panel-head { align-items: stretch; flex-direction: column; }
+  .panel-head > a { align-self: flex-start; }
+  .stack-list article { align-items: flex-start; flex-direction: column; gap: 8px; }
+  .order-feed article > span { text-align: left; }
+  .health-list div { display: grid; grid-template-columns: minmax(0, 1fr) auto; }
+  .sms-metrics, .api-overview-grid { grid-template-columns: 1fr; }
 }

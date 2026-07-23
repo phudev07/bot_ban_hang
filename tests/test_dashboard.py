@@ -412,6 +412,18 @@ def test_dashboard_login_catalog_inventory_and_balance(tmp_path) -> None:
         assert "Giá vốn API" in home.text
         assert "50.000đ" in home.text
         assert "Thuê số SMS" in home.text
+        assert 'data-trend-chart' in home.text
+        assert home.text.count('class="trend-column"') == 14
+        assert home.text.count('aria-pressed="false"') == 14
+        assert 'data-trend-detail' in home.text
+        assert 'data-trend-revenue' in home.text
+        assert 'data-trend-profit' in home.text
+
+        admin_css = client.get("/admin-assets/admin.css")
+        assert admin_css.status_code == 200
+        assert ".dashboard-grid, .chart-layout, .lower-grid, .detail-grid" in admin_css.text
+        assert ".chart-touch-detail" in admin_css.text
+        assert "grid-template-columns: repeat(14, 48px)" in admin_css.text
         token_match = re.search(r'name="csrf" value="([^"]+)"', home.text)
         assert token_match is not None
         csrf = token_match.group(1)
