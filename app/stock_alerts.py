@@ -37,6 +37,7 @@ async def apply_supplier_stock(
     *,
     notify_on_increase: bool = True,
     local_inventory_stock: int | None = None,
+    alert_provider: str | None = None,
 ) -> bool:
     """Store supplier stock, release exhausted stock locks and optionally queue an alert."""
     if product.id is None:
@@ -112,7 +113,7 @@ async def apply_supplier_stock(
     session.add(
         ProductStockAlert(
             product_id=locked_product.id,
-            provider=locked_product.fulfillment_source,
+            provider=alert_provider or locked_product.fulfillment_source,
             stock_before=previous_stock,
             stock_after=new_stock,
             sale_price=locked_product.price,

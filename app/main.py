@@ -675,10 +675,15 @@ async def supplier_sync_worker(
     session_factory,
     client: SumistoreClient,
     interval_seconds: int,
+    lehai_client: LeHaiPremiumClient | None = None,
 ) -> None:
     while True:
         try:
-            await sync_sumistore_products(session_factory, client)
+            await sync_sumistore_products(
+                session_factory,
+                client,
+                lehai_client,
+            )
         except Exception:
             logging.getLogger(__name__).exception("Could not synchronize supplier products")
         await asyncio.sleep(max(15, interval_seconds))
@@ -717,10 +722,15 @@ async def lehai_sync_worker(
     session_factory,
     client: LeHaiPremiumClient,
     interval_seconds: int,
+    sumistore_client: SumistoreClient | None = None,
 ) -> None:
     while True:
         try:
-            await sync_lehai_products(session_factory, client)
+            await sync_lehai_products(
+                session_factory,
+                client,
+                sumistore_client,
+            )
         except Exception:
             logging.getLogger(__name__).exception(
                 "Could not synchronize Le Hai Premium products"
@@ -1187,6 +1197,7 @@ async def main() -> None:
                 session_factory,
                 supplier_client,
                 settings.sumistore_sync_seconds,
+                lehai_client,
             )
         )
         if supplier_client is not None
@@ -1222,6 +1233,7 @@ async def main() -> None:
                 session_factory,
                 lehai_client,
                 settings.lehai_sync_seconds,
+                supplier_client,
             )
         )
         if lehai_client is not None

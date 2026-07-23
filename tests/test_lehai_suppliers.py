@@ -575,6 +575,192 @@ def test_lehai_jio_stock_alert_requires_a_real_wallet_topup() -> None:
     asyncio.run(scenario())
 
 
+def test_lehai_topup_notifies_gpt_plus_when_it_is_the_selected_route() -> None:
+    class RouteSupplier:
+        def __init__(self, provider: str, price: int, balance: int) -> None:
+            self.provider = provider
+            self.price = price
+            self.balance = balance
+
+        async def fetch_snapshot(self, product_id: str) -> SupplierSnapshot:
+            if product_id == "cdk_ggpro_18m":
+                return SupplierSnapshot(
+                    product_id=product_id,
+                    name="Link GG Pro Jio 18M",
+                    description="",
+                    unit_price=27_000,
+                    source_stock=100,
+                    owner_balance=self.balance,
+                )
+            return SupplierSnapshot(
+                product_id=product_id,
+                name="GPT Plus",
+                description="",
+                unit_price=self.price,
+                source_stock=100,
+                owner_balance=self.balance,
+            )
+
+    async def scenario() -> None:
+        engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+        async with engine.begin() as connection:
+            await connection.run_sync(Base.metadata.create_all)
+        sessions = async_sessionmaker(engine, expire_on_commit=False)
+        sumi = RouteSupplier("sumistore", 30_000, 300_000)
+        lehai = RouteSupplier("lehai", 25_000, 150_000)
+
+        async with sessions() as session:
+            category = Category(name_vi="Products", name_en="Products")
+            session.add(category)
+            await session.flush()
+            jio = Product(
+                category_id=category.id,
+                name_vi="Link GG Pro Jio 18M",
+                name_en="Google Pro Jio 18M Link",
+                price=35_000,
+                fulfillment_source="lehai",
+                supplier_product_id="cdk_ggpro_18m",
+                supplier_markup=8_000,
+                supplier_price=27_000,
+                external_stock=3,
+                supplier_available_stock=3,
+                supplier_available_stock_initialized=True,
+                supplier_owner_balance=100_000,
+                supplier_synced_at=datetime.now(UTC),
+            )
+            gpt = Product(
+                category_id=category.id,
+                name_vi="GPT Plus",
+                name_en="GPT Plus",
+                price=35_000,
+                fulfillment_source="sumistore",
+                supplier_product_id="SP-GEF55PBV",
+                supplier_markup=5_000,
+                supplier_price=30_000,
+                external_stock=14,
+                supplier_available_stock=14,
+                supplier_available_stock_initialized=True,
+                supplier_owner_balance=300_000,
+                supplier_synced_at=datetime.now(UTC),
+            )
+            session.add_all([jio, gpt])
+            await session.commit()
+
+            await refresh_lehai_product(
+                session,
+                jio,
+                lehai,  # type: ignore[arg-type]
+                sumistore_client=sumi,  # type: ignore[arg-type]
+            )
+            await session.commit()
+
+            alerts = list(
+                await session.scalars(select(ProductStockAlert).order_by(ProductStockAlert.id))
+            )
+            assert len(alerts) == 1
+            assert alerts[0].product_id == gpt.id
+            assert alerts[0].provider == "lehai"
+            assert alerts[0].stock_before == 14
+            assert alerts[0].stock_after == 16
+
+        await engine.dispose()
+
+    asyncio.run(scenario())
+
+
+def test_lehai_topup_keeps_jio_alert_when_sumi_is_preferred_for_gpt_plus() -> None:
+    class RouteSupplier:
+        def __init__(self, provider: str, price: int, balance: int) -> None:
+            self.provider = provider
+            self.price = price
+            self.balance = balance
+
+        async def fetch_snapshot(self, product_id: str) -> SupplierSnapshot:
+            if product_id == "cdk_ggpro_18m":
+                return SupplierSnapshot(
+                    product_id=product_id,
+                    name="Link GG Pro Jio 18M",
+                    description="",
+                    unit_price=27_000,
+                    source_stock=100,
+                    owner_balance=self.balance,
+                )
+            return SupplierSnapshot(
+                product_id=product_id,
+                name="GPT Plus",
+                description="",
+                unit_price=self.price,
+                source_stock=100,
+                owner_balance=self.balance,
+            )
+
+    async def scenario() -> None:
+        engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+        async with engine.begin() as connection:
+            await connection.run_sync(Base.metadata.create_all)
+        sessions = async_sessionmaker(engine, expire_on_commit=False)
+        sumi = RouteSupplier("sumistore", 25_000, 250_000)
+        lehai = RouteSupplier("lehai", 25_000, 150_000)
+
+        async with sessions() as session:
+            category = Category(name_vi="Products", name_en="Products")
+            session.add(category)
+            await session.flush()
+            jio = Product(
+                category_id=category.id,
+                name_vi="Link GG Pro Jio 18M",
+                name_en="Google Pro Jio 18M Link",
+                price=35_000,
+                fulfillment_source="lehai",
+                supplier_product_id="cdk_ggpro_18m",
+                supplier_markup=8_000,
+                supplier_price=27_000,
+                external_stock=3,
+                supplier_available_stock=3,
+                supplier_available_stock_initialized=True,
+                supplier_owner_balance=100_000,
+                supplier_synced_at=datetime.now(UTC),
+            )
+            gpt = Product(
+                category_id=category.id,
+                name_vi="GPT Plus",
+                name_en="GPT Plus",
+                price=30_000,
+                fulfillment_source="sumistore",
+                supplier_product_id="SP-GEF55PBV",
+                supplier_markup=5_000,
+                supplier_price=25_000,
+                external_stock=14,
+                supplier_available_stock=14,
+                supplier_available_stock_initialized=True,
+                supplier_owner_balance=250_000,
+                supplier_synced_at=datetime.now(UTC),
+            )
+            session.add_all([jio, gpt])
+            await session.commit()
+
+            await refresh_lehai_product(
+                session,
+                jio,
+                lehai,  # type: ignore[arg-type]
+                sumistore_client=sumi,  # type: ignore[arg-type]
+            )
+            await session.commit()
+
+            alerts = list(
+                await session.scalars(select(ProductStockAlert).order_by(ProductStockAlert.id))
+            )
+            assert len(alerts) == 1
+            assert alerts[0].product_id == jio.id
+            assert alerts[0].provider == "lehai"
+            assert alerts[0].stock_before == 3
+            assert alerts[0].stock_after == 5
+
+        await engine.dispose()
+
+    asyncio.run(scenario())
+
+
 def test_lehai_purchase_uses_idempotency_and_extracts_delivered_items() -> None:
     async def handler(request: httpx.Request) -> httpx.Response:
         body = json.loads((await request.aread()).decode())

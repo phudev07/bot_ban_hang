@@ -55,6 +55,7 @@ from app.services import (
     CouponValidationError,
     create_deposit,
     ensure_user,
+    multi_supplier_quote,
     order_bundle,
     PendingDepositLimitReached,
     product_pricing,
@@ -1472,8 +1473,43 @@ def create_router(
                 return
             await callback.answer("Mã giảm giá không còn hiệu lực.", show_alert=True)
             return
-        total_amount = pricing.final_unit_price * quantity
-        total_discount = pricing.discount_per_unit * quantity
+        supplier_quote = await multi_supplier_quote(
+            product,
+            quantity,
+            pricing,
+            supplier_client,
+            lehai_client,
+        )
+        if supplier_quote is not None and not supplier_quote.available:
+            await callback.answer(
+                "Nguồn hàng vừa thay đổi, vui lòng thử lại.",
+                show_alert=True,
+            )
+            return
+        if (
+            supplier_quote is not None
+            and pricing.flash_sale is not None
+            and any(
+                allocation.route.snapshot.unit_price
+                > allocation.final_unit_price
+                for allocation in supplier_quote.allocations
+            )
+        ):
+            await callback.answer(
+                "Giá vốn phần hàng còn lại cao hơn giá Flash Sale.",
+                show_alert=True,
+            )
+            return
+        total_amount = (
+            supplier_quote.total_amount
+            if supplier_quote is not None
+            else pricing.final_unit_price * quantity
+        )
+        total_discount = (
+            supplier_quote.discount_amount
+            if supplier_quote is not None
+            else pricing.discount_per_unit * quantity
+        )
         try:
             deposit = await create_deposit(
                 session,
@@ -1511,27 +1547,59 @@ def create_router(
             deposit.code,
         )
         product_name = product.name_en if user.language == "en" else product.name_vi
+        price_breakdown_vi = (
+            "• Chi tiết giá: "
+            + " + ".join(
+                f"<b>{allocation.quantity}</b> x "
+                f"<b>{format_vnd(allocation.final_unit_price)}</b>"
+                for allocation in supplier_quote.allocations
+            )
+            + "\n"
+            if supplier_quote is not None and len(supplier_quote.allocations) > 1
+            else ""
+        )
+        price_breakdown_en = (
+            "• Price breakdown: "
+            + " + ".join(
+                f"<b>{allocation.quantity}</b> x "
+                f"<b>{format_vnd(allocation.final_unit_price)}</b>"
+                for allocation in supplier_quote.allocations
+            )
+            + "\n"
+            if supplier_quote is not None and len(supplier_quote.allocations) > 1
+            else ""
+        )
+        coupon_discount_amount = (
+            supplier_quote.coupon_discount_amount
+            if supplier_quote is not None
+            else pricing.coupon_discount_per_unit * quantity
+        )
+        quantity_discount_amount = (
+            supplier_quote.quantity_discount_amount
+            if supplier_quote is not None
+            else pricing.quantity_discount_per_unit * quantity
+        )
         coupon_line_vi = (
             f"• Mã giảm giá: <b>{escape(pricing.coupon.code)}</b> "
-            f"(-{format_vnd(pricing.coupon_discount_per_unit * quantity)})\n"
+            f"(-{format_vnd(coupon_discount_amount)})\n"
             if pricing.coupon
             else ""
         )
         coupon_line_en = (
             f"• Discount code: <b>{escape(pricing.coupon.code)}</b> "
-            f"(-{format_vnd(pricing.coupon_discount_per_unit * quantity)})\n"
+            f"(-{format_vnd(coupon_discount_amount)})\n"
             if pricing.coupon
             else ""
         )
         quantity_line_vi = (
             f"• Ưu đãi số lượng: <b>-{pricing.quantity_discount_percent}%</b> "
-            f"(-{format_vnd(pricing.quantity_discount_per_unit * quantity)})\n"
+            f"(-{format_vnd(quantity_discount_amount)})\n"
             if pricing.quantity_discount_percent
             else ""
         )
         quantity_line_en = (
             f"• Quantity discount: <b>-{pricing.quantity_discount_percent}%</b> "
-            f"(-{format_vnd(pricing.quantity_discount_per_unit * quantity)})\n"
+            f"(-{format_vnd(quantity_discount_amount)})\n"
             if pricing.quantity_discount_percent
             else ""
         )
@@ -1539,6 +1607,7 @@ def create_router(
             "🧾 <b>Thanh toán sản phẩm</b>\n\n"
             f"• Sản phẩm: <b>{escape(product_name)}</b>\n"
             f"• Số lượng: <b>{quantity}</b>\n"
+            f"{price_breakdown_vi}"
             f"{coupon_line_vi}"
             f"{quantity_line_vi}"
             f"• Ngân hàng: <b>{escape(settings.bank_code)}</b>\n"
@@ -1553,6 +1622,7 @@ def create_router(
             else "🧾 <b>Product payment</b>\n\n"
             f"• Product: <b>{escape(product_name)}</b>\n"
             f"• Quantity: <b>{quantity}</b>\n"
+            f"{price_breakdown_en}"
             f"{coupon_line_en}"
             f"{quantity_line_en}"
             f"• Bank: <b>{escape(settings.bank_code)}</b>\n"

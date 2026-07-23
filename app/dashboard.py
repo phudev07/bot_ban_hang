@@ -201,6 +201,9 @@ def group_order_rows(rows, limit: int | None = None) -> list[dict[str, object]]:
                 "primary_order_id": order.id,
                 "shop_order_code": key,
                 "supplier_order_code": order.supplier_order_code,
+                "supplier_order_codes": (
+                    [order.supplier_order_code] if order.supplier_order_code else []
+                ),
                 "sales_channel": order.sales_channel,
                 "quantity": 0,
                 "amount": 0,
@@ -223,6 +226,14 @@ def group_order_rows(rows, limit: int | None = None) -> list[dict[str, object]]:
             order.discount_amount
         )
         group["item_ids"].append(order.id)
+        if (
+            order.supplier_order_code
+            and order.supplier_order_code not in group["supplier_order_codes"]
+        ):
+            group["supplier_order_codes"].append(order.supplier_order_code)
+            group["supplier_order_code"] = " · ".join(
+                group["supplier_order_codes"]
+            )
         if not group["supplier_order_code"] and order.supplier_order_code:
             group["supplier_order_code"] = order.supplier_order_code
         if order.status != "completed":

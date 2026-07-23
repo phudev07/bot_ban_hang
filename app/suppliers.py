@@ -25,6 +25,10 @@ logger = logging.getLogger(__name__)
 
 EXTERNAL_FULFILLMENT_SOURCES = ("sumistore", "lehai")
 SELLABLE_FULFILLMENT_SOURCES = ("local", *EXTERNAL_FULFILLMENT_SOURCES)
+SUMISTORE_ALTERNATIVE_PRODUCTS: dict[str, tuple[str, str]] = {
+    # The same GPT Plus account is available from both supplier wallets.
+    "SP-GEF55PBV": ("lehai", "gpt_bh48_1m"),
+}
 DEFINITIVE_PRODUCT_UNAVAILABLE_CODES = {
     "PRODUCT_NOT_FOUND",
     "SUPPLIER_PRODUCT_MISSING",
@@ -139,6 +143,116 @@ class ExternalSupplierClient(Protocol):
         *,
         idempotency_key: str | None = None,
     ) -> SupplierPurchase: ...
+
+
+@dataclass(frozen=True)
+class SupplierRoute:
+    provider: str
+    product_id: str
+    client: ExternalSupplierClient
+    snapshot: SupplierSnapshot
+
+
+@dataclass(frozen=True)
+class SupplierRouteFailure:
+    provider: str
+    product_id: str
+    error: SupplierError
+
+
+@dataclass(frozen=True)
+class SupplierRouteFetch:
+    routes: tuple[SupplierRoute, ...]
+    failures: tuple[SupplierRouteFailure, ...]
+    configured_count: int
+
+
+def is_multi_supplier_product(
+    fulfillment_source: str,
+    supplier_product_id: str | None,
+) -> bool:
+    return (
+        fulfillment_source == "sumistore"
+        and bool(supplier_product_id)
+        and supplier_product_id in SUMISTORE_ALTERNATIVE_PRODUCTS
+    )
+
+
+def supplier_route_sort_key(route: SupplierRoute) -> tuple[int, int, str]:
+    # When costs are equal, keep Sumi first as the deterministic preferred source.
+    return (
+        max(0, int(route.snapshot.unit_price)),
+        0 if route.provider == "sumistore" else 1,
+        route.product_id,
+    )
+
+
+def plan_supplier_routes(
+    routes: tuple[SupplierRoute, ...],
+    quantity: int,
+) -> tuple[tuple[SupplierRoute, int], ...]:
+    remaining = max(0, int(quantity))
+    if remaining <= 0:
+        return ()
+    plan: list[tuple[SupplierRoute, int]] = []
+    for route in sorted(routes, key=supplier_route_sort_key):
+        available = max(0, int(route.snapshot.effective_stock))
+        if available <= 0:
+            continue
+        allocated = min(available, remaining)
+        plan.append((route, allocated))
+        remaining -= allocated
+        if remaining <= 0:
+            return tuple(plan)
+    return ()
+
+
+async def fetch_sumistore_supplier_routes(
+    product_id: str,
+    sumistore_client: ExternalSupplierClient | None,
+    lehai_client: ExternalSupplierClient | None,
+) -> SupplierRouteFetch:
+    specs: list[tuple[str, str, ExternalSupplierClient]] = []
+    if sumistore_client is not None:
+        specs.append(("sumistore", product_id, sumistore_client))
+    alternative = SUMISTORE_ALTERNATIVE_PRODUCTS.get(product_id)
+    if alternative is not None and lehai_client is not None:
+        provider, alternative_product_id = alternative
+        specs.append((provider, alternative_product_id, lehai_client))
+
+    async def fetch_one(
+        provider: str,
+        route_product_id: str,
+        client: ExternalSupplierClient,
+    ) -> SupplierRoute | SupplierRouteFailure:
+        if supplier_refresh_is_backed_off(client, route_product_id):
+            return SupplierRouteFailure(
+                provider,
+                route_product_id,
+                SupplierError("SUPPLIER_REFRESH_BACKOFF"),
+            )
+        try:
+            snapshot = await client.fetch_snapshot(route_product_id)
+        except SupplierError as exc:
+            mark_supplier_refresh_failure(
+                client,
+                route_product_id,
+                definitive=exc.code in DEFINITIVE_PRODUCT_UNAVAILABLE_CODES,
+            )
+            return SupplierRouteFailure(provider, route_product_id, exc)
+        clear_supplier_refresh_failure(client, route_product_id)
+        return SupplierRoute(provider, route_product_id, client, snapshot)
+
+    results = await asyncio.gather(
+        *(fetch_one(provider, route_product_id, client) for provider, route_product_id, client in specs)
+    )
+    return SupplierRouteFetch(
+        routes=tuple(result for result in results if isinstance(result, SupplierRoute)),
+        failures=tuple(
+            result for result in results if isinstance(result, SupplierRouteFailure)
+        ),
+        configured_count=len(specs),
+    )
 
 
 def _parse_supplier_datetime(value: object) -> datetime | None:
@@ -535,7 +649,12 @@ async def ensure_sumistore_product(
 async def refresh_external_product(
     session: AsyncSession,
     product: Product,
-    client: SumistoreClient | None,
+    client: ExternalSupplierClient | None,
+    *,
+    lehai_client: ExternalSupplierClient | None = None,
+    route_fetch: SupplierRouteFetch | None = None,
+    force_notify_on_increase: bool = False,
+    alert_provider: str | None = None,
 ) -> int:
     if product.fulfillment_source != "sumistore" or not product.supplier_product_id:
         return product.external_stock
@@ -550,6 +669,94 @@ async def refresh_external_product(
     )
     if product.price_lock_enabled and recovered_stock <= 0:
         await release_price_lock_if_inventory_empty(session, product)
+    if is_multi_supplier_product(
+        product.fulfillment_source,
+        product.supplier_product_id,
+    ) and (client is not None or lehai_client is not None):
+        fetched = route_fetch or await fetch_sumistore_supplier_routes(
+            product.supplier_product_id,
+            client,
+            lehai_client,
+        )
+        for failure in fetched.failures:
+            logger.warning(
+                "Supplier route sync failed: provider=%s product=%s code=%s",
+                failure.provider,
+                failure.product_id,
+                failure.error.code,
+            )
+        if not fetched.routes:
+            all_definitive = (
+                fetched.configured_count > 0
+                and len(fetched.failures) == fetched.configured_count
+                and all(
+                    failure.error.code in DEFINITIVE_PRODUCT_UNAVAILABLE_CODES
+                    for failure in fetched.failures
+                )
+            )
+            if all_definitive:
+                product.external_stock = recovered_stock
+                await apply_supplier_stock(
+                    session,
+                    product,
+                    0,
+                    local_inventory_stock=recovered_stock,
+                )
+                product.supplier_synced_at = datetime.now(UTC)
+            else:
+                product.external_stock = max(
+                    0,
+                    product.external_stock,
+                    product.supplier_available_stock + recovered_stock,
+                )
+            await session.flush()
+            return product.external_stock
+
+        supplier_stock = sum(
+            max(0, int(route.snapshot.effective_stock)) for route in fetched.routes
+        )
+        primary_route = next(
+            (route for route in fetched.routes if route.provider == "sumistore"),
+            None,
+        )
+        balance_increased = False
+        if primary_route is not None:
+            previous_owner_balance = product.supplier_owner_balance
+            current_owner_balance = max(0, primary_route.snapshot.owner_balance)
+            balance_increased = (
+                previous_owner_balance is not None
+                and current_owner_balance > previous_owner_balance
+            )
+            product.supplier_owner_balance = current_owner_balance
+
+        priced_routes = tuple(
+            route
+            for route in fetched.routes
+            if route.snapshot.effective_stock > 0 and route.snapshot.unit_price > 0
+        )
+        if priced_routes:
+            cheapest_route = min(priced_routes, key=supplier_route_sort_key)
+            await apply_supplier_price(
+                session,
+                product,
+                cheapest_route.snapshot.unit_price,
+            )
+        product.external_stock = supplier_stock + recovered_stock
+        await apply_supplier_stock(
+            session,
+            product,
+            supplier_stock,
+            notify_on_increase=(
+                force_notify_on_increase
+                or balance_increased
+                or product.notify_stock_without_balance_topup
+            ),
+            local_inventory_stock=recovered_stock,
+            alert_provider=alert_provider,
+        )
+        product.supplier_synced_at = datetime.now(UTC)
+        await session.flush()
+        return product.external_stock
     if client is None:
         product.external_stock = recovered_stock
         await session.flush()
@@ -620,7 +827,8 @@ async def refresh_external_product(
 
 async def sync_sumistore_products(
     session_factory: async_sessionmaker[AsyncSession],
-    client: SumistoreClient | None,
+    client: ExternalSupplierClient | None,
+    lehai_client: ExternalSupplierClient | None = None,
 ) -> None:
     async with session_factory() as session:
         products = list(
@@ -632,5 +840,10 @@ async def sync_sumistore_products(
             )
         )
         for product in products:
-            await refresh_external_product(session, product, client)
+            await refresh_external_product(
+                session,
+                product,
+                client,
+                lehai_client=lehai_client,
+            )
         await session.commit()

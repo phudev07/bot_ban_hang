@@ -78,6 +78,58 @@ class FakeSupplier:
         )
 
 
+class RoutedSupplier:
+    def __init__(
+        self,
+        provider: str,
+        *,
+        unit_price: int,
+        stock: int,
+        balance: int,
+    ) -> None:
+        self.provider = provider
+        self.unit_price = unit_price
+        self.stock = stock
+        self.balance = balance
+        self.balance_lock = asyncio.Lock()
+        self.buy_quantities: list[int] = []
+
+    async def fetch_snapshot(self, product_id: str) -> SupplierSnapshot:
+        return SupplierSnapshot(
+            product_id=product_id,
+            name="Routed GPT Plus",
+            description="",
+            unit_price=self.unit_price,
+            source_stock=self.stock,
+            owner_balance=self.balance,
+        )
+
+    async def buy(
+        self,
+        product_id: str,
+        quantity: int,
+        *,
+        idempotency_key: str | None = None,
+    ) -> SupplierPurchase:
+        del idempotency_key
+        if quantity > min(self.stock, self.balance // self.unit_price):
+            raise SupplierError("INSUFFICIENT_STOCK")
+        self.buy_quantities.append(quantity)
+        self.stock -= quantity
+        self.balance -= quantity * self.unit_price
+        call_number = len(self.buy_quantities)
+        return SupplierPurchase(
+            order_code=f"{self.provider.upper()}-{call_number}",
+            unit_price=self.unit_price,
+            accounts=tuple(
+                f"{self.provider}-{call_number}-{index}|password"
+                for index in range(1, quantity + 1)
+            ),
+            product_id=product_id,
+            provider=self.provider,
+        )
+
+
 def test_external_stock_ui_refresh_uses_short_cache() -> None:
     class CountingSupplier:
         provider = "sumistore"
@@ -1204,6 +1256,603 @@ def test_direct_purchase_manual_stock_zero_falls_back_without_consuming_inventor
             stored_item = await session.get(InventoryItem, item.id)
             assert stored_user is not None and stored_user.balance == 50_000
             assert stored_item is not None and stored_item.status == "available"
+        await engine.dispose()
+
+    asyncio.run(scenario())
+
+
+def test_gpt_plus_combines_supplier_stock_and_prices_each_source_tier() -> None:
+    async def scenario() -> None:
+        engine, sessions = await make_database()
+        cipher = SecretCipher(Fernet.generate_key().decode())
+        sumi = RoutedSupplier(
+            "sumistore",
+            unit_price=30_000,
+            stock=5,
+            balance=150_000,
+        )
+        lehai = RoutedSupplier(
+            "lehai",
+            unit_price=25_000,
+            stock=10,
+            balance=250_000,
+        )
+        async with sessions() as session:
+            category = Category(name_vi="ChatGPT", name_en="ChatGPT")
+            session.add(category)
+            await session.flush()
+            product = Product(
+                category_id=category.id,
+                name_vi="GPT Plus",
+                name_en="GPT Plus",
+                price=35_000,
+                allow_quantity=True,
+                max_quantity=100,
+                fulfillment_source="sumistore",
+                supplier_product_id="SP-GEF55PBV",
+                supplier_price=30_000,
+                supplier_markup=5_000,
+            )
+            user = User(telegram_id=123456, full_name="Buyer", balance=335_000)
+            session.add_all([product, user])
+            await session.commit()
+            product_id = product.id
+
+        result = await purchase_product(
+            sessions,
+            user.telegram_id,
+            product_id,
+            cipher,
+            quantity=11,
+            supplier_client=sumi,  # type: ignore[arg-type]
+            lehai_client=lehai,  # type: ignore[arg-type]
+        )
+
+        assert result.ok is True
+        assert result.total_amount == 335_000
+        assert sumi.buy_quantities == [1]
+        assert lehai.buy_quantities == [10]
+        assert len({order.batch_code for order in result.orders}) == 1
+        assert [order.amount for order in result.orders].count(30_000) == 10
+        assert [order.amount for order in result.orders].count(35_000) == 1
+        assert [order.cost_amount for order in result.orders].count(25_000) == 10
+        assert [order.cost_amount for order in result.orders].count(30_000) == 1
+        async with sessions() as session:
+            product = await session.get(Product, product_id)
+            assert product is not None
+            assert product.price == 30_000
+            assert product.supplier_available_stock == 15
+            assert product.external_stock == 4
+        await engine.dispose()
+
+    asyncio.run(scenario())
+
+
+def test_gpt_plus_equal_supplier_prices_prefer_sumi() -> None:
+    async def scenario() -> None:
+        engine, sessions = await make_database()
+        cipher = SecretCipher(Fernet.generate_key().decode())
+        sumi = RoutedSupplier(
+            "sumistore",
+            unit_price=25_000,
+            stock=2,
+            balance=50_000,
+        )
+        lehai = RoutedSupplier(
+            "lehai",
+            unit_price=25_000,
+            stock=2,
+            balance=50_000,
+        )
+        async with sessions() as session:
+            category = Category(name_vi="ChatGPT", name_en="ChatGPT")
+            session.add(category)
+            await session.flush()
+            product = Product(
+                category_id=category.id,
+                name_vi="GPT Plus",
+                name_en="GPT Plus",
+                price=30_000,
+                fulfillment_source="sumistore",
+                supplier_product_id="SP-GEF55PBV",
+                supplier_price=25_000,
+                supplier_markup=5_000,
+            )
+            user = User(telegram_id=123456, full_name="Buyer", balance=30_000)
+            session.add_all([product, user])
+            await session.commit()
+            product_id = product.id
+
+        result = await purchase_product(
+            sessions,
+            user.telegram_id,
+            product_id,
+            cipher,
+            supplier_client=sumi,  # type: ignore[arg-type]
+            lehai_client=lehai,  # type: ignore[arg-type]
+        )
+
+        assert result.ok is True
+        assert sumi.buy_quantities == [1]
+        assert lehai.buy_quantities == []
+        await engine.dispose()
+
+    asyncio.run(scenario())
+
+
+def test_gpt_plus_qr_credits_wallet_when_cheap_stock_is_gone() -> None:
+    async def scenario() -> None:
+        engine, sessions = await make_database()
+        cipher = SecretCipher(Fernet.generate_key().decode())
+        sumi = RoutedSupplier(
+            "sumistore",
+            unit_price=30_000,
+            stock=5,
+            balance=150_000,
+        )
+        lehai = RoutedSupplier(
+            "lehai",
+            unit_price=25_000,
+            stock=0,
+            balance=250_000,
+        )
+        async with sessions() as session:
+            category = Category(name_vi="ChatGPT", name_en="ChatGPT")
+            session.add(category)
+            await session.flush()
+            product = Product(
+                category_id=category.id,
+                name_vi="GPT Plus",
+                name_en="GPT Plus",
+                price=30_000,
+                fulfillment_source="sumistore",
+                supplier_product_id="SP-GEF55PBV",
+                supplier_price=25_000,
+                supplier_markup=5_000,
+            )
+            user = User(telegram_id=123456, full_name="Buyer", balance=0)
+            session.add_all([product, user])
+            await session.flush()
+            session.add(
+                Deposit(
+                    user_id=user.telegram_id,
+                    code="NAP123456ABCD",
+                    requested_amount=30_000,
+                    payment_kind="direct_purchase",
+                    product_id=product.id,
+                    quantity=1,
+                )
+            )
+            await session.commit()
+
+        result = await process_sepay_payment(
+            sessions,
+            {
+                "id": 99123,
+                "transferType": "in",
+                "transferAmount": 30_000,
+                "content": "NAP123456ABCD",
+            },
+            cipher=cipher,
+            supplier_client=sumi,  # type: ignore[arg-type]
+            lehai_client=lehai,  # type: ignore[arg-type]
+        )
+
+        assert result.status == "direct_purchase_fallback"
+        assert sumi.buy_quantities == []
+        assert lehai.buy_quantities == []
+        async with sessions() as session:
+            user = await session.get(User, 123456)
+            assert user is not None and user.balance == 30_000
+            assert await session.scalar(select(func.count(Order.id))) == 0
+        await engine.dispose()
+
+    asyncio.run(scenario())
+
+
+def test_gpt_plus_qr_credits_wallet_when_only_part_of_cheap_stock_remains() -> None:
+    async def scenario() -> None:
+        engine, sessions = await make_database()
+        cipher = SecretCipher(Fernet.generate_key().decode())
+        sumi = RoutedSupplier(
+            "sumistore",
+            unit_price=30_000,
+            stock=2,
+            balance=60_000,
+        )
+        lehai = RoutedSupplier(
+            "lehai",
+            unit_price=25_000,
+            stock=3,
+            balance=75_000,
+        )
+        async with sessions() as session:
+            category = Category(name_vi="ChatGPT", name_en="ChatGPT")
+            session.add(category)
+            await session.flush()
+            product = Product(
+                category_id=category.id,
+                name_vi="GPT Plus",
+                name_en="GPT Plus",
+                price=30_000,
+                allow_quantity=True,
+                max_quantity=100,
+                fulfillment_source="sumistore",
+                supplier_product_id="SP-GEF55PBV",
+                supplier_price=25_000,
+                supplier_markup=5_000,
+            )
+            user = User(telegram_id=123456, full_name="Buyer", balance=0)
+            session.add_all([product, user])
+            await session.flush()
+            session.add(
+                Deposit(
+                    user_id=user.telegram_id,
+                    code="NAP123456PART",
+                    requested_amount=150_000,
+                    payment_kind="direct_purchase",
+                    product_id=product.id,
+                    quantity=5,
+                )
+            )
+            await session.commit()
+
+        result = await process_sepay_payment(
+            sessions,
+            {
+                "id": 99125,
+                "transferType": "in",
+                "transferAmount": 150_000,
+                "content": "NAP123456PART",
+            },
+            cipher=cipher,
+            supplier_client=sumi,  # type: ignore[arg-type]
+            lehai_client=lehai,  # type: ignore[arg-type]
+        )
+
+        assert result.status == "direct_purchase_fallback"
+        assert sumi.buy_quantities == []
+        assert lehai.buy_quantities == []
+        assert sumi.stock == 2
+        assert lehai.stock == 3
+        async with sessions() as session:
+            user = await session.get(User, 123456)
+            assert user is not None and user.balance == 150_000
+            assert await session.scalar(select(func.count(Order.id))) == 0
+        await engine.dispose()
+
+    asyncio.run(scenario())
+
+
+def test_gpt_plus_qr_uses_other_supplier_when_current_price_is_unchanged() -> None:
+    async def scenario() -> None:
+        engine, sessions = await make_database()
+        cipher = SecretCipher(Fernet.generate_key().decode())
+        sumi = RoutedSupplier(
+            "sumistore",
+            unit_price=25_000,
+            stock=2,
+            balance=50_000,
+        )
+        lehai = RoutedSupplier(
+            "lehai",
+            unit_price=25_000,
+            stock=0,
+            balance=50_000,
+        )
+        async with sessions() as session:
+            category = Category(name_vi="ChatGPT", name_en="ChatGPT")
+            session.add(category)
+            await session.flush()
+            product = Product(
+                category_id=category.id,
+                name_vi="GPT Plus",
+                name_en="GPT Plus",
+                price=30_000,
+                allow_quantity=True,
+                max_quantity=100,
+                fulfillment_source="sumistore",
+                supplier_product_id="SP-GEF55PBV",
+                supplier_price=25_000,
+                supplier_markup=5_000,
+            )
+            user = User(telegram_id=123456, full_name="Buyer", balance=0)
+            session.add_all([product, user])
+            await session.flush()
+            session.add(
+                Deposit(
+                    user_id=user.telegram_id,
+                    code="NAP123456SAME",
+                    requested_amount=60_000,
+                    payment_kind="direct_purchase",
+                    product_id=product.id,
+                    quantity=2,
+                )
+            )
+            await session.commit()
+
+        result = await process_sepay_payment(
+            sessions,
+            {
+                "id": 99126,
+                "transferType": "in",
+                "transferAmount": 60_000,
+                "content": "NAP123456SAME",
+            },
+            cipher=cipher,
+            supplier_client=sumi,  # type: ignore[arg-type]
+            lehai_client=lehai,  # type: ignore[arg-type]
+        )
+
+        assert result.status == "direct_purchase_completed"
+        assert sumi.buy_quantities == [2]
+        assert lehai.buy_quantities == []
+        async with sessions() as session:
+            user = await session.get(User, 123456)
+            orders = list(await session.scalars(select(Order).order_by(Order.id)))
+            assert user is not None and user.balance == 0
+            assert len(orders) == 2
+            assert sum(order.amount for order in orders) == 60_000
+        await engine.dispose()
+
+    asyncio.run(scenario())
+
+
+def test_gpt_plus_qr_delivers_one_order_from_both_suppliers() -> None:
+    async def scenario() -> None:
+        engine, sessions = await make_database()
+        cipher = SecretCipher(Fernet.generate_key().decode())
+        sumi = RoutedSupplier(
+            "sumistore",
+            unit_price=30_000,
+            stock=5,
+            balance=150_000,
+        )
+        lehai = RoutedSupplier(
+            "lehai",
+            unit_price=25_000,
+            stock=10,
+            balance=250_000,
+        )
+        async with sessions() as session:
+            category = Category(name_vi="ChatGPT", name_en="ChatGPT")
+            session.add(category)
+            await session.flush()
+            product = Product(
+                category_id=category.id,
+                name_vi="GPT Plus",
+                name_en="GPT Plus",
+                price=30_000,
+                allow_quantity=True,
+                max_quantity=100,
+                fulfillment_source="sumistore",
+                supplier_product_id="SP-GEF55PBV",
+                supplier_price=25_000,
+                supplier_markup=5_000,
+            )
+            user = User(telegram_id=123456, full_name="Buyer", balance=0)
+            session.add_all([product, user])
+            await session.flush()
+            session.add(
+                Deposit(
+                    user_id=user.telegram_id,
+                    code="NAP123456ABCD",
+                    requested_amount=335_000,
+                    payment_kind="direct_purchase",
+                    product_id=product.id,
+                    quantity=11,
+                )
+            )
+            await session.commit()
+
+        result = await process_sepay_payment(
+            sessions,
+            {
+                "id": 99124,
+                "transferType": "in",
+                "transferAmount": 335_000,
+                "content": "NAP123456ABCD",
+            },
+            cipher=cipher,
+            supplier_client=sumi,  # type: ignore[arg-type]
+            lehai_client=lehai,  # type: ignore[arg-type]
+        )
+
+        assert result.status == "direct_purchase_completed"
+        assert result.quantity == 11
+        assert sumi.buy_quantities == [1]
+        assert lehai.buy_quantities == [10]
+        async with sessions() as session:
+            orders = list(await session.scalars(select(Order).order_by(Order.id)))
+            user = await session.get(User, 123456)
+            assert len(orders) == 11
+            assert len({order.batch_code for order in orders}) == 1
+            assert [order.amount for order in orders].count(30_000) == 10
+            assert [order.amount for order in orders].count(35_000) == 1
+            assert user is not None and user.balance == 0
+        await engine.dispose()
+
+    asyncio.run(scenario())
+
+
+def test_concurrent_gpt_plus_qr_payments_never_oversell_cheap_stock() -> None:
+    async def scenario() -> None:
+        engine, sessions = await make_database()
+        cipher = SecretCipher(Fernet.generate_key().decode())
+        sumi = RoutedSupplier(
+            "sumistore",
+            unit_price=30_000,
+            stock=5,
+            balance=150_000,
+        )
+        lehai = RoutedSupplier(
+            "lehai",
+            unit_price=25_000,
+            stock=10,
+            balance=250_000,
+        )
+        async with sessions() as session:
+            category = Category(name_vi="ChatGPT", name_en="ChatGPT")
+            session.add(category)
+            await session.flush()
+            product = Product(
+                category_id=category.id,
+                name_vi="GPT Plus",
+                name_en="GPT Plus",
+                price=30_000,
+                allow_quantity=True,
+                max_quantity=100,
+                fulfillment_source="sumistore",
+                supplier_product_id="SP-GEF55PBV",
+                supplier_price=25_000,
+                supplier_markup=5_000,
+            )
+            session.add(product)
+            await session.flush()
+            for index in range(11):
+                user_id = 20_000 + index
+                session.add(User(telegram_id=user_id, full_name=f"Buyer {index}"))
+                session.add(
+                    Deposit(
+                        user_id=user_id,
+                        code=f"NAP{user_id}A{index:03d}",
+                        requested_amount=30_000,
+                        payment_kind="direct_purchase",
+                        product_id=product.id,
+                        quantity=1,
+                    )
+                )
+            await session.commit()
+
+        results = await asyncio.gather(
+            *(
+                process_sepay_payment(
+                    sessions,
+                    {
+                        "id": 100_000 + index,
+                        "transferType": "in",
+                        "transferAmount": 30_000,
+                        "content": f"NAP{20_000 + index}A{index:03d}",
+                    },
+                    cipher=cipher,
+                    supplier_client=sumi,  # type: ignore[arg-type]
+                    lehai_client=lehai,  # type: ignore[arg-type]
+                )
+                for index in range(11)
+            )
+        )
+
+        assert [result.status for result in results].count(
+            "direct_purchase_completed"
+        ) == 10
+        assert [result.status for result in results].count(
+            "direct_purchase_fallback"
+        ) == 1
+        assert sum(lehai.buy_quantities) == 10
+        assert sumi.buy_quantities == []
+        async with sessions() as session:
+            assert int(await session.scalar(select(func.count(Order.id))) or 0) == 10
+            wallet_balances = list(
+                await session.scalars(select(User.balance).order_by(User.telegram_id))
+            )
+            assert wallet_balances.count(30_000) == 1
+            assert wallet_balances.count(0) == 10
+        await engine.dispose()
+
+    asyncio.run(scenario())
+
+
+def test_concurrent_gpt_plus_qr_payments_with_mixed_quantities_are_atomic() -> None:
+    async def scenario() -> None:
+        engine, sessions = await make_database()
+        cipher = SecretCipher(Fernet.generate_key().decode())
+        sumi = RoutedSupplier(
+            "sumistore",
+            unit_price=30_000,
+            stock=5,
+            balance=150_000,
+        )
+        lehai = RoutedSupplier(
+            "lehai",
+            unit_price=25_000,
+            stock=10,
+            balance=250_000,
+        )
+        quantities = (2, 3, 5, 2)
+        async with sessions() as session:
+            category = Category(name_vi="ChatGPT", name_en="ChatGPT")
+            session.add(category)
+            await session.flush()
+            product = Product(
+                category_id=category.id,
+                name_vi="GPT Plus",
+                name_en="GPT Plus",
+                price=30_000,
+                allow_quantity=True,
+                max_quantity=100,
+                fulfillment_source="sumistore",
+                supplier_product_id="SP-GEF55PBV",
+                supplier_price=25_000,
+                supplier_markup=5_000,
+            )
+            session.add(product)
+            await session.flush()
+            for index, quantity in enumerate(quantities):
+                user_id = 30_000 + index
+                session.add(User(telegram_id=user_id, full_name=f"Buyer {index}"))
+                session.add(
+                    Deposit(
+                        user_id=user_id,
+                        code=f"NAP{user_id}Q{quantity:03d}",
+                        requested_amount=quantity * 30_000,
+                        payment_kind="direct_purchase",
+                        product_id=product.id,
+                        quantity=quantity,
+                    )
+                )
+            await session.commit()
+
+        results = await asyncio.gather(
+            *(
+                process_sepay_payment(
+                    sessions,
+                    {
+                        "id": 110_000 + index,
+                        "transferType": "in",
+                        "transferAmount": quantity * 30_000,
+                        "content": f"NAP{30_000 + index}Q{quantity:03d}",
+                    },
+                    cipher=cipher,
+                    supplier_client=sumi,  # type: ignore[arg-type]
+                    lehai_client=lehai,  # type: ignore[arg-type]
+                )
+                for index, quantity in enumerate(quantities)
+            )
+        )
+
+        assert [result.status for result in results] == [
+            "direct_purchase_completed",
+            "direct_purchase_completed",
+            "direct_purchase_completed",
+            "direct_purchase_fallback",
+        ]
+        assert sum(lehai.buy_quantities) == 10
+        assert sumi.buy_quantities == []
+        async with sessions() as session:
+            orders = list(await session.scalars(select(Order).order_by(Order.id)))
+            users = {
+                user.telegram_id: user
+                for user in await session.scalars(select(User).order_by(User.telegram_id))
+            }
+            order_counts: dict[int, int] = {}
+            for order in orders:
+                order_counts[order.user_id] = order_counts.get(order.user_id, 0) + 1
+            assert len(orders) == 10
+            assert order_counts == {30_000: 2, 30_001: 3, 30_002: 5}
+            assert users[30_000].balance == 0
+            assert users[30_001].balance == 0
+            assert users[30_002].balance == 0
+            assert users[30_003].balance == 60_000
         await engine.dispose()
 
     asyncio.run(scenario())

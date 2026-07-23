@@ -3,6 +3,7 @@ import hashlib
 import logging
 import secrets
 from collections.abc import Awaitable, Callable
+from contextlib import AsyncExitStack
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 
@@ -49,9 +50,14 @@ from app.suppliers import (
     EXTERNAL_FULFILLMENT_SOURCES,
     SELLABLE_FULFILLMENT_SOURCES,
     ExternalSupplierClient,
+    SupplierRoute,
+    SupplierRouteFetch,
     SumistoreClient,
     SupplierError,
     SupplierPurchase,
+    fetch_sumistore_supplier_routes,
+    is_multi_supplier_product,
+    plan_supplier_routes,
     refresh_external_product,
     supplier_balance_guard,
 )
@@ -108,6 +114,7 @@ async def buy_supplier_product(
     quantity: int,
     *,
     idempotency_key: str | None = None,
+    shop_product_id: int | None = None,
 ) -> SupplierPurchase:
     provider = getattr(client, "provider", "sumistore")
     request_key = idempotency_key or f"shop-{secrets.token_hex(16)}"
@@ -125,12 +132,14 @@ async def buy_supplier_product(
         )
         if pending_recovery is not None:
             raise SupplierError("SUPPLIER_RECOVERY_PENDING")
-    product_db_id = await session.scalar(
-        select(Product.id).where(
-            Product.fulfillment_source == provider,
-            Product.supplier_product_id == product_id,
+    product_db_id = shop_product_id
+    if product_db_id is None:
+        product_db_id = await session.scalar(
+            select(Product.id).where(
+                Product.fulfillment_source == provider,
+                Product.supplier_product_id == product_id,
+            )
         )
-    )
     attempt = await session.scalar(
         select(SupplierPurchaseAttempt).where(
             SupplierPurchaseAttempt.provider == provider,
@@ -227,6 +236,76 @@ async def preserve_supplier_purchase_for_resale(
         )
     await session.flush()
     return recovery_code
+
+
+def supplier_plan_request_key(
+    base_key: str,
+    route: SupplierRoute,
+    position: int,
+) -> str:
+    raw_key = f"{base_key}:{position}:{route.provider}:{route.product_id}"
+    if len(raw_key) <= 120:
+        return raw_key
+    return f"route-{hashlib.sha256(raw_key.encode()).hexdigest()}"
+
+
+async def execute_supplier_route_plan(
+    session: AsyncSession,
+    product: Product,
+    plan: tuple[tuple[SupplierRoute, int], ...],
+    *,
+    request_key: str,
+    cipher: SecretCipher,
+) -> tuple[tuple[SupplierPurchase, int], ...]:
+    completed: list[tuple[SupplierPurchase, int]] = []
+    try:
+        for position, (route, route_quantity) in enumerate(plan, start=1):
+            purchase = await buy_supplier_product(
+                session,
+                route.client,
+                route.product_id,
+                route_quantity,
+                idempotency_key=supplier_plan_request_key(
+                    request_key,
+                    route,
+                    position,
+                ),
+                shop_product_id=product.id,
+            )
+            unit_cost = max(
+                0,
+                int(purchase.unit_price or route.snapshot.unit_price or 0),
+            )
+            completed.append((purchase, unit_cost))
+    except SupplierError:
+        # Never deliver half an order. Already-paid supplier accounts become
+        # local stock so the customer's wallet/QR flow can fail atomically.
+        for purchase, unit_cost in completed:
+            await preserve_supplier_purchase_for_resale(
+                session,
+                product,
+                purchase,
+                cipher,
+                unit_cost,
+            )
+        raise
+    return tuple(completed)
+
+
+async def preserve_supplier_purchase_parts(
+    session: AsyncSession,
+    product: Product,
+    purchases: tuple[tuple[SupplierPurchase, int], ...],
+    cipher: SecretCipher,
+) -> None:
+    for purchase, unit_cost in purchases:
+        await preserve_supplier_purchase_for_resale(
+            session,
+            product,
+            purchase,
+            cipher,
+            unit_cost,
+        )
 
 
 async def _execute_supplier_purchase(
@@ -369,7 +448,12 @@ async def refresh_product_from_supplier(
     lehai_client: LeHaiPremiumClient | None,
 ) -> int:
     if product.fulfillment_source == "sumistore":
-        return await refresh_external_product(session, product, sumistore_client)
+        return await refresh_external_product(
+            session,
+            product,
+            sumistore_client,
+            lehai_client=lehai_client,
+        )
     if product.fulfillment_source == "lehai":
         return await refresh_lehai_product(session, product, lehai_client)
     return product.external_stock
@@ -546,6 +630,128 @@ class ProductPricing:
     quantity_discount_percent: int = 0
     quantity_discount_per_unit: int = 0
     flash_sale: FlashSaleCampaign | None = None
+
+
+@dataclass(frozen=True)
+class SupplierAllocationPricing:
+    route: SupplierRoute
+    quantity: int
+    original_unit_price: int
+    final_unit_price: int
+    discount_per_unit: int
+    coupon_discount_per_unit: int
+    quantity_discount_per_unit: int
+
+
+@dataclass(frozen=True)
+class MultiSupplierQuote:
+    allocations: tuple[SupplierAllocationPricing, ...]
+    total_amount: int
+    discount_amount: int
+    coupon_discount_amount: int
+    quantity_discount_amount: int
+
+    @property
+    def available(self) -> bool:
+        return bool(self.allocations)
+
+
+def price_supplier_plan(
+    product: Product,
+    plan: tuple[tuple[SupplierRoute, int], ...],
+    pricing: ProductPricing,
+) -> MultiSupplierQuote:
+    allocations: list[SupplierAllocationPricing] = []
+    for route, route_quantity in plan:
+        original_unit_price = (
+            int(product.price)
+            if product.price_lock_enabled
+            else int(route.snapshot.unit_price) + max(0, int(product.supplier_markup))
+        )
+        if pricing.flash_sale is not None:
+            final_unit_price = int(pricing.flash_sale.sale_price)
+            coupon_discount = 0
+            quantity_discount = 0
+        else:
+            coupon_discount = 0
+            if pricing.coupon is not None:
+                if pricing.coupon.discount_type == "percent":
+                    coupon_discount = (
+                        original_unit_price * pricing.coupon.discount_value // 100
+                    )
+                else:
+                    coupon_discount = pricing.coupon.discount_value
+                coupon_discount = max(
+                    0,
+                    min(coupon_discount, max(0, original_unit_price - 1)),
+                )
+            raw_quantity_discount = (
+                original_unit_price * pricing.quantity_discount_percent // 100
+            )
+            quantity_discount = max(
+                0,
+                min(
+                    raw_quantity_discount,
+                    max(0, original_unit_price - coupon_discount - 1),
+                ),
+            )
+            final_unit_price = (
+                original_unit_price - coupon_discount - quantity_discount
+            )
+        discount_per_unit = max(0, original_unit_price - final_unit_price)
+        allocations.append(
+            SupplierAllocationPricing(
+                route=route,
+                quantity=route_quantity,
+                original_unit_price=original_unit_price,
+                final_unit_price=final_unit_price,
+                discount_per_unit=discount_per_unit,
+                coupon_discount_per_unit=coupon_discount,
+                quantity_discount_per_unit=quantity_discount,
+            )
+        )
+    return MultiSupplierQuote(
+        allocations=tuple(allocations),
+        total_amount=sum(
+            allocation.final_unit_price * allocation.quantity
+            for allocation in allocations
+        ),
+        discount_amount=sum(
+            allocation.discount_per_unit * allocation.quantity
+            for allocation in allocations
+        ),
+        coupon_discount_amount=sum(
+            allocation.coupon_discount_per_unit * allocation.quantity
+            for allocation in allocations
+        ),
+        quantity_discount_amount=sum(
+            allocation.quantity_discount_per_unit * allocation.quantity
+            for allocation in allocations
+        ),
+    )
+
+
+async def multi_supplier_quote(
+    product: Product,
+    quantity: int,
+    pricing: ProductPricing,
+    sumistore_client: SumistoreClient | None,
+    lehai_client: LeHaiPremiumClient | None,
+) -> MultiSupplierQuote | None:
+    if not is_multi_supplier_product(
+        product.fulfillment_source,
+        product.supplier_product_id,
+    ) or not product.supplier_product_id:
+        return None
+    fetched = await fetch_sumistore_supplier_routes(
+        product.supplier_product_id,
+        sumistore_client,
+        lehai_client,
+    )
+    plan = plan_supplier_routes(fetched.routes, quantity)
+    if not plan:
+        return MultiSupplierQuote((), 0, 0, 0, 0)
+    return price_supplier_plan(product, plan, pricing)
 
 
 async def product_pricing(
@@ -771,16 +977,44 @@ async def purchase_product(
     max_unit_price: int | None = None,
 ) -> PurchaseResult:
     async with session_factory() as session:
-        fulfillment_source = await session.scalar(
-            select(Product.fulfillment_source).where(Product.id == product_id)
-        )
-    external_client = supplier_client_for_source(
-        str(fulfillment_source or ""),
+        source_row = (
+            await session.execute(
+                select(
+                    Product.fulfillment_source,
+                    Product.supplier_product_id,
+                ).where(Product.id == product_id)
+            )
+        ).one_or_none()
+    fulfillment_source = str(source_row[0]) if source_row is not None else ""
+    supplier_product_id = source_row[1] if source_row is not None else None
+    external_clients: list[ExternalSupplierClient] = []
+    primary_client = supplier_client_for_source(
+        fulfillment_source,
         supplier_client,
         lehai_client,
     )
-    if external_client is not None:
-        async with supplier_balance_guard(external_client):
+    if primary_client is not None:
+        external_clients.append(primary_client)
+    if (
+        is_multi_supplier_product(fulfillment_source, supplier_product_id)
+        and lehai_client is not None
+        and lehai_client not in external_clients
+    ):
+        external_clients.append(lehai_client)
+    if external_clients:
+        unique_clients = {
+            id(client): client for client in external_clients
+        }.values()
+        ordered_clients = sorted(
+            unique_clients,
+            key=lambda client: (
+                0 if getattr(client, "provider", "") == "sumistore" else 1,
+                getattr(client, "provider", ""),
+            ),
+        )
+        async with AsyncExitStack() as stack:
+            for client in ordered_clients:
+                await stack.enter_async_context(supplier_balance_guard(client))
             return await _purchase_product(
                 session_factory,
                 telegram_id,
@@ -865,6 +1099,9 @@ async def _purchase_product(
                 lehai_client,
             )
             recovered_items: list[InventoryItem] = []
+            recovered_stock = 0
+            multi_route_fetch: SupplierRouteFetch | None = None
+            multi_plan: tuple[tuple[SupplierRoute, int], ...] = ()
             if product.fulfillment_source in EXTERNAL_FULFILLMENT_SOURCES:
                 recovered_items = await reserve_available_inventory(
                     session,
@@ -874,19 +1111,59 @@ async def _purchase_product(
                 if len(recovered_items) != quantity:
                     recovered_stock = len(recovered_items)
                     recovered_items = []
-                    await refresh_product_from_supplier(
-                        session,
-                        product,
-                        supplier_client,
-                        lehai_client,
-                    )
+                    if (
+                        is_multi_supplier_product(
+                            product.fulfillment_source,
+                            product.supplier_product_id,
+                        )
+                        and product.supplier_product_id
+                    ):
+                        multi_route_fetch = await fetch_sumistore_supplier_routes(
+                            product.supplier_product_id,
+                            supplier_client,
+                            lehai_client,
+                        )
+                        await refresh_external_product(
+                            session,
+                            product,
+                            supplier_client,
+                            lehai_client=lehai_client,
+                            route_fetch=multi_route_fetch,
+                        )
+                        multi_plan = plan_supplier_routes(
+                            multi_route_fetch.routes,
+                            quantity,
+                        )
+                    else:
+                        await refresh_product_from_supplier(
+                            session,
+                            product,
+                            supplier_client,
+                            lehai_client,
+                        )
                     supplier_stock = max(0, product.external_stock - recovered_stock)
                     if (
-                        external_client is None
-                        or not product.supplier_product_id
+                        not product.supplier_product_id
                         or supplier_stock < quantity
+                        or (
+                            multi_route_fetch is not None
+                            and not multi_plan
+                        )
+                        or (
+                            multi_route_fetch is None
+                            and external_client is None
+                        )
                     ):
-                        return PurchaseResult(False, "out_of_stock")
+                        return PurchaseResult(
+                            False,
+                            (
+                                "supplier_unavailable"
+                                if multi_route_fetch is not None
+                                and not multi_route_fetch.routes
+                                and multi_route_fetch.failures
+                                else "out_of_stock"
+                            ),
+                        )
             try:
                 pricing = await product_pricing(
                     session,
@@ -917,18 +1194,53 @@ async def _purchase_product(
                 and flash_sale_remaining(pricing.flash_sale) < quantity
             ):
                 return PurchaseResult(False, "out_of_stock")
-            if max_unit_price is not None and pricing.final_unit_price > max_unit_price:
+            multi_quote = (
+                price_supplier_plan(product, multi_plan, pricing)
+                if multi_plan
+                else None
+            )
+            if (
+                multi_quote is not None
+                and pricing.flash_sale is not None
+                and any(
+                    allocation.route.snapshot.unit_price
+                    > allocation.final_unit_price
+                    for allocation in multi_quote.allocations
+                )
+            ):
+                return PurchaseResult(
+                    False,
+                    "flash_sale_unavailable",
+                    flash_sale_id=pricing.flash_sale.id,
+                )
+            highest_unit_price = (
+                max(
+                    allocation.final_unit_price
+                    for allocation in multi_quote.allocations
+                )
+                if multi_quote is not None
+                else pricing.final_unit_price
+            )
+            total_amount = (
+                multi_quote.total_amount
+                if multi_quote is not None
+                else pricing.final_unit_price * quantity
+            )
+            total_discount = (
+                multi_quote.discount_amount
+                if multi_quote is not None
+                else pricing.discount_per_unit * quantity
+            )
+            if max_unit_price is not None and highest_unit_price > max_unit_price:
                 return PurchaseResult(
                     False,
                     "price_changed",
-                    total_amount=pricing.final_unit_price * quantity,
-                    discount_amount=pricing.discount_per_unit * quantity,
+                    total_amount=total_amount,
+                    discount_amount=total_discount,
                     coupon_code=pricing.coupon.code if pricing.coupon else None,
                     quantity_discount_percent=pricing.quantity_discount_percent,
                     flash_sale_id=(pricing.flash_sale.id if pricing.flash_sale else None),
                 )
-            total_amount = pricing.final_unit_price * quantity
-            total_discount = pricing.discount_per_unit * quantity
             if user.balance < total_amount:
                 return PurchaseResult(
                     False,
@@ -1017,17 +1329,39 @@ async def _purchase_product(
                     user.telegram_id,
                     user.language,
                 )
+                request_key = (
+                    supplier_idempotency_key
+                    or f"shop-{secrets.token_hex(16)}"
+                )
                 try:
-                    supplier_purchase = await buy_supplier_product(
-                        session,
-                        external_client,
-                        product.supplier_product_id,
-                        quantity,
-                        idempotency_key=(
-                            supplier_idempotency_key
-                            or f"shop-{secrets.token_hex(16)}"
-                        ),
-                    )
+                    if multi_plan:
+                        supplier_purchases = await execute_supplier_route_plan(
+                            session,
+                            product,
+                            multi_plan,
+                            request_key=request_key,
+                            cipher=cipher,
+                        )
+                    else:
+                        supplier_purchase = await buy_supplier_product(
+                            session,
+                            external_client,
+                            product.supplier_product_id,
+                            quantity,
+                            idempotency_key=request_key,
+                            shop_product_id=product.id,
+                        )
+                        supplier_purchases = (
+                            (
+                                supplier_purchase,
+                                max(
+                                    0,
+                                    supplier_purchase.unit_price
+                                    or product.supplier_price
+                                    or 0,
+                                ),
+                            ),
+                        )
                 except SupplierError as exc:
                     logger.warning(
                         "Supplier purchase failed: provider=%s product=%s quantity=%s "
@@ -1038,6 +1372,14 @@ async def _purchase_product(
                         exc.code,
                         str(exc),
                     )
+                    if multi_plan:
+                        if exc.code in {
+                            "INSUFFICIENT_STOCK",
+                            "INSUFFICIENT_BALANCE",
+                            "SUPPLIER_PURCHASE_BACKOFF",
+                        }:
+                            return PurchaseResult(False, "out_of_stock")
+                        return PurchaseResult(False, "supplier_unavailable")
                     purchase_is_blocked = getattr(
                         external_client,
                         "purchase_is_blocked",
@@ -1067,7 +1409,7 @@ async def _purchase_product(
 
                 now = datetime.now(UTC)
                 batch_code = f"B{secrets.token_hex(5).upper()}"
-                if supplier_purchase.unit_price > 0 and (
+                if not multi_plan and supplier_purchase.unit_price > 0 and (
                     supplier_purchase.provider == "sumistore"
                     or (
                         pricing.flash_sale is not None
@@ -1080,86 +1422,140 @@ async def _purchase_product(
                         product,
                         supplier_purchase.unit_price,
                     )
-                cost_unit_price = max(
-                    0,
-                    supplier_purchase.unit_price
-                    or product.supplier_price
-                    or 0,
-                )
-                if (
-                    pricing.flash_sale is not None
-                    and cost_unit_price > pricing.flash_sale.sale_price
+                if multi_plan and any(
+                    unit_cost > allocation.route.snapshot.unit_price
+                    for (_, unit_cost), allocation in zip(
+                        supplier_purchases,
+                        multi_quote.allocations,
+                        strict=True,
+                    )
                 ):
-                    recovery_code = await preserve_supplier_purchase_for_resale(
+                    await preserve_supplier_purchase_parts(
                         session,
                         product,
-                        supplier_purchase,
+                        supplier_purchases,
                         cipher,
-                        cost_unit_price,
                     )
                     logger.warning(
-                        "Flash sale stopped after supplier cost increased during purchase: "
-                        "campaign=%s product=%s sale_price=%s cost=%s recovery=%s",
-                        pricing.flash_sale.id,
+                        "Multi-supplier cost changed during purchase; accounts moved to stock: "
+                        "product=%s",
                         product.id,
-                        pricing.flash_sale.sale_price,
-                        cost_unit_price,
-                        recovery_code,
                     )
                     return PurchaseResult(
                         False,
-                        "flash_sale_unavailable",
-                        flash_sale_id=pricing.flash_sale.id,
-                    )
-                product.external_stock = max(0, product.external_stock - quantity)
-                orders = []
-                secret_values = []
-                for item_index, secret_value in enumerate(supplier_purchase.accounts):
-                    item = InventoryItem(
-                        product_id=product.id,
-                        encrypted_secret=cipher.encrypt(secret_value),
-                        cost_amount=cost_unit_price,
-                        supplier_order_code=supplier_purchase.order_code or None,
-                        supplier_item_index=item_index,
-                        status="sold",
-                        sold_at=now,
-                    )
-                    session.add(item)
-                    await session.flush()
-                    order = Order(
-                        user_id=user.telegram_id,
-                        product_id=product.id,
-                        inventory_item_id=item.id,
-                        amount=sale_unit_price,
-                        cost_amount=cost_unit_price,
-                        discount_amount=pricing.discount_per_unit,
-                        discount_code_id=pricing.coupon.id if pricing.coupon else None,
-                        discount_code=pricing.coupon.code if pricing.coupon else None,
+                        (
+                            "flash_sale_unavailable"
+                            if pricing.flash_sale is not None
+                            else "price_changed"
+                        ),
                         flash_sale_id=(
                             pricing.flash_sale.id if pricing.flash_sale else None
                         ),
-                        batch_code=batch_code,
-                        supplier_order_code=supplier_purchase.order_code or None,
-                        sales_channel=sales_channel,
-                        api_client_id=api_client_id,
-                        api_order_request_id=api_order_request_id,
-                        status="completed",
-                        delivered_at=now,
-                        product=product,
-                        inventory_item=item,
                     )
-                    session.add(order)
-                    orders.append(order)
-                    secret_values.append(secret_value)
-                record_supplier_purchase(
-                    session,
-                    amount=cost_unit_price * quantity,
-                    supplier_order_code=supplier_purchase.order_code or None,
-                    shop_order_code=batch_code,
-                    product_id=product.id,
-                    quantity=quantity,
-                    provider=supplier_purchase.provider,
-                )
+                if not multi_plan:
+                    cost_unit_price = supplier_purchases[0][1]
+                    if (
+                        pricing.flash_sale is not None
+                        and cost_unit_price > pricing.flash_sale.sale_price
+                    ):
+                        recovery_code = await preserve_supplier_purchase_for_resale(
+                            session,
+                            product,
+                            supplier_purchase,
+                            cipher,
+                            cost_unit_price,
+                        )
+                        logger.warning(
+                            "Flash sale stopped after supplier cost increased during purchase: "
+                            "campaign=%s product=%s sale_price=%s cost=%s recovery=%s",
+                            pricing.flash_sale.id,
+                            product.id,
+                            pricing.flash_sale.sale_price,
+                            cost_unit_price,
+                            recovery_code,
+                        )
+                        return PurchaseResult(
+                            False,
+                            "flash_sale_unavailable",
+                            flash_sale_id=pricing.flash_sale.id,
+                        )
+                product.external_stock = max(0, product.external_stock - quantity)
+                orders = []
+                secret_values = []
+                if multi_plan:
+                    allocation_rows = tuple(
+                        (
+                            purchase,
+                            unit_cost,
+                            allocation.final_unit_price,
+                            allocation.discount_per_unit,
+                        )
+                        for (purchase, unit_cost), allocation in zip(
+                            supplier_purchases,
+                            multi_quote.allocations,
+                            strict=True,
+                        )
+                    )
+                else:
+                    allocation_rows = (
+                        (
+                            supplier_purchase,
+                            supplier_purchases[0][1],
+                            sale_unit_price,
+                            pricing.discount_per_unit,
+                        ),
+                    )
+                for purchase, unit_cost, unit_sale_price, unit_discount in allocation_rows:
+                    for item_index, secret_value in enumerate(purchase.accounts):
+                        item = InventoryItem(
+                            product_id=product.id,
+                            encrypted_secret=cipher.encrypt(secret_value),
+                            cost_amount=unit_cost,
+                            supplier_order_code=purchase.order_code or None,
+                            supplier_item_index=item_index,
+                            status="sold",
+                            sold_at=now,
+                        )
+                        session.add(item)
+                        await session.flush()
+                        order = Order(
+                            user_id=user.telegram_id,
+                            product_id=product.id,
+                            inventory_item_id=item.id,
+                            amount=unit_sale_price,
+                            cost_amount=unit_cost,
+                            discount_amount=unit_discount,
+                            discount_code_id=(
+                                pricing.coupon.id if pricing.coupon else None
+                            ),
+                            discount_code=(
+                                pricing.coupon.code if pricing.coupon else None
+                            ),
+                            flash_sale_id=(
+                                pricing.flash_sale.id if pricing.flash_sale else None
+                            ),
+                            batch_code=batch_code,
+                            supplier_order_code=purchase.order_code or None,
+                            sales_channel=sales_channel,
+                            api_client_id=api_client_id,
+                            api_order_request_id=api_order_request_id,
+                            status="completed",
+                            delivered_at=now,
+                            product=product,
+                            inventory_item=item,
+                        )
+                        session.add(order)
+                        orders.append(order)
+                        secret_values.append(secret_value)
+                    record_supplier_purchase(
+                        session,
+                        amount=unit_cost * len(purchase.accounts),
+                        supplier_order_code=purchase.order_code or None,
+                        shop_order_code=batch_code,
+                        product_id=product.id,
+                        quantity=len(purchase.accounts),
+                        provider=purchase.provider,
+                    )
                 if pricing.coupon is not None:
                     pricing.coupon.used_count += 1
                 apply_wallet_change(
@@ -1612,22 +2008,54 @@ async def process_sepay_payment(
         deposit_code = find_deposit_code(payment_text, payment_prefix)
         if deposit_code is not None:
             async with session_factory() as session:
-                supplier_source = await session.scalar(
-                    select(Product.fulfillment_source)
-                    .join(Deposit, Deposit.product_id == Product.id)
-                    .where(
-                        Deposit.code == deposit_code,
-                        Deposit.payment_kind == "direct_purchase",
-                        Product.fulfillment_source.in_(EXTERNAL_FULFILLMENT_SOURCES),
+                source_row = (
+                    await session.execute(
+                        select(
+                            Product.fulfillment_source,
+                            Product.supplier_product_id,
+                        )
+                        .join(Deposit, Deposit.product_id == Product.id)
+                        .where(
+                            Deposit.code == deposit_code,
+                            Deposit.payment_kind == "direct_purchase",
+                            Product.fulfillment_source.in_(
+                                EXTERNAL_FULFILLMENT_SOURCES
+                            ),
+                        )
                     )
-                )
+                ).one_or_none()
+            supplier_source = str(source_row[0]) if source_row is not None else ""
+            supplier_product_id = source_row[1] if source_row is not None else None
+            external_clients: list[ExternalSupplierClient] = []
             external_client = supplier_client_for_source(
-                str(supplier_source or ""),
+                supplier_source,
                 supplier_client,
                 lehai_client,
             )
             if external_client is not None:
-                async with supplier_balance_guard(external_client):
+                external_clients.append(external_client)
+            if (
+                is_multi_supplier_product(supplier_source, supplier_product_id)
+                and lehai_client is not None
+                and lehai_client not in external_clients
+            ):
+                external_clients.append(lehai_client)
+            if external_clients:
+                unique_clients = {
+                    id(client): client for client in external_clients
+                }.values()
+                ordered_clients = sorted(
+                    unique_clients,
+                    key=lambda client: (
+                        0
+                        if getattr(client, "provider", "") == "sumistore"
+                        else 1,
+                        getattr(client, "provider", ""),
+                    ),
+                )
+                async with AsyncExitStack() as stack:
+                    for client in ordered_clients:
+                        await stack.enter_async_context(supplier_balance_guard(client))
                     return await _process_sepay_payment(
                         session_factory,
                         payload,
@@ -1857,6 +2285,11 @@ async def _process_sepay_payment(
                     )
                 items: list[InventoryItem] = []
                 supplier_purchase_made = False
+                supplier_purchase_parts: tuple[
+                    tuple[SupplierPurchase, int], ...
+                ] = ()
+                item_sale_prices: dict[int, int] = {}
+                item_discounts: dict[int, int] = {}
                 if (
                     product is not None
                     and product.active
@@ -1873,6 +2306,8 @@ async def _process_sepay_payment(
                         )
                         if product.fulfillment_source in EXTERNAL_FULFILLMENT_SOURCES:
                             supplier_stock = 0
+                            multi_route_fetch: SupplierRouteFetch | None = None
+                            multi_plan: tuple[tuple[SupplierRoute, int], ...] = ()
                             items = await reserve_available_inventory(
                                 session,
                                 product.id,
@@ -1891,12 +2326,38 @@ async def _process_sepay_payment(
                                     user.telegram_id,
                                     user.language,
                                 )
-                                await refresh_product_from_supplier(
-                                    session,
-                                    product,
-                                    supplier_client,
-                                    lehai_client,
-                                )
+                                if (
+                                    is_multi_supplier_product(
+                                        product.fulfillment_source,
+                                        product.supplier_product_id,
+                                    )
+                                    and product.supplier_product_id
+                                ):
+                                    multi_route_fetch = (
+                                        await fetch_sumistore_supplier_routes(
+                                            product.supplier_product_id,
+                                            supplier_client,
+                                            lehai_client,
+                                        )
+                                    )
+                                    await refresh_external_product(
+                                        session,
+                                        product,
+                                        supplier_client,
+                                        lehai_client=lehai_client,
+                                        route_fetch=multi_route_fetch,
+                                    )
+                                    multi_plan = plan_supplier_routes(
+                                        multi_route_fetch.routes,
+                                        deposit.quantity,
+                                    )
+                                else:
+                                    await refresh_product_from_supplier(
+                                        session,
+                                        product,
+                                        supplier_client,
+                                        lehai_client,
+                                    )
                                 if deposit_campaign is not None:
                                     unsafe_status = stop_unsafe_flash_sale(
                                         deposit_campaign,
@@ -1917,49 +2378,121 @@ async def _process_sepay_payment(
                             if not items and (
                                 flash_sale_can_fulfill
                                 and cipher is not None
-                                and external_client is not None
+                                and (
+                                    external_client is not None
+                                    or bool(multi_plan)
+                                )
                                 and product.supplier_product_id
                                 and supplier_stock >= deposit.quantity
                             ):
-                                try:
-                                    supplier_purchase = await buy_supplier_product(
-                                        session,
-                                        external_client,
-                                        product.supplier_product_id,
-                                        deposit.quantity,
-                                        idempotency_key=f"qr-{deposit.code}",
-                                    )
-                                except SupplierError:
-                                    product.external_stock = recovered_stock
-                                    purchase_is_blocked = getattr(
-                                        external_client,
-                                        "purchase_is_blocked",
-                                        None,
-                                    )
-                                    if callable(
-                                        purchase_is_blocked
-                                    ) and purchase_is_blocked(product.supplier_product_id):
-                                        await apply_supplier_stock(
-                                            session,
-                                            product,
-                                            0,
-                                            notify_on_increase=False,
-                                            local_inventory_stock=recovered_stock,
+                                multi_quote: MultiSupplierQuote | None = None
+                                if multi_plan:
+                                    tier = await session.scalar(
+                                        select(QuantityDiscount)
+                                        .where(
+                                            QuantityDiscount.product_id == product.id,
+                                            QuantityDiscount.active.is_(True),
+                                            QuantityDiscount.min_quantity
+                                            <= deposit.quantity,
                                         )
+                                        .order_by(
+                                            QuantityDiscount.min_quantity.desc(),
+                                            QuantityDiscount.discount_percent.desc(),
+                                        )
+                                        .limit(1)
+                                    )
+                                    locked_pricing = ProductPricing(
+                                        original_unit_price=product.price,
+                                        discount_per_unit=0,
+                                        final_unit_price=product.price,
+                                        coupon=reserved_coupon,
+                                        quantity_discount_percent=(
+                                            tier.discount_percent if tier is not None else 0
+                                        ),
+                                        flash_sale=deposit_campaign,
+                                    )
+                                    multi_quote = price_supplier_plan(
+                                        product,
+                                        multi_plan,
+                                        locked_pricing,
+                                    )
+                                    quote_is_safe = (
+                                        multi_quote.total_amount
+                                        == deposit.requested_amount
+                                        and not any(
+                                            allocation.route.snapshot.unit_price
+                                            > allocation.final_unit_price
+                                            for allocation in multi_quote.allocations
+                                        )
+                                    )
+                                    if not quote_is_safe:
+                                        multi_plan = ()
+                                try:
+                                    if multi_plan:
+                                        supplier_purchase_parts = (
+                                            await execute_supplier_route_plan(
+                                                session,
+                                                product,
+                                                multi_plan,
+                                                request_key=f"qr-{deposit.code}",
+                                                cipher=cipher,
+                                            )
+                                        )
+                                    elif multi_route_fetch is not None:
+                                        supplier_purchase_parts = ()
+                                    else:
+                                        supplier_purchase = await buy_supplier_product(
+                                            session,
+                                            external_client,
+                                            product.supplier_product_id,
+                                            deposit.quantity,
+                                            idempotency_key=f"qr-{deposit.code}",
+                                            shop_product_id=product.id,
+                                        )
+                                        supplier_purchase_parts = (
+                                            (
+                                                supplier_purchase,
+                                                max(
+                                                    0,
+                                                    supplier_purchase.unit_price
+                                                    or product.supplier_price
+                                                    or 0,
+                                                ),
+                                            ),
+                                        )
+                                except SupplierError:
+                                    if not multi_plan:
+                                        product.external_stock = recovered_stock
+                                        purchase_is_blocked = getattr(
+                                            external_client,
+                                            "purchase_is_blocked",
+                                            None,
+                                        )
+                                        if callable(
+                                            purchase_is_blocked
+                                        ) and purchase_is_blocked(
+                                            product.supplier_product_id
+                                        ):
+                                            await apply_supplier_stock(
+                                                session,
+                                                product,
+                                                0,
+                                                notify_on_increase=False,
+                                                local_inventory_stock=recovered_stock,
+                                            )
                                 else:
                                     now = datetime.now(UTC)
-                                    supplier_unit_cost = max(
-                                        0,
-                                        supplier_purchase.unit_price
-                                        or product.supplier_price
-                                        or 0,
-                                    )
-                                    if supplier_purchase.unit_price > 0 and (
+                                    if (
+                                        not multi_plan
+                                        and supplier_purchase_parts
+                                        and supplier_purchase.unit_price > 0
+                                        and (
                                         supplier_purchase.provider == "sumistore"
                                         or (
                                             deposit_campaign is not None
                                             and supplier_purchase.unit_price
                                             > deposit_campaign.sale_price
+                                        )
                                         )
                                     ):
                                         await apply_supplier_price(
@@ -1968,53 +2501,96 @@ async def _process_sepay_payment(
                                             supplier_purchase.unit_price,
                                         )
                                     if (
-                                        deposit_campaign is not None
-                                        and supplier_unit_cost
-                                        > deposit_campaign.sale_price
+                                        multi_plan
+                                        and any(
+                                            unit_cost
+                                            > allocation.route.snapshot.unit_price
+                                            for (_, unit_cost), allocation in zip(
+                                                supplier_purchase_parts,
+                                                multi_quote.allocations,
+                                                strict=True,
+                                            )
+                                        )
                                     ):
-                                        recovery_code = (
-                                            await preserve_supplier_purchase_for_resale(
+                                        await preserve_supplier_purchase_parts(
+                                            session,
+                                            product,
+                                            supplier_purchase_parts,
+                                            cipher,
+                                        )
+                                        flash_sale_can_fulfill = False
+                                        logger.warning(
+                                            "Multi-supplier QR cost changed; accounts moved to "
+                                            "inventory: deposit=%s",
+                                            deposit.code,
+                                        )
+                                        supplier_purchase_parts = ()
+                                    elif supplier_purchase_parts:
+                                        supplier_unit_cost = supplier_purchase_parts[0][1]
+                                        if (
+                                            not multi_plan
+                                            and deposit_campaign is not None
+                                            and supplier_unit_cost
+                                            > deposit_campaign.sale_price
+                                        ):
+                                            recovery_code = await preserve_supplier_purchase_for_resale(
                                                 session,
                                                 product,
                                                 supplier_purchase,
                                                 cipher,
                                                 supplier_unit_cost,
                                             )
-                                        )
-                                        flash_sale_can_fulfill = False
-                                        logger.warning(
-                                            "Flash QR purchase moved to inventory after supplier "
-                                            "cost increase: campaign=%s deposit=%s cost=%s "
-                                            "recovery=%s",
-                                            deposit_campaign.id,
-                                            deposit.code,
-                                            supplier_unit_cost,
-                                            recovery_code,
-                                        )
-                                    else:
+                                            flash_sale_can_fulfill = False
+                                            logger.warning(
+                                                "Flash QR purchase moved to inventory after "
+                                                "supplier cost increase: campaign=%s deposit=%s "
+                                                "cost=%s recovery=%s",
+                                                deposit_campaign.id,
+                                                deposit.code,
+                                                supplier_unit_cost,
+                                                recovery_code,
+                                            )
+                                            supplier_purchase_parts = ()
+                                    if supplier_purchase_parts:
                                         product.external_stock = max(
                                             0,
                                             product.external_stock - deposit.quantity,
                                         )
-                                        items = [
-                                            InventoryItem(
-                                                product_id=product.id,
-                                                encrypted_secret=cipher.encrypt(secret_value),
-                                                cost_amount=supplier_unit_cost,
-                                                supplier_order_code=(
-                                                    supplier_purchase.order_code or None
-                                                ),
-                                                supplier_item_index=item_index,
-                                                status="sold",
-                                                sold_at=now,
+                                        for position, (purchase, unit_cost) in enumerate(
+                                            supplier_purchase_parts
+                                        ):
+                                            allocation = (
+                                                multi_quote.allocations[position]
+                                                if multi_plan
+                                                else None
                                             )
                                             for item_index, secret_value in enumerate(
-                                                supplier_purchase.accounts
-                                            )
-                                        ]
+                                                purchase.accounts
+                                            ):
+                                                item = InventoryItem(
+                                                    product_id=product.id,
+                                                    encrypted_secret=cipher.encrypt(
+                                                        secret_value
+                                                    ),
+                                                    cost_amount=unit_cost,
+                                                    supplier_order_code=(
+                                                        purchase.order_code or None
+                                                    ),
+                                                    supplier_item_index=item_index,
+                                                    status="sold",
+                                                    sold_at=now,
+                                                )
+                                                session.add(item)
+                                                await session.flush()
+                                                items.append(item)
+                                                if allocation is not None:
+                                                    item_sale_prices[item.id] = (
+                                                        allocation.final_unit_price
+                                                    )
+                                                    item_discounts[item.id] = (
+                                                        allocation.discount_per_unit
+                                                    )
                                         supplier_purchase_made = True
-                                        session.add_all(items)
-                                        await session.flush()
                         else:
                             items = list(
                                 await session.scalars(
@@ -2038,9 +2614,15 @@ async def _process_sepay_payment(
                             user_id=user.telegram_id,
                             product_id=product.id,
                             inventory_item_id=item.id,
-                            amount=deposit.requested_amount // deposit.quantity,
+                            amount=item_sale_prices.get(
+                                item.id,
+                                deposit.requested_amount // deposit.quantity,
+                            ),
                             cost_amount=item.cost_amount,
-                            discount_amount=deposit.discount_amount // deposit.quantity,
+                            discount_amount=item_discounts.get(
+                                item.id,
+                                deposit.discount_amount // deposit.quantity,
+                            ),
                             discount_code_id=deposit.discount_code_id,
                             discount_code=deposit.discount_code,
                             flash_sale_id=deposit.flash_sale_id,
@@ -2056,15 +2638,16 @@ async def _process_sepay_payment(
                         product.fulfillment_source in EXTERNAL_FULFILLMENT_SOURCES
                         and supplier_purchase_made
                     ):
-                        record_supplier_purchase(
-                            session,
-                            amount=sum(item.cost_amount for item in items),
-                            supplier_order_code=items[0].supplier_order_code,
-                            shop_order_code=batch_code,
-                            product_id=product.id,
-                            quantity=deposit.quantity,
-                            provider=supplier_purchase.provider,
-                        )
+                        for purchase, unit_cost in supplier_purchase_parts:
+                            record_supplier_purchase(
+                                session,
+                                amount=unit_cost * len(purchase.accounts),
+                                supplier_order_code=purchase.order_code or None,
+                                shop_order_code=batch_code,
+                                product_id=product.id,
+                                quantity=len(purchase.accounts),
+                                provider=purchase.provider,
+                            )
                     if reserved_coupon is not None:
                         reserved_coupon.used_count += 1
                     await award_referral_commission(

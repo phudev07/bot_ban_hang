@@ -6,7 +6,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 
 import httpx
-from sqlalchemy import delete, func, select
+from sqlalchemy import delete, func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.config import Settings
@@ -14,6 +14,7 @@ from app.models import (
     Category,
     InventoryItem,
     Product,
+    ProductStockAlert,
     SupplierBalanceTransaction,
     SupplierPurchaseAttempt,
 )
@@ -21,11 +22,15 @@ from app.price_alerts import apply_supplier_price, release_price_lock_if_invento
 from app.stock_alerts import apply_supplier_stock
 from app.suppliers import (
     DEFINITIVE_PRODUCT_UNAVAILABLE_CODES,
+    ExternalSupplierClient,
     SupplierError,
     SupplierPurchase,
     SupplierSnapshot,
     clear_supplier_refresh_failure,
+    fetch_sumistore_supplier_routes,
     mark_supplier_refresh_failure,
+    plan_supplier_routes,
+    refresh_external_product,
     supplier_refresh_is_backed_off,
 )
 
@@ -93,6 +98,9 @@ LEHAI_PRODUCT_ALIASES: dict[str, tuple[str, ...]] = {
     # Lê Hải publishes a temporary product ID during Jio 18M sale campaigns.
     "cdk_ggpro_18m": ("sale_link18mgemini",),
 }
+GPT_PLUS_SHOP_PRODUCT_ID = "SP-GEF55PBV"
+GPT_PLUS_LEHAI_PRODUCT_ID = "gpt_bh48_1m"
+JIO_18M_PRODUCT_ID = "cdk_ggpro_18m"
 
 
 @dataclass(frozen=True)
@@ -509,6 +517,51 @@ async def _balance_increase_is_api_refund(
     return False
 
 
+async def _route_lehai_topup_alert_to_gpt_plus(
+    session: AsyncSession,
+    lehai_client: ExternalSupplierClient,
+    sumistore_client: ExternalSupplierClient | None,
+) -> bool:
+    gpt_product = await session.scalar(
+        select(Product)
+        .where(
+            Product.fulfillment_source == "sumistore",
+            Product.supplier_product_id == GPT_PLUS_SHOP_PRODUCT_ID,
+            Product.active.is_(True),
+            Product.force_out_of_stock.is_(False),
+        )
+        .with_for_update()
+    )
+    if gpt_product is None:
+        return False
+
+    fetched = await fetch_sumistore_supplier_routes(
+        GPT_PLUS_SHOP_PRODUCT_ID,
+        sumistore_client,
+        lehai_client,
+    )
+    plan = plan_supplier_routes(fetched.routes, 1)
+    if not plan:
+        return False
+    selected_route = plan[0][0]
+    if (
+        selected_route.provider != "lehai"
+        or selected_route.product_id != GPT_PLUS_LEHAI_PRODUCT_ID
+    ):
+        return False
+
+    await refresh_external_product(
+        session,
+        gpt_product,
+        sumistore_client,
+        lehai_client=lehai_client,
+        route_fetch=fetched,
+        force_notify_on_increase=True,
+        alert_provider="lehai",
+    )
+    return True
+
+
 def create_lehai_client(settings: Settings) -> LeHaiPremiumClient | None:
     api_key = settings.lehai_api_key.get_secret_value()
     if not settings.lehai_enabled or not api_key:
@@ -600,6 +653,8 @@ async def refresh_lehai_product(
     session: AsyncSession,
     product: Product,
     client: LeHaiPremiumClient | None,
+    *,
+    sumistore_client: ExternalSupplierClient | None = None,
 ) -> int:
     if product.fulfillment_source != "lehai" or not product.supplier_product_id:
         return product.external_stock
@@ -694,6 +749,17 @@ async def refresh_lehai_product(
             current_owner_balance,
         )
     )
+    route_topup_to_gpt = False
+    if (
+        balance_increased
+        and not refund_increase
+        and product.supplier_product_id == JIO_18M_PRODUCT_ID
+    ):
+        route_topup_to_gpt = await _route_lehai_topup_alert_to_gpt_plus(
+            session,
+            client,
+            sumistore_client,
+        )
     product.supplier_owner_balance = current_owner_balance
     product.external_stock = snapshot.effective_stock + recovered_stock
     await apply_supplier_price(session, product, snapshot.unit_price)
@@ -703,10 +769,23 @@ async def refresh_lehai_product(
         snapshot.effective_stock,
         notify_on_increase=(
             product.notify_stock_without_balance_topup
-            or (balance_increased and not refund_increase)
+            or (
+                balance_increased
+                and not refund_increase
+                and not route_topup_to_gpt
+            )
         ),
         local_inventory_stock=recovered_stock,
     )
+    if route_topup_to_gpt:
+        await session.execute(
+            update(ProductStockAlert)
+            .where(
+                ProductStockAlert.product_id == product.id,
+                ProductStockAlert.status == "pending",
+            )
+            .values(status="superseded")
+        )
     product.supplier_synced_at = datetime.now(UTC)
     await session.flush()
     return product.external_stock
@@ -715,6 +794,7 @@ async def refresh_lehai_product(
 async def sync_lehai_products(
     session_factory: async_sessionmaker[AsyncSession],
     client: LeHaiPremiumClient | None,
+    sumistore_client: ExternalSupplierClient | None = None,
 ) -> None:
     async with session_factory() as session:
         products = list(
@@ -726,5 +806,10 @@ async def sync_lehai_products(
             )
         )
         for product in products:
-            await refresh_lehai_product(session, product, client)
+            await refresh_lehai_product(
+                session,
+                product,
+                client,
+                sumistore_client=sumistore_client,
+            )
         await session.commit()
