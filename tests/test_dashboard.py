@@ -30,6 +30,7 @@ from app.models import (
     User,
     WalletTransaction,
 )
+from app.suppliers import SupplierSnapshot
 from app.utils import SecretCipher
 
 
@@ -39,6 +40,89 @@ class FakeBot:
 
     async def send_message(self, *_args, **_kwargs) -> None:
         self.messages.append((_args, _kwargs))
+
+
+class DashboardSupplier:
+    def __init__(self, provider: str, *, price: int, stock: int, balance: int) -> None:
+        self.provider = provider
+        self.price = price
+        self.stock = stock
+        self.balance = balance
+
+    async def fetch_snapshot(self, product_id: str) -> SupplierSnapshot:
+        return SupplierSnapshot(
+            product_id=product_id,
+            name="GPT Plus",
+            description="",
+            unit_price=self.price,
+            source_stock=self.stock,
+            owner_balance=self.balance,
+        )
+
+
+def test_admin_products_shows_selected_gpt_supplier_and_each_stock(tmp_path) -> None:
+    async def setup_database():
+        database_path = (tmp_path / "dashboard-gpt-routes.db").as_posix()
+        engine = create_async_engine(f"sqlite+aiosqlite:///{database_path}")
+        async with engine.begin() as connection:
+            await connection.run_sync(Base.metadata.create_all)
+        sessions = async_sessionmaker(engine, expire_on_commit=False)
+        async with sessions() as session:
+            category = Category(name_vi="ChatGPT", name_en="ChatGPT")
+            session.add(category)
+            await session.flush()
+            session.add(
+                Product(
+                    category_id=category.id,
+                    name_vi="GPT Plus",
+                    name_en="GPT Plus",
+                    price=35_000,
+                    fulfillment_source="sumistore",
+                    supplier_product_id="SP-GEF55PBV",
+                    supplier_markup=5_000,
+                    supplier_price=30_000,
+                    external_stock=2,
+                    supplier_available_stock=2,
+                )
+            )
+            await session.commit()
+        return engine, sessions
+
+    engine, sessions = asyncio.run(setup_database())
+    encryption_key = Fernet.generate_key().decode()
+    settings = Settings(
+        _env_file=None,
+        bot_token="123456:ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghi",
+        inventory_encryption_key=encryption_key,
+        dashboard_enabled=True,
+        dashboard_username="admin",
+        dashboard_password_hash=hash_dashboard_password("dashboard-password"),
+        dashboard_session_secret="session-secret-long-enough-for-tests",
+    )
+    sumi = DashboardSupplier("sumistore", price=30_000, stock=2, balance=60_000)
+    lehai = DashboardSupplier("lehai", price=25_000, stock=7, balance=175_000)
+    app = create_api(
+        settings,
+        sessions,
+        FakeBot(),  # type: ignore[arg-type]
+        SecretCipher(encryption_key),
+        supplier_client=sumi,  # type: ignore[arg-type]
+        lehai_client=lehai,  # type: ignore[arg-type]
+    )
+
+    with TestClient(app, base_url="https://testserver") as client:
+        client.post(
+            "/admin/login",
+            data={"username": "admin", "password": "dashboard-password"},
+        )
+        page = client.get("/admin/products")
+        assert page.status_code == 200
+        assert "API đang đấu: Lê Hải" in page.text
+        assert re.search(r"Sumi:\s*<strong>2</strong>", page.text)
+        assert re.search(r"Lê Hải:\s*<strong>7</strong>", page.text)
+        assert re.search(r'<span class="stock[^\"]*">9</span>', page.text)
+
+    asyncio.run(engine.dispose())
 
 
 def test_admin_core_ledgers_paginate_all_rows(tmp_path) -> None:

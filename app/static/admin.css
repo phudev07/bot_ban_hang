@@ -230,6 +230,10 @@ textarea { resize: vertical; }
 .wallet-ledger-table { min-width: 880px; }
 .wallet-ledger-table td:first-child { min-width: 260px; }
 .wallet-ledger-table .wallet-amount { white-space: nowrap; }
+.supplier-routing { margin-top: 6px; display: flex; flex-wrap: wrap; gap: 5px; align-items: center; }
+.supplier-routing span { display: inline-flex; align-items: center; min-height: 24px; padding: 3px 8px; border-radius: 999px; background: #eeeae0; color: var(--muted); font-size: 10px; font-weight: 700; }
+.supplier-routing .supplier-active { background: var(--green); color: #fff; }
+.supplier-routing .supplier-source.selected { background: #dcebdc; color: var(--green); }
 @media (max-width: 1200px) { .filter-grid { grid-template-columns: repeat(3, minmax(0,1fr)); } .filter-grid label.wide { grid-column: span 2; } }
 @media (max-width: 1050px) { .metric-grid, .growth-grid, .wallet-summary-grid { grid-template-columns: repeat(2, 1fr); } .form-grid.cols-3 { grid-template-columns: repeat(2, 1fr); } .dashboard-grid { grid-template-columns: 1fr; } }
 @media (max-width: 780px) {

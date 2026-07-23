@@ -1,6 +1,8 @@
+import asyncio
 import hmac
 import logging
 import re
+import time
 from contextlib import suppress
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
@@ -59,6 +61,9 @@ from app.suppliers import (
     SELLABLE_FULFILLMENT_SOURCES,
     SumistoreClient,
     SupplierError,
+    SupplierRouteFetch,
+    fetch_sumistore_supplier_routes,
+    plan_supplier_routes,
 )
 from app.utils import SecretCipher, format_vnd, parse_vnd
 from app.wallet_ledger import apply_wallet_change
@@ -569,6 +574,30 @@ def create_dashboard_router(
     bot: Bot | None = None,
 ) -> APIRouter:
     router = APIRouter()
+    gpt_route_cache: SupplierRouteFetch | None = None
+    gpt_route_cache_at = 0.0
+    gpt_route_cache_lock = asyncio.Lock()
+
+    async def gpt_plus_route_fetch() -> SupplierRouteFetch | None:
+        nonlocal gpt_route_cache, gpt_route_cache_at
+        if supplier_client is None and lehai_client is None:
+            return None
+        now = time.monotonic()
+        cache_seconds = max(5, settings.supplier_ui_cache_seconds)
+        if gpt_route_cache is not None and now - gpt_route_cache_at < cache_seconds:
+            return gpt_route_cache
+        async with gpt_route_cache_lock:
+            now = time.monotonic()
+            if gpt_route_cache is not None and now - gpt_route_cache_at < cache_seconds:
+                return gpt_route_cache
+            fetched = await fetch_sumistore_supplier_routes(
+                "SP-GEF55PBV",
+                supplier_client,
+                lehai_client,
+            )
+            gpt_route_cache = fetched
+            gpt_route_cache_at = now
+            return fetched
 
     async def upload_flash_sale_image(image: UploadFile | None) -> str | None:
         if image is None or not image.filename:
@@ -1205,6 +1234,7 @@ def create_dashboard_router(
             {
                 "product": product,
                 "category": category,
+                "local_stock": int(stock),
                 "source_stock": (
                     max(0, product.external_stock)
                     if product.fulfillment_source in EXTERNAL_FULFILLMENT_SOURCES
@@ -1251,6 +1281,56 @@ def create_dashboard_router(
             categories = list(
                 await session.scalars(select(Category).order_by(Category.position, Category.id))
             )
+        gpt_row = next(
+            (
+                row
+                for row in products
+                if row["product"].supplier_product_id == "SP-GEF55PBV"
+            ),
+            None,
+        )
+        if gpt_row is not None:
+            fetched = await gpt_plus_route_fetch()
+            if fetched is not None:
+                routes = {route.provider: route for route in fetched.routes}
+                failures = {failure.provider: failure for failure in fetched.failures}
+                selected_plan = plan_supplier_routes(fetched.routes, 1)
+                selected_provider = (
+                    selected_plan[0][0].provider if selected_plan else None
+                )
+                provider_labels = {
+                    "sumistore": "Sumi",
+                    "lehai": "Lê Hải",
+                }
+                source_rows = []
+                for provider in ("sumistore", "lehai"):
+                    route = routes.get(provider)
+                    source_rows.append(
+                        {
+                            "provider": provider,
+                            "label": provider_labels[provider],
+                            "stock": (
+                                max(0, int(route.snapshot.effective_stock))
+                                if route is not None
+                                else None
+                            ),
+                            "failed": provider in failures,
+                            "selected": provider == selected_provider,
+                        }
+                    )
+                gpt_row["supplier_sources"] = source_rows
+                gpt_row["active_supplier_label"] = (
+                    provider_labels.get(selected_provider, "Chưa có nguồn")
+                )
+                if len(routes) == fetched.configured_count:
+                    live_stock = sum(
+                        max(0, int(route.snapshot.effective_stock))
+                        for route in fetched.routes
+                    ) + int(gpt_row["local_stock"])
+                    gpt_row["source_stock"] = live_stock
+                    gpt_row["stock"] = (
+                        0 if gpt_row["product"].force_out_of_stock else live_stock
+                    )
         return templates.TemplateResponse(
             request,
             "products.html",
