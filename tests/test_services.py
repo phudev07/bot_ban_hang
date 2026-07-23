@@ -14,6 +14,7 @@ from app.models import (
     Order,
     PaymentTransaction,
     Product,
+    ProductPriceAlert,
     QuantityDiscount,
     ReferralReward,
     SupplierRecoveryRequest,
@@ -1292,6 +1293,7 @@ def test_gpt_plus_combines_supplier_stock_and_prices_each_source_tier() -> None:
                 supplier_product_id="SP-GEF55PBV",
                 supplier_price=30_000,
                 supplier_markup=5_000,
+                supplier_synced_at=datetime.now(UTC),
             )
             user = User(telegram_id=123456, full_name="Buyer", balance=335_000)
             session.add_all([product, user])
@@ -1323,6 +1325,12 @@ def test_gpt_plus_combines_supplier_stock_and_prices_each_source_tier() -> None:
             assert product.price == 30_000
             assert product.supplier_available_stock == 15
             assert product.external_stock == 4
+            price_alert = await session.scalar(select(ProductPriceAlert))
+            assert price_alert is not None
+            assert price_alert.supplier_price_before == 30_000
+            assert price_alert.supplier_price_after == 25_000
+            assert price_alert.sale_price_before == 35_000
+            assert price_alert.sale_price_after == 30_000
         await engine.dispose()
 
     asyncio.run(scenario())
