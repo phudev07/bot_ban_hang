@@ -103,7 +103,7 @@
       <tbody>
         {% for row in stock_alerts %}
         <tr>
-          <td><code>#{{ row.alert.id }}</code><small>{{ 'Sumi' if row.alert.provider == 'sumistore' else 'Lê Hải' }}</small></td>
+          <td><code>#{{ row.alert.id }}</code><small>{{ 'Sumi' if row.alert.provider == 'sumistore' else ('Kho nhập' if row.alert.provider == 'inventory' else 'Lê Hải') }}</small></td>
           <td><strong>{{ row.product.name_vi }}</strong><small><code>{{ row.product.supplier_product_id }}</code></small></td>
           <td><strong>{{ row.alert.stock_after }}</strong><small>trước đó {{ row.alert.stock_before }}</small></td>
           <td>{{ row.alert.sale_price|vnd }}</td>

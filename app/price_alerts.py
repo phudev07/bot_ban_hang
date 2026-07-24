@@ -148,6 +148,17 @@ async def apply_supplier_price(
         )
         return False
 
+    if getattr(locked_product, "sale_notifications_enabled", True) is False:
+        await session.execute(
+            update(ProductPriceAlert)
+            .where(
+                ProductPriceAlert.product_id == locked_product.id,
+                ProductPriceAlert.status.in_(("pending", "sending")),
+            )
+            .values(status="superseded")
+        )
+        return False
+
     pending = await session.scalar(
         select(ProductPriceAlert)
         .where(

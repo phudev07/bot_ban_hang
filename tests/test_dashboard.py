@@ -1249,6 +1249,8 @@ def test_admin_can_enable_stock_notifications_without_balance_topup(tmp_path) ->
         edit_page = client.get(f"/admin/products/{product_id}")
         csrf = re.search(r'name="csrf" value="([^"]+)"', edit_page.text).group(1)
         assert 'name="notify_stock_without_balance_topup"' in edit_page.text
+        assert 'name="sale_notifications_enabled"' in edit_page.text
+        assert 'name="stock_notifications_enabled"' in edit_page.text
 
         updated = client.post(
             f"/admin/products/{product_id}",
@@ -1264,6 +1266,8 @@ def test_admin_can_enable_stock_notifications_without_balance_topup(tmp_path) ->
                 "fulfillment_source": "sumistore",
                 "supplier_product_id": "SP-GEF55PBV",
                 "supplier_markup": "5.000",
+                "notification_controls_present": "1",
+                "stock_notifications_enabled": "1",
                 "notify_stock_without_balance_topup": "1",
                 "allow_quantity": "1",
                 "max_quantity": "10",
@@ -1277,13 +1281,24 @@ def test_admin_can_enable_stock_notifications_without_balance_topup(tmp_path) ->
             r'name="notify_stock_without_balance_topup"[^>]*checked',
             edit_page.text,
         )
+        assert re.search(
+            r'name="stock_notifications_enabled"[^>]*checked',
+            edit_page.text,
+        )
+        assert not re.search(
+            r'name="sale_notifications_enabled"[^>]*checked',
+            edit_page.text,
+        )
         products_page = client.get("/admin/products")
         assert "TB hàng về: tăng kho · nghỉ 10 phút" in products_page.text
+        assert "TB Sale: tắt" in products_page.text
 
     async def verify_database() -> None:
         async with sessions() as session:
             product = await session.get(Product, product_id)
             assert product is not None and product.notify_stock_without_balance_topup is True
+            assert product.stock_notifications_enabled is True
+            assert product.sale_notifications_enabled is False
         await engine.dispose()
 
     asyncio.run(verify_database())
@@ -1343,6 +1358,7 @@ def test_admin_can_import_recovered_external_inventory(tmp_path) -> None:
         assert inventory_page.status_code == 200
         assert f'<option value="{product_id}">' in inventory_page.text
         assert 'name="lock_sale_price"' in inventory_page.text
+        assert 'name="notify_stock_arrival"' in inventory_page.text
         csrf = re.search(r'name="csrf" value="([^"]+)"', inventory_page.text).group(1)
         imported = client.post(
             "/admin/inventory",
@@ -1351,6 +1367,7 @@ def test_admin_can_import_recovered_external_inventory(tmp_path) -> None:
                 "product_id": str(product_id),
                 "items": "mics.retry-6h+5frux@icloud.com|password|key",
                 "lock_sale_price": "1",
+                "notify_stock_arrival": "1",
             },
             follow_redirects=False,
         )
@@ -1365,6 +1382,11 @@ def test_admin_can_import_recovered_external_inventory(tmp_path) -> None:
             product = await session.get(Product, product_id)
             assert product is not None and product.price_lock_enabled is True
             assert product.external_stock == 6
+            alert = await session.scalar(select(ProductStockAlert))
+            assert alert is not None
+            assert alert.provider == "inventory"
+            assert alert.stock_before == 5
+            assert alert.stock_after == 6
         await engine.dispose()
 
     asyncio.run(verify_database())

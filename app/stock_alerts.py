@@ -16,9 +16,12 @@ STOCK_ALERT_PRODUCT_IDS = frozenset(
     }
 )
 STOCK_ALERT_COOLDOWN = timedelta(minutes=10)
+INVENTORY_STOCK_ALERT_PROVIDER = "inventory"
 
 
 def stock_alert_mode(product: Product) -> str:
+    if getattr(product, "stock_notifications_enabled", True) is False:
+        return "disabled"
     if product.notify_stock_without_balance_topup:
         return "always"
     if product.supplier_product_id in STOCK_ALERT_PRODUCT_IDS:
@@ -27,7 +30,63 @@ def stock_alert_mode(product: Product) -> str:
 
 
 def stock_alert_enabled(product: Product) -> bool:
-    return stock_alert_mode(product) != "off"
+    return stock_alert_mode(product) not in {"disabled", "off"}
+
+
+async def queue_inventory_stock_alert(
+    session: AsyncSession,
+    product: Product,
+    *,
+    stock_before: int,
+    stock_after: int,
+) -> bool:
+    """Queue one explicit back-in-stock alert for an Admin inventory import."""
+    if product.id is None or stock_after <= stock_before:
+        return False
+
+    locked_product = await session.scalar(
+        select(Product)
+        .where(Product.id == product.id)
+        .with_for_update()
+        .execution_options(populate_existing=True)
+    )
+    if (
+        locked_product is None
+        or not locked_product.active
+        or locked_product.force_out_of_stock
+        or getattr(locked_product, "stock_notifications_enabled", True) is False
+    ):
+        return False
+
+    pending = await session.scalar(
+        select(ProductStockAlert)
+        .where(
+            ProductStockAlert.product_id == locked_product.id,
+            ProductStockAlert.status == "pending",
+        )
+        .order_by(ProductStockAlert.id.desc())
+        .limit(1)
+        .with_for_update()
+    )
+    if pending is not None:
+        pending.provider = INVENTORY_STOCK_ALERT_PROVIDER
+        pending.stock_before = max(0, int(stock_before))
+        pending.stock_after = max(0, int(stock_after))
+        pending.sale_price = locked_product.price
+        pending.message_vi = None
+        pending.message_en = None
+        return True
+
+    session.add(
+        ProductStockAlert(
+            product_id=locked_product.id,
+            provider=INVENTORY_STOCK_ALERT_PROVIDER,
+            stock_before=max(0, int(stock_before)),
+            stock_after=max(0, int(stock_after)),
+            sale_price=locked_product.price,
+        )
+    )
+    return True
 
 
 async def apply_supplier_stock(
@@ -84,6 +143,18 @@ async def apply_supplier_stock(
             )
             .values(status="superseded")
         )
+        return False
+
+    inventory_pending = await session.scalar(
+        select(ProductStockAlert.id)
+        .where(
+            ProductStockAlert.product_id == locked_product.id,
+            ProductStockAlert.provider == INVENTORY_STOCK_ALERT_PROVIDER,
+            ProductStockAlert.status == "pending",
+        )
+        .limit(1)
+    )
+    if inventory_pending is not None:
         return False
 
     pending = await session.scalar(

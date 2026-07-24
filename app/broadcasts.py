@@ -15,14 +15,19 @@ from app.models import (
     BroadcastDelivery,
     BroadcastLog,
     FlashSaleCampaign,
+    InventoryItem,
     Product,
     ProductAlertDelivery,
     ProductPriceAlert,
     ProductStockAlert,
     User,
 )
-from app.stock_alerts import STOCK_ALERT_COOLDOWN, stock_alert_enabled
-from app.suppliers import product_supplier_api_enabled
+from app.stock_alerts import (
+    INVENTORY_STOCK_ALERT_PROVIDER,
+    STOCK_ALERT_COOLDOWN,
+    stock_alert_enabled,
+)
+from app.suppliers import EXTERNAL_FULFILLMENT_SOURCES, product_supplier_api_enabled
 from app.utils import format_vnd, safe_html
 
 
@@ -875,6 +880,7 @@ async def _claim_sale_alert(
         for alert, product in rows:
             if (
                 not product.active
+                or getattr(product, "sale_notifications_enabled", True) is False
                 or product.price_lock_enabled
                 or product.price != alert.sale_price_after
                 or not product_supplier_api_enabled(product, alert.provider)
@@ -998,17 +1004,44 @@ async def _claim_stock_alert(
             ).all()
         )
         for alert, product in rows:
+            inventory_alert = alert.provider == INVENTORY_STOCK_ALERT_PROVIDER
             if (
                 not product.active
-                or not product_supplier_api_enabled(product, alert.provider)
+                or getattr(product, "stock_notifications_enabled", True) is False
+                or (
+                    not inventory_alert
+                    and (
+                        not product_supplier_api_enabled(product, alert.provider)
+                        or not stock_alert_enabled(product)
+                    )
+                )
                 or product.force_out_of_stock
-                or product.external_stock <= 0
-                or not stock_alert_enabled(product)
             ):
                 alert.status = "superseded"
                 continue
 
-            if product.notify_stock_without_balance_topup:
+            if inventory_alert:
+                local_stock = int(
+                    await session.scalar(
+                        select(func.count(InventoryItem.id)).where(
+                            InventoryItem.product_id == product.id,
+                            InventoryItem.status == "available",
+                        )
+                    )
+                    or 0
+                )
+                current_stock = local_stock + (
+                    max(0, int(product.supplier_available_stock))
+                    if product.fulfillment_source in EXTERNAL_FULFILLMENT_SOURCES
+                    else 0
+                )
+            else:
+                current_stock = max(0, int(product.external_stock))
+            if current_stock <= 0:
+                alert.status = "superseded"
+                continue
+
+            if not inventory_alert and product.notify_stock_without_balance_topup:
                 previous_alert = await session.scalar(
                     select(ProductStockAlert)
                     .where(
@@ -1050,7 +1083,7 @@ async def _claim_stock_alert(
                 int(campaign.sale_price) if campaign is not None else int(product.price)
             )
             alert.status = "sending"
-            alert.stock_after = product.external_stock
+            alert.stock_after = current_stock
             alert.sale_price = notification_price
             alert.started_at = alert.started_at or now
             alert.total_recipients = recipient_count
@@ -1061,7 +1094,7 @@ async def _claim_stock_alert(
                 name_vi=product.name_vi,
                 name_en=product.name_en,
                 price=notification_price,
-                stock=product.external_stock,
+                stock=current_stock,
                 recipients=(),
                 flash_sale_price=(notification_price if campaign is not None else None),
                 flash_sale_remaining=remaining_flash_sale,

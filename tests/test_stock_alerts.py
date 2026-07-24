@@ -16,7 +16,11 @@ from app.models import (
     ProductStockAlert,
     User,
 )
-from app.stock_alerts import apply_supplier_stock, stock_alert_enabled
+from app.stock_alerts import (
+    apply_supplier_stock,
+    queue_inventory_stock_alert,
+    stock_alert_enabled,
+)
 
 
 async def make_database():
@@ -663,3 +667,86 @@ def test_only_jio_is_featured_for_lehai_stock_notifications() -> None:
     assert stock_alert_enabled(bhf) is False
     bhf.notify_stock_without_balance_topup = True
     assert stock_alert_enabled(bhf) is True
+
+
+def test_inventory_import_alert_is_delivered_even_for_local_product() -> None:
+    async def scenario() -> None:
+        engine, sessions = await make_database()
+        async with sessions() as session:
+            category = Category(name_vi="Kho bot", name_en="Local")
+            session.add(category)
+            await session.flush()
+            product = Product(
+                category_id=category.id,
+                name_vi="Hàng nhập kho",
+                name_en="Imported stock",
+                price=25_000,
+                fulfillment_source="local",
+                stock_notifications_enabled=True,
+            )
+            session.add(product)
+            await session.flush()
+            session.add_all(
+                [
+                    InventoryItem(product_id=product.id, encrypted_secret="item-1"),
+                    InventoryItem(product_id=product.id, encrypted_secret="item-2"),
+                ]
+            )
+            assert await queue_inventory_stock_alert(
+                session,
+                product,
+                stock_before=0,
+                stock_after=2,
+            ) is True
+            session.add(User(telegram_id=1, full_name="Buyer", has_started=True))
+            await session.commit()
+
+        bot = FakeStockBot()
+        assert await deliver_pending_stock_alerts(
+            sessions,
+            bot,  # type: ignore[arg-type]
+            throttle_seconds=0,
+        ) == 1
+        assert len(bot.calls) == 1
+        assert "Kho vừa có: <b>2</b>" in bot.calls[0][1]
+        async with sessions() as session:
+            alert = await session.scalar(select(ProductStockAlert))
+            assert alert is not None
+            assert alert.provider == "inventory"
+            assert alert.status == "sent"
+        await engine.dispose()
+
+    asyncio.run(scenario())
+
+
+def test_disabled_stock_notifications_block_api_and_inventory_alerts() -> None:
+    async def scenario() -> None:
+        engine, sessions = await make_database()
+        async with sessions() as session:
+            category = Category(name_vi="ChatGPT", name_en="ChatGPT")
+            session.add(category)
+            await session.flush()
+            product = Product(
+                category_id=category.id,
+                name_vi="GPT Plus",
+                name_en="GPT Plus",
+                price=30_000,
+                fulfillment_source="sumistore",
+                supplier_product_id="SP-GEF55PBV",
+                stock_notifications_enabled=False,
+            )
+            session.add(product)
+            await session.flush()
+            assert await apply_supplier_stock(session, product, 5) is False
+            assert await apply_supplier_stock(session, product, 10) is False
+            assert await queue_inventory_stock_alert(
+                session,
+                product,
+                stock_before=10,
+                stock_after=12,
+            ) is False
+            await session.commit()
+            assert await session.scalar(select(ProductStockAlert.id)) is None
+        await engine.dispose()
+
+    asyncio.run(scenario())

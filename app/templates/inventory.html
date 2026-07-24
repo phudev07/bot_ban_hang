@@ -8,7 +8,7 @@
       <input type="hidden" name="csrf" value="{{ csrf_token }}">
       <label>Sản phẩm
         <select name="product_id" required>
-          {% for row in import_products %}<option value="{{ row.product.id }}">#{{ row.product.id }} · {{ row.product.name_vi }}</option>{% endfor %}
+          {% for row in import_products %}<option value="{{ row.product.id }}">#{{ row.product.id }} · {{ row.product.name_vi }}{{ ' · TB hàng về đang tắt' if not row.product.stock_notifications_enabled else '' }}</option>{% endfor %}
         </select>
       </label>
       <label>Dữ liệu kho
@@ -18,6 +18,11 @@
         <input type="checkbox" name="lock_sale_price" value="1">
         <span>Khóa cứng giá bán hiện tại cho lô hàng ôm này</span>
         <small>Chỉ áp dụng với sản phẩm API. Bot chỉ bán hàng đang nằm trong kho nhập, không gọi thêm từ API; bán hết kho nhập sẽ tự mở khóa và trở lại giá động.</small>
+      </label>
+      <label class="check wide">
+        <input type="checkbox" name="notify_stock_arrival" value="1">
+        <span>Gửi thông báo hàng về sau khi nhập kho</span>
+        <small>Không cần nạp tiền vào API. Bot dùng số hàng vừa nhập và giá bán hiện tại; nếu đang Flash Sale sẽ thông báo giá và số suất Flash Sale còn lại.</small>
       </label>
       <p class="hint">Mỗi dòng là một món. Nếu một món có nhiều dòng, ngăn các món bằng dòng <code>---</code>. Dữ liệu được mã hóa trước khi lưu.</p>
       <button class="button primary" type="submit" {{ 'disabled' if not import_products else '' }}>Mã hóa và nhập kho</button>

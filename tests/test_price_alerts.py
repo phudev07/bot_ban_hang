@@ -124,6 +124,37 @@ def test_first_supplier_sync_does_not_create_a_fake_sale() -> None:
     asyncio.run(scenario())
 
 
+def test_disabled_sale_notifications_still_update_price_without_queuing() -> None:
+    async def scenario() -> None:
+        engine, sessions = await make_database()
+        async with sessions() as session:
+            category = Category(name_vi="API", name_en="API")
+            session.add(category)
+            await session.flush()
+            product = Product(
+                category_id=category.id,
+                name_vi="Sale disabled",
+                name_en="Sale disabled",
+                price=17_000,
+                fulfillment_source="sumistore",
+                supplier_product_id="SP-SALE-OFF",
+                supplier_markup=2_000,
+                supplier_price=15_000,
+                supplier_synced_at=datetime.now(UTC),
+                sale_notifications_enabled=False,
+            )
+            session.add(product)
+            await session.commit()
+
+            assert await apply_supplier_price(session, product, 12_000) is False
+            await session.commit()
+            assert product.price == 14_000
+            assert await session.scalar(select(ProductPriceAlert.id)) is None
+        await engine.dispose()
+
+    asyncio.run(scenario())
+
+
 def test_pending_sale_is_sent_to_started_users_and_logged() -> None:
     async def scenario() -> None:
         engine, sessions = await make_database()

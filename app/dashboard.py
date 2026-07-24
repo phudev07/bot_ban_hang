@@ -58,7 +58,7 @@ from app.services import (
 )
 from app.price_alerts import release_price_lock_if_inventory_empty
 from app.sms_rentals import sms_availability
-from app.stock_alerts import stock_alert_mode
+from app.stock_alerts import queue_inventory_stock_alert, stock_alert_mode
 from app.supplier_audit import PROVIDER, reconcile_supplier_balance
 from app.suppliers import (
     EXTERNAL_FULFILLMENT_SOURCES,
@@ -1399,6 +1399,8 @@ def create_dashboard_router(
         supplier_product_id: str = Form(""),
         supplier_markup: str = Form("0"),
         notify_stock_without_balance_topup: str | None = Form(None),
+        sale_notifications_enabled: str | None = Form(None),
+        stock_notifications_enabled: str | None = Form(None),
         allow_quantity: str | None = Form(None),
         max_quantity: int = Form(10),
     ) -> RedirectResponse:
@@ -1458,6 +1460,8 @@ def create_dashboard_router(
                         notify_stock_without_balance_topup is not None
                         and normalized_source in EXTERNAL_FULFILLMENT_SOURCES
                     ),
+                    sale_notifications_enabled=sale_notifications_enabled is not None,
+                    stock_notifications_enabled=stock_notifications_enabled is not None,
                     allow_quantity=allow_quantity is not None,
                     max_quantity=max(1, min(max_quantity, 100)),
                 )
@@ -1514,6 +1518,9 @@ def create_dashboard_router(
         api_source_controls_present: str | None = Form(None),
         sumistore_api_enabled: str | None = Form(None),
         lehai_api_enabled: str | None = Form(None),
+        notification_controls_present: str | None = Form(None),
+        sale_notifications_enabled: str | None = Form(None),
+        stock_notifications_enabled: str | None = Form(None),
         notify_stock_without_balance_topup: str | None = Form(None),
         allow_quantity: str | None = Form(None),
         max_quantity: int = Form(10),
@@ -1606,6 +1613,27 @@ def create_dashboard_router(
                 notify_stock_without_balance_topup is not None
                 and normalized_source in EXTERNAL_FULFILLMENT_SOURCES
             )
+            if notification_controls_present is not None:
+                product.sale_notifications_enabled = sale_notifications_enabled is not None
+                product.stock_notifications_enabled = stock_notifications_enabled is not None
+            if getattr(product, "sale_notifications_enabled", True) is False:
+                await session.execute(
+                    update(ProductPriceAlert)
+                    .where(
+                        ProductPriceAlert.product_id == product.id,
+                        ProductPriceAlert.status.in_(("pending", "sending")),
+                    )
+                    .values(status="superseded")
+                )
+            if getattr(product, "stock_notifications_enabled", True) is False:
+                await session.execute(
+                    update(ProductStockAlert)
+                    .where(
+                        ProductStockAlert.product_id == product.id,
+                        ProductStockAlert.status.in_(("pending", "sending")),
+                    )
+                    .values(status="superseded")
+                )
             product.allow_quantity = allow_quantity is not None
             product.max_quantity = max(1, min(max_quantity, 100))
             product.active = active is not None
@@ -2464,6 +2492,7 @@ def create_dashboard_router(
         product_id: int = Form(...),
         items: str = Form(...),
         lock_sale_price: str | None = Form(None),
+        notify_stock_arrival: str | None = Form(None),
     ) -> RedirectResponse:
         if not is_admin(request):
             return redirect_to_login()
@@ -2483,6 +2512,21 @@ def create_dashboard_router(
             ):
                 flash(request, "Sản phẩm hoặc dữ liệu kho không hợp lệ.", "error")
                 return RedirectResponse("/admin/inventory", status_code=303)
+            local_stock_before = int(
+                await session.scalar(
+                    select(func.count(InventoryItem.id)).where(
+                        InventoryItem.product_id == product.id,
+                        InventoryItem.status == "available",
+                    )
+                )
+                or 0
+            )
+            supplier_stock = (
+                max(0, int(product.supplier_available_stock))
+                if product.fulfillment_source in EXTERNAL_FULFILLMENT_SOURCES
+                else 0
+            )
+            total_stock_before = local_stock_before + supplier_stock
             session.add_all(
                 [
                     InventoryItem(
@@ -2512,22 +2556,41 @@ def create_dashboard_router(
                     )
                     .values(status="superseded")
                 )
-            if product.price_lock_enabled:
-                local_stock = int(
-                    await session.scalar(
-                        select(func.count(InventoryItem.id)).where(
-                            InventoryItem.product_id == product.id,
-                            InventoryItem.status == "available",
-                        )
+            local_stock = int(
+                await session.scalar(
+                    select(func.count(InventoryItem.id)).where(
+                        InventoryItem.product_id == product.id,
+                        InventoryItem.status == "available",
                     )
-                    or 0
                 )
+                or 0
+            )
+            total_stock_after = local_stock + supplier_stock
+            if product.fulfillment_source in EXTERNAL_FULFILLMENT_SOURCES:
                 product.external_stock = (
                     local_stock + max(0, int(product.supplier_available_stock))
                 )
+            notification_queued = False
+            notification_note = ""
+            if notify_stock_arrival is not None:
+                notification_queued = await queue_inventory_stock_alert(
+                    session,
+                    product,
+                    stock_before=total_stock_before,
+                    stock_after=total_stock_after,
+                )
+                if notification_queued:
+                    notification_note = " và đã xếp thông báo hàng về"
+                elif getattr(product, "stock_notifications_enabled", True) is False:
+                    notification_note = "; công tắc thông báo hàng về đang tắt"
+                elif not product.active or product.force_out_of_stock:
+                    notification_note = "; sản phẩm đang ẩn hoặc đang bị đưa về 0 hàng nên không gửi thông báo"
             await session.commit()
         lock_note = " và đã khóa giá bán" if lock_applied else ""
-        flash(request, f"Đã thêm {len(parsed_items)} sản phẩm vào kho{lock_note}.")
+        flash(
+            request,
+            f"Đã thêm {len(parsed_items)} sản phẩm vào kho{lock_note}{notification_note}.",
+        )
         return RedirectResponse("/admin/inventory", status_code=303)
 
     @router.post("/admin/inventory/{item_id}/delete")
