@@ -51,7 +51,11 @@ from app.models import (
 )
 from app.partner_services import normalize_allowed_ips
 from app.rentsim import RentSimClient
-from app.services import approve_wallet_deposit, cancel_wallet_deposit
+from app.services import (
+    approve_wallet_deposit,
+    cancel_wallet_deposit,
+    refresh_product_from_supplier,
+)
 from app.price_alerts import release_price_lock_if_inventory_empty
 from app.sms_rentals import sms_availability
 from app.stock_alerts import stock_alert_mode
@@ -62,8 +66,11 @@ from app.suppliers import (
     SumistoreClient,
     SupplierError,
     SupplierRouteFetch,
+    configured_supplier_providers,
+    enabled_supplier_providers,
     fetch_sumistore_supplier_routes,
     plan_supplier_routes,
+    product_supplier_api_enabled,
 )
 from app.utils import SecretCipher, format_vnd, parse_vnd
 from app.wallet_ledger import apply_wallet_change
@@ -78,6 +85,10 @@ LOCAL_TIMEZONE = ZoneInfo("Asia/Bangkok")
 ADMIN_PAGE_SIZE = 100
 MAX_FLASH_SALE_IMAGE_BYTES = 8 * 1024 * 1024
 logger = logging.getLogger(__name__)
+SUPPLIER_PROVIDER_LABELS = {
+    "sumistore": "Sumi",
+    "lehai": "Lê Hải",
+}
 
 WALLET_KIND_LABELS = {
     "opening_balance": "Số dư đầu kỳ",
@@ -575,29 +586,56 @@ def create_dashboard_router(
 ) -> APIRouter:
     router = APIRouter()
     gpt_route_cache: SupplierRouteFetch | None = None
+    gpt_route_cache_key: tuple[str, ...] | None = None
     gpt_route_cache_at = 0.0
     gpt_route_cache_lock = asyncio.Lock()
 
-    async def gpt_plus_route_fetch() -> SupplierRouteFetch | None:
-        nonlocal gpt_route_cache, gpt_route_cache_at
+    async def gpt_plus_route_fetch(
+        enabled_providers: frozenset[str],
+    ) -> SupplierRouteFetch | None:
+        nonlocal gpt_route_cache, gpt_route_cache_at, gpt_route_cache_key
         if supplier_client is None and lehai_client is None:
             return None
+        cache_key = tuple(sorted(enabled_providers))
         now = time.monotonic()
         cache_seconds = max(5, settings.supplier_ui_cache_seconds)
-        if gpt_route_cache is not None and now - gpt_route_cache_at < cache_seconds:
+        if (
+            gpt_route_cache is not None
+            and gpt_route_cache_key == cache_key
+            and now - gpt_route_cache_at < cache_seconds
+        ):
             return gpt_route_cache
         async with gpt_route_cache_lock:
             now = time.monotonic()
-            if gpt_route_cache is not None and now - gpt_route_cache_at < cache_seconds:
+            if (
+                gpt_route_cache is not None
+                and gpt_route_cache_key == cache_key
+                and now - gpt_route_cache_at < cache_seconds
+            ):
                 return gpt_route_cache
             fetched = await fetch_sumistore_supplier_routes(
                 "SP-GEF55PBV",
                 supplier_client,
                 lehai_client,
+                enabled_providers=enabled_providers,
             )
             gpt_route_cache = fetched
+            gpt_route_cache_key = cache_key
             gpt_route_cache_at = now
             return fetched
+
+    def supplier_source_rows(product: Product) -> list[dict[str, object]]:
+        return [
+            {
+                "provider": provider,
+                "label": SUPPLIER_PROVIDER_LABELS.get(provider, provider),
+                "enabled": product_supplier_api_enabled(product, provider),
+            }
+            for provider in configured_supplier_providers(
+                product.fulfillment_source,
+                product.supplier_product_id,
+            )
+        ]
 
     async def upload_flash_sale_image(image: UploadFile | None) -> str | None:
         if image is None or not image.filename:
@@ -1250,6 +1288,8 @@ def create_dashboard_router(
                     )
                 ),
                 "coupon_count": int(coupon_count),
+                "api_sources": supplier_source_rows(product),
+                "api_routes_enabled": bool(enabled_supplier_providers(product)),
                 "stock_alert_mode": stock_alert_mode(product),
                 "unit_cost": (
                     int(average_cost or 0)
@@ -1290,7 +1330,8 @@ def create_dashboard_router(
             None,
         )
         if gpt_row is not None:
-            fetched = await gpt_plus_route_fetch()
+            enabled_providers = enabled_supplier_providers(gpt_row["product"])
+            fetched = await gpt_plus_route_fetch(enabled_providers)
             if fetched is not None:
                 routes = {route.provider: route for route in fetched.routes}
                 failures = {failure.provider: failure for failure in fetched.failures}
@@ -1298,17 +1339,14 @@ def create_dashboard_router(
                 selected_provider = (
                     selected_plan[0][0].provider if selected_plan else None
                 )
-                provider_labels = {
-                    "sumistore": "Sumi",
-                    "lehai": "Lê Hải",
-                }
                 source_rows = []
                 for provider in ("sumistore", "lehai"):
                     route = routes.get(provider)
                     source_rows.append(
                         {
                             "provider": provider,
-                            "label": provider_labels[provider],
+                            "label": SUPPLIER_PROVIDER_LABELS[provider],
+                            "enabled": provider in enabled_providers,
                             "stock": (
                                 max(0, int(route.snapshot.effective_stock))
                                 if route is not None
@@ -1320,7 +1358,10 @@ def create_dashboard_router(
                     )
                 gpt_row["supplier_sources"] = source_rows
                 gpt_row["active_supplier_label"] = (
-                    provider_labels.get(selected_provider, "Chưa có nguồn")
+                    SUPPLIER_PROVIDER_LABELS.get(
+                        selected_provider,
+                        "Đã tắt cả hai" if not enabled_providers else "Chưa có nguồn",
+                    )
                 )
                 if len(routes) == fetched.configured_count:
                     live_stock = sum(
@@ -1411,6 +1452,8 @@ def create_dashboard_router(
                     ),
                     supplier_price=None,
                     external_stock=0,
+                    sumistore_api_enabled=True,
+                    lehai_api_enabled=True,
                     notify_stock_without_balance_topup=(
                         notify_stock_without_balance_topup is not None
                         and normalized_source in EXTERNAL_FULFILLMENT_SOURCES
@@ -1447,6 +1490,8 @@ def create_dashboard_router(
                 "products",
                 product=product,
                 categories=categories,
+                api_sources=supplier_source_rows(product),
+                api_routes_enabled=bool(enabled_supplier_providers(product)),
                 stock_alert_mode=stock_alert_mode(product),
             ),
         )
@@ -1466,6 +1511,9 @@ def create_dashboard_router(
         fulfillment_source: str = Form("local"),
         supplier_product_id: str = Form(""),
         supplier_markup: str = Form("0"),
+        api_source_controls_present: str | None = Form(None),
+        sumistore_api_enabled: str | None = Form(None),
+        lehai_api_enabled: str | None = Form(None),
         notify_stock_without_balance_topup: str | None = Form(None),
         allow_quantity: str | None = Form(None),
         max_quantity: int = Form(10),
@@ -1500,6 +1548,12 @@ def create_dashboard_router(
             ):
                 flash(request, "Không thể cập nhật sản phẩm.", "error")
                 return RedirectResponse("/admin/products", status_code=303)
+            old_source = product.fulfillment_source
+            old_supplier_id = product.supplier_product_id
+            old_configured = set(
+                configured_supplier_providers(old_source, old_supplier_id)
+            )
+            old_enabled = enabled_supplier_providers(product)
             product.category_id = category_id
             product.name_vi = normalized_name
             product.name_en = name_en.strip() or normalized_name
@@ -1516,6 +1570,34 @@ def create_dashboard_router(
             product.supplier_markup = (
                 parsed_markup if normalized_source in EXTERNAL_FULFILLMENT_SOURCES else 0
             )
+            new_configured = set(
+                configured_supplier_providers(
+                    product.fulfillment_source,
+                    product.supplier_product_id,
+                )
+            )
+            submitted_enabled = {
+                "sumistore": sumistore_api_enabled is not None,
+                "lehai": lehai_api_enabled is not None,
+            }
+            product.sumistore_api_enabled = (
+                (
+                    submitted_enabled["sumistore"]
+                    if api_source_controls_present is not None
+                    else product.sumistore_api_enabled
+                )
+                if "sumistore" in new_configured and "sumistore" in old_configured
+                else True
+            )
+            product.lehai_api_enabled = (
+                (
+                    submitted_enabled["lehai"]
+                    if api_source_controls_present is not None
+                    else product.lehai_api_enabled
+                )
+                if "lehai" in new_configured and "lehai" in old_configured
+                else True
+            )
             if normalized_source == "local":
                 product.supplier_price = None
                 product.external_stock = 0
@@ -1527,6 +1609,37 @@ def create_dashboard_router(
             product.allow_quantity = allow_quantity is not None
             product.max_quantity = max(1, min(max_quantity, 100))
             product.active = active is not None
+            routes_changed = (
+                old_source != product.fulfillment_source
+                or old_supplier_id != product.supplier_product_id
+                or old_enabled != enabled_supplier_providers(product)
+            )
+            if (
+                routes_changed
+                and product.fulfillment_source in EXTERNAL_FULFILLMENT_SOURCES
+            ):
+                local_stock = int(
+                    await session.scalar(
+                        select(func.count(InventoryItem.id)).where(
+                            InventoryItem.product_id == product.id,
+                            InventoryItem.status == "available",
+                        )
+                    )
+                    or 0
+                )
+                # Remove the old combined snapshot before fetching only the
+                # newly enabled routes, so disabled stock cannot linger.
+                product.external_stock = local_stock
+                product.supplier_available_stock = 0
+                product.supplier_available_stock_initialized = False
+                product.supplier_owner_balance = None
+                product.supplier_synced_at = None
+                await refresh_product_from_supplier(
+                    session,
+                    product,
+                    supplier_client,
+                    lehai_client,
+                )
             active_campaign = await session.scalar(
                 select(FlashSaleCampaign)
                 .where(

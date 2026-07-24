@@ -6,7 +6,7 @@ import logging
 import secrets
 import time
 from contextlib import asynccontextmanager
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Collection
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import Protocol
@@ -178,18 +178,55 @@ def is_multi_supplier_product(
     )
 
 
+def configured_supplier_providers(
+    fulfillment_source: str,
+    supplier_product_id: str | None,
+) -> tuple[str, ...]:
+    providers: list[str] = []
+    if fulfillment_source in EXTERNAL_FULFILLMENT_SOURCES:
+        providers.append(fulfillment_source)
+    if fulfillment_source == "sumistore" and supplier_product_id:
+        alternative = SUMISTORE_ALTERNATIVE_PRODUCTS.get(supplier_product_id)
+        if alternative is not None and alternative[0] not in providers:
+            providers.append(alternative[0])
+    return tuple(providers)
+
+
 def supplier_provider_is_configured(
     fulfillment_source: str,
     supplier_product_id: str | None,
     provider: str,
 ) -> bool:
     """Return whether a provider is a configured route for this shop product."""
-    if provider == fulfillment_source:
-        return True
-    if fulfillment_source != "sumistore" or not supplier_product_id:
+    return provider in configured_supplier_providers(
+        fulfillment_source,
+        supplier_product_id,
+    )
+
+
+def product_supplier_api_enabled(product: Product, provider: str) -> bool:
+    if not supplier_provider_is_configured(
+        product.fulfillment_source,
+        product.supplier_product_id,
+        provider,
+    ):
         return False
-    alternative = SUMISTORE_ALTERNATIVE_PRODUCTS.get(supplier_product_id)
-    return alternative is not None and alternative[0] == provider
+    if provider == "sumistore":
+        return getattr(product, "sumistore_api_enabled", True) is not False
+    if provider == "lehai":
+        return getattr(product, "lehai_api_enabled", True) is not False
+    return False
+
+
+def enabled_supplier_providers(product: Product) -> frozenset[str]:
+    return frozenset(
+        provider
+        for provider in configured_supplier_providers(
+            product.fulfillment_source,
+            product.supplier_product_id,
+        )
+        if product_supplier_api_enabled(product, provider)
+    )
 
 
 def supplier_route_sort_key(route: SupplierRoute) -> tuple[int, int, str]:
@@ -225,14 +262,18 @@ async def fetch_sumistore_supplier_routes(
     product_id: str,
     sumistore_client: ExternalSupplierClient | None,
     lehai_client: ExternalSupplierClient | None,
+    *,
+    enabled_providers: Collection[str] | None = None,
 ) -> SupplierRouteFetch:
+    allowed = set(enabled_providers) if enabled_providers is not None else None
     specs: list[tuple[str, str, ExternalSupplierClient]] = []
-    if sumistore_client is not None:
+    if sumistore_client is not None and (allowed is None or "sumistore" in allowed):
         specs.append(("sumistore", product_id, sumistore_client))
     alternative = SUMISTORE_ALTERNATIVE_PRODUCTS.get(product_id)
     if alternative is not None and lehai_client is not None:
         provider, alternative_product_id = alternative
-        specs.append((provider, alternative_product_id, lehai_client))
+        if allowed is None or provider in allowed:
+            specs.append((provider, alternative_product_id, lehai_client))
 
     async def fetch_one(
         provider: str,
@@ -683,6 +724,19 @@ async def refresh_external_product(
     )
     if product.price_lock_enabled and recovered_stock <= 0:
         await release_price_lock_if_inventory_empty(session, product)
+    enabled_providers = enabled_supplier_providers(product)
+    if not enabled_providers:
+        product.external_stock = recovered_stock
+        await apply_supplier_stock(
+            session,
+            product,
+            0,
+            notify_on_increase=False,
+            local_inventory_stock=recovered_stock,
+        )
+        product.supplier_synced_at = datetime.now(UTC)
+        await session.flush()
+        return product.external_stock
     if is_multi_supplier_product(
         product.fulfillment_source,
         product.supplier_product_id,
@@ -691,6 +745,7 @@ async def refresh_external_product(
             product.supplier_product_id,
             client,
             lehai_client,
+            enabled_providers=enabled_providers,
         )
         for failure in fetched.failures:
             logger.warning(
@@ -754,6 +809,7 @@ async def refresh_external_product(
                 session,
                 product,
                 cheapest_route.snapshot.unit_price,
+                alert_provider=cheapest_route.provider,
             )
         product.external_stock = supplier_stock + recovered_stock
         await apply_supplier_stock(
@@ -771,7 +827,7 @@ async def refresh_external_product(
         product.supplier_synced_at = datetime.now(UTC)
         await session.flush()
         return product.external_stock
-    if client is None:
+    if client is None or "sumistore" not in enabled_providers:
         product.external_stock = recovered_stock
         await session.flush()
         return product.external_stock

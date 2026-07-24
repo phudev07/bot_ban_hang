@@ -48,8 +48,10 @@ class DashboardSupplier:
         self.price = price
         self.stock = stock
         self.balance = balance
+        self.fetch_product_ids: list[str] = []
 
     async def fetch_snapshot(self, product_id: str) -> SupplierSnapshot:
+        self.fetch_product_ids.append(product_id)
         return SupplierSnapshot(
             product_id=product_id,
             name="GPT Plus",
@@ -121,6 +123,138 @@ def test_admin_products_shows_selected_gpt_supplier_and_each_stock(tmp_path) -> 
         assert re.search(r"Sumi:\s*<strong>2</strong>", page.text)
         assert re.search(r"Lê Hải:\s*<strong>7</strong>", page.text)
         assert re.search(r'<span class="stock[^\"]*">9</span>', page.text)
+
+    asyncio.run(engine.dispose())
+
+
+def test_admin_can_disable_each_gpt_plus_api_source(tmp_path) -> None:
+    async def setup_database():
+        database_path = (tmp_path / "dashboard-gpt-api-switches.db").as_posix()
+        engine = create_async_engine(f"sqlite+aiosqlite:///{database_path}")
+        async with engine.begin() as connection:
+            await connection.run_sync(Base.metadata.create_all)
+        sessions = async_sessionmaker(engine, expire_on_commit=False)
+        async with sessions() as session:
+            category = Category(name_vi="ChatGPT", name_en="ChatGPT")
+            session.add(category)
+            await session.flush()
+            product = Product(
+                category_id=category.id,
+                name_vi="GPT Plus",
+                name_en="GPT Plus",
+                price=30_000,
+                fulfillment_source="sumistore",
+                supplier_product_id="SP-GEF55PBV",
+                supplier_markup=5_000,
+                supplier_price=25_000,
+                external_stock=10,
+                supplier_available_stock=9,
+                supplier_available_stock_initialized=True,
+            )
+            session.add(product)
+            await session.flush()
+            session.add(
+                InventoryItem(
+                    product_id=product.id,
+                    encrypted_secret="encrypted",
+                    cost_amount=20_000,
+                )
+            )
+            await session.commit()
+        return engine, sessions, category.id, product.id
+
+    engine, sessions, category_id, product_id = asyncio.run(setup_database())
+    encryption_key = Fernet.generate_key().decode()
+    settings = Settings(
+        _env_file=None,
+        bot_token="123456:ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghi",
+        inventory_encryption_key=encryption_key,
+        dashboard_enabled=True,
+        dashboard_username="admin",
+        dashboard_password_hash=hash_dashboard_password("dashboard-password"),
+        dashboard_session_secret="session-secret-long-enough-for-tests",
+    )
+    sumi = DashboardSupplier("sumistore", price=25_000, stock=2, balance=50_000)
+    lehai = DashboardSupplier("lehai", price=20_000, stock=7, balance=140_000)
+    app = create_api(
+        settings,
+        sessions,
+        FakeBot(),  # type: ignore[arg-type]
+        SecretCipher(encryption_key),
+        supplier_client=sumi,  # type: ignore[arg-type]
+        lehai_client=lehai,  # type: ignore[arg-type]
+    )
+
+    def product_form(csrf: str, **overrides: str) -> dict[str, str]:
+        data = {
+            "csrf": csrf,
+            "category_id": str(category_id),
+            "name_vi": "GPT Plus",
+            "name_en": "GPT Plus",
+            "price": "30.000",
+            "description_vi": "",
+            "description_en": "",
+            "product_type": "account",
+            "fulfillment_source": "sumistore",
+            "supplier_product_id": "SP-GEF55PBV",
+            "supplier_markup": "5.000",
+            "api_source_controls_present": "1",
+            "allow_quantity": "1",
+            "max_quantity": "10",
+            "active": "1",
+        }
+        data.update(overrides)
+        return data
+
+    with TestClient(app, base_url="https://testserver") as client:
+        client.post(
+            "/admin/login",
+            data={"username": "admin", "password": "dashboard-password"},
+        )
+        edit_page = client.get(f"/admin/products/{product_id}")
+        csrf = re.search(r'name="csrf" value="([^"]+)"', edit_page.text).group(1)
+        assert 'name="sumistore_api_enabled"' in edit_page.text
+        assert 'name="lehai_api_enabled"' in edit_page.text
+
+        only_sumi = client.post(
+            f"/admin/products/{product_id}",
+            data=product_form(csrf, sumistore_api_enabled="1"),
+            follow_redirects=False,
+        )
+        assert only_sumi.status_code == 303
+
+        async def verify_only_sumi() -> None:
+            async with sessions() as session:
+                product = await session.get(Product, product_id)
+                assert product is not None
+                assert product.sumistore_api_enabled is True
+                assert product.lehai_api_enabled is False
+                assert product.external_stock == 3
+
+        asyncio.run(verify_only_sumi())
+        assert lehai.fetch_product_ids == []
+        products_page = client.get("/admin/products")
+        assert re.search(r"Lê Hải:\s*<strong>Tắt</strong>", products_page.text)
+
+        both_off = client.post(
+            f"/admin/products/{product_id}",
+            data=product_form(csrf),
+            follow_redirects=False,
+        )
+        assert both_off.status_code == 303
+
+        async def verify_both_off() -> None:
+            async with sessions() as session:
+                product = await session.get(Product, product_id)
+                assert product is not None
+                assert product.sumistore_api_enabled is False
+                assert product.lehai_api_enabled is False
+                assert product.external_stock == 1
+
+        asyncio.run(verify_both_off())
+        products_page = client.get("/admin/products")
+        assert "API đang đấu: Đã tắt cả hai" in products_page.text
+        assert re.search(r'<span class="stock[^"]*">1</span>', products_page.text)
 
     asyncio.run(engine.dispose())
 

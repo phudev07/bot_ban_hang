@@ -55,9 +55,12 @@ from app.suppliers import (
     SumistoreClient,
     SupplierError,
     SupplierPurchase,
+    configured_supplier_providers,
+    enabled_supplier_providers,
     fetch_sumistore_supplier_routes,
     is_multi_supplier_product,
     plan_supplier_routes,
+    product_supplier_api_enabled,
     refresh_external_product,
     supplier_balance_guard,
 )
@@ -441,6 +444,48 @@ def supplier_client_for_source(
     return None
 
 
+def supplier_client_for_product(
+    product: Product,
+    sumistore_client: SumistoreClient | None,
+    lehai_client: LeHaiPremiumClient | None,
+) -> ExternalSupplierClient | None:
+    if not product_supplier_api_enabled(product, product.fulfillment_source):
+        return None
+    return supplier_client_for_source(
+        product.fulfillment_source,
+        sumistore_client,
+        lehai_client,
+    )
+
+
+def supplier_balance_clients_for_product(
+    product: Product,
+    sumistore_client: SumistoreClient | None,
+    lehai_client: LeHaiPremiumClient | None,
+) -> tuple[ExternalSupplierClient, ...]:
+    clients: list[ExternalSupplierClient] = []
+    # Lock every configured route. An admin may enable a route after this
+    # initial read but before the product row is locked inside the purchase.
+    configured_providers = configured_supplier_providers(
+        product.fulfillment_source,
+        product.supplier_product_id,
+    )
+    if "sumistore" in configured_providers and sumistore_client is not None:
+        clients.append(sumistore_client)
+    if "lehai" in configured_providers and lehai_client is not None:
+        clients.append(lehai_client)
+    unique_clients = {id(client): client for client in clients}.values()
+    return tuple(
+        sorted(
+            unique_clients,
+            key=lambda client: (
+                0 if getattr(client, "provider", "") == "sumistore" else 1,
+                getattr(client, "provider", ""),
+            ),
+        )
+    )
+
+
 async def refresh_product_from_supplier(
     session: AsyncSession,
     product: Product,
@@ -743,10 +788,15 @@ async def multi_supplier_quote(
         product.supplier_product_id,
     ) or not product.supplier_product_id:
         return None
+    enabled_providers = enabled_supplier_providers(product)
+    if not enabled_providers:
+        # With every API route disabled, any visible stock is local inventory.
+        return None
     fetched = await fetch_sumistore_supplier_routes(
         product.supplier_product_id,
         sumistore_client,
         lehai_client,
+        enabled_providers=enabled_providers,
     )
     plan = plan_supplier_routes(fetched.routes, quantity)
     if not plan:
@@ -977,43 +1027,15 @@ async def purchase_product(
     max_unit_price: int | None = None,
 ) -> PurchaseResult:
     async with session_factory() as session:
-        source_row = (
-            await session.execute(
-                select(
-                    Product.fulfillment_source,
-                    Product.supplier_product_id,
-                ).where(Product.id == product_id)
-            )
-        ).one_or_none()
-    fulfillment_source = str(source_row[0]) if source_row is not None else ""
-    supplier_product_id = source_row[1] if source_row is not None else None
-    external_clients: list[ExternalSupplierClient] = []
-    primary_client = supplier_client_for_source(
-        fulfillment_source,
-        supplier_client,
-        lehai_client,
+        product = await session.get(Product, product_id)
+    external_clients = (
+        list(supplier_balance_clients_for_product(product, supplier_client, lehai_client))
+        if product is not None
+        else []
     )
-    if primary_client is not None:
-        external_clients.append(primary_client)
-    if (
-        is_multi_supplier_product(fulfillment_source, supplier_product_id)
-        and lehai_client is not None
-        and lehai_client not in external_clients
-    ):
-        external_clients.append(lehai_client)
     if external_clients:
-        unique_clients = {
-            id(client): client for client in external_clients
-        }.values()
-        ordered_clients = sorted(
-            unique_clients,
-            key=lambda client: (
-                0 if getattr(client, "provider", "") == "sumistore" else 1,
-                getattr(client, "provider", ""),
-            ),
-        )
         async with AsyncExitStack() as stack:
-            for client in ordered_clients:
+            for client in external_clients:
                 await stack.enter_async_context(supplier_balance_guard(client))
             return await _purchase_product(
                 session_factory,
@@ -1093,8 +1115,8 @@ async def _purchase_product(
                 return PurchaseResult(False, "invalid_quantity")
             if quantity > 1 and not product.allow_quantity:
                 return PurchaseResult(False, "invalid_quantity")
-            external_client = supplier_client_for_source(
-                product.fulfillment_source,
+            external_client = supplier_client_for_product(
+                product,
                 supplier_client,
                 lehai_client,
             )
@@ -1122,6 +1144,7 @@ async def _purchase_product(
                             product.supplier_product_id,
                             supplier_client,
                             lehai_client,
+                            enabled_providers=enabled_supplier_providers(product),
                         )
                         await refresh_external_product(
                             session,
@@ -1421,6 +1444,7 @@ async def _purchase_product(
                         session,
                         product,
                         supplier_purchase.unit_price,
+                        alert_provider=supplier_purchase.provider,
                     )
                 if multi_plan and any(
                     unit_cost > allocation.route.snapshot.unit_price
@@ -2008,53 +2032,29 @@ async def process_sepay_payment(
         deposit_code = find_deposit_code(payment_text, payment_prefix)
         if deposit_code is not None:
             async with session_factory() as session:
-                source_row = (
-                    await session.execute(
-                        select(
-                            Product.fulfillment_source,
-                            Product.supplier_product_id,
-                        )
-                        .join(Deposit, Deposit.product_id == Product.id)
-                        .where(
-                            Deposit.code == deposit_code,
-                            Deposit.payment_kind == "direct_purchase",
-                            Product.fulfillment_source.in_(
-                                EXTERNAL_FULFILLMENT_SOURCES
-                            ),
-                        )
+                product = await session.scalar(
+                    select(Product)
+                    .join(Deposit, Deposit.product_id == Product.id)
+                    .where(
+                        Deposit.code == deposit_code,
+                        Deposit.payment_kind == "direct_purchase",
+                        Product.fulfillment_source.in_(EXTERNAL_FULFILLMENT_SOURCES),
                     )
-                ).one_or_none()
-            supplier_source = str(source_row[0]) if source_row is not None else ""
-            supplier_product_id = source_row[1] if source_row is not None else None
-            external_clients: list[ExternalSupplierClient] = []
-            external_client = supplier_client_for_source(
-                supplier_source,
-                supplier_client,
-                lehai_client,
-            )
-            if external_client is not None:
-                external_clients.append(external_client)
-            if (
-                is_multi_supplier_product(supplier_source, supplier_product_id)
-                and lehai_client is not None
-                and lehai_client not in external_clients
-            ):
-                external_clients.append(lehai_client)
-            if external_clients:
-                unique_clients = {
-                    id(client): client for client in external_clients
-                }.values()
-                ordered_clients = sorted(
-                    unique_clients,
-                    key=lambda client: (
-                        0
-                        if getattr(client, "provider", "") == "sumistore"
-                        else 1,
-                        getattr(client, "provider", ""),
-                    ),
                 )
+            external_clients = (
+                list(
+                    supplier_balance_clients_for_product(
+                        product,
+                        supplier_client,
+                        lehai_client,
+                    )
+                )
+                if product is not None
+                else []
+            )
+            if external_clients:
                 async with AsyncExitStack() as stack:
-                    for client in ordered_clients:
+                    for client in external_clients:
                         await stack.enter_async_context(supplier_balance_guard(client))
                     return await _process_sepay_payment(
                         session_factory,
@@ -2299,8 +2299,8 @@ async def _process_sepay_payment(
                     and deposit.inventory_price_locked == product.price_lock_enabled
                 ):
                     if deposit.quantity == 1 or product.allow_quantity:
-                        external_client = supplier_client_for_source(
-                            product.fulfillment_source,
+                        external_client = supplier_client_for_product(
+                            product,
                             supplier_client,
                             lehai_client,
                         )
@@ -2338,6 +2338,9 @@ async def _process_sepay_payment(
                                             product.supplier_product_id,
                                             supplier_client,
                                             lehai_client,
+                                            enabled_providers=enabled_supplier_providers(
+                                                product
+                                            ),
                                         )
                                     )
                                     await refresh_external_product(
@@ -2499,6 +2502,7 @@ async def _process_sepay_payment(
                                             session,
                                             product,
                                             supplier_purchase.unit_price,
+                                            alert_provider=supplier_purchase.provider,
                                         )
                                     if (
                                         multi_plan

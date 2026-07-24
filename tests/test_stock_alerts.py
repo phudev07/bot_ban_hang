@@ -184,6 +184,55 @@ def test_lehai_alert_is_delivered_for_multi_supplier_gpt_plus_product() -> None:
     asyncio.run(scenario())
 
 
+def test_disabled_lehai_route_supersedes_pending_gpt_plus_stock_alert() -> None:
+    async def scenario() -> None:
+        engine, sessions = await make_database()
+        async with sessions() as session:
+            category = Category(name_vi="ChatGPT", name_en="ChatGPT")
+            session.add(category)
+            await session.flush()
+            product = Product(
+                category_id=category.id,
+                name_vi="GPT Plus",
+                name_en="GPT Plus",
+                price=30_000,
+                fulfillment_source="sumistore",
+                supplier_product_id="SP-GEF55PBV",
+                sumistore_api_enabled=True,
+                lehai_api_enabled=False,
+                external_stock=10,
+            )
+            session.add(product)
+            await session.flush()
+            session.add_all(
+                [
+                    ProductStockAlert(
+                        product_id=product.id,
+                        provider="lehai",
+                        stock_before=5,
+                        stock_after=10,
+                        sale_price=30_000,
+                    ),
+                    User(telegram_id=1, full_name="Buyer", has_started=True),
+                ]
+            )
+            await session.commit()
+
+        bot = FakeStockBot()
+        assert await deliver_pending_stock_alerts(
+            sessions,
+            bot,  # type: ignore[arg-type]
+            throttle_seconds=0,
+        ) == 0
+        assert bot.calls == []
+        async with sessions() as session:
+            alert = await session.scalar(select(ProductStockAlert))
+            assert alert is not None and alert.status == "superseded"
+        await engine.dispose()
+
+    asyncio.run(scenario())
+
+
 def test_stock_return_during_flash_sale_uses_campaign_price_and_remaining_quantity() -> None:
     async def scenario() -> None:
         engine, sessions = await make_database()

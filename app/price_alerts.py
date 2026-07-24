@@ -82,6 +82,8 @@ async def apply_supplier_price(
     session: AsyncSession,
     product: Product,
     supplier_price: int,
+    *,
+    alert_provider: str | None = None,
 ) -> bool:
     """Apply a dynamic supplier price and queue one durable alert for a real shop-price drop."""
     if supplier_price <= 0 or product.id is None:
@@ -176,7 +178,7 @@ async def apply_supplier_price(
     session.add(
         ProductPriceAlert(
             product_id=locked_product.id,
-            provider=locked_product.fulfillment_source,
+            provider=alert_provider or locked_product.fulfillment_source,
             supplier_price_before=previous_supplier_price,
             supplier_price_after=supplier_price,
             sale_price_before=previous_sale_price,

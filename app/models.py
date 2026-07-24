@@ -64,6 +64,12 @@ class Product(Base):
     max_quantity: Mapped[int] = mapped_column(default=10)
     fulfillment_source: Mapped[str] = mapped_column(String(20), default="local", index=True)
     supplier_product_id: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
+    sumistore_api_enabled: Mapped[bool] = mapped_column(
+        Boolean, default=True, server_default="true"
+    )
+    lehai_api_enabled: Mapped[bool] = mapped_column(
+        Boolean, default=True, server_default="true"
+    )
     supplier_markup: Mapped[int] = mapped_column(BigInteger, default=0)
     supplier_price: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
     price_lock_enabled: Mapped[bool] = mapped_column(

@@ -235,6 +235,16 @@ textarea { resize: vertical; }
 .supplier-routing .supplier-source strong { display: inline; margin-left: 3px; }
 .supplier-routing .supplier-active { background: var(--green); color: #fff; }
 .supplier-routing .supplier-source.selected { background: #dcebdc; color: var(--green); }
+.supplier-routing .supplier-source.disabled { background: #f3dfda; color: #9d3f2e; }
+.api-route-switches { grid-column: 1 / -1; margin: 0; padding: 16px; border: 1px solid #d8d4c8; border-radius: 16px; background: #f8f6ef; }
+.api-route-switches legend { padding: 0 7px; color: var(--ink); font-family: "Fraunces", serif; font-size: 16px; font-weight: 700; }
+.api-route-switches > p { margin: 0 0 12px; color: var(--muted); font-size: 11px; line-height: 1.55; }
+.api-route-switches > div { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
+.api-source-toggle { display: flex !important; align-items: center; gap: 10px !important; padding: 12px; border: 1px solid #ded9cb; border-radius: 12px; background: #fff; cursor: pointer; }
+.api-source-toggle input { width: 20px; height: 20px; flex: 0 0 auto; accent-color: var(--green); }
+.api-source-toggle span { display: grid; gap: 2px; }
+.api-source-toggle strong { color: var(--ink); font-size: 13px; }
+.api-source-toggle small { color: var(--muted); font-size: 10px; font-weight: 500; }
 @media (max-width: 1200px) { .filter-grid { grid-template-columns: repeat(3, minmax(0,1fr)); } .filter-grid label.wide { grid-column: span 2; } }
 @media (max-width: 1050px) { .metric-grid, .growth-grid, .wallet-summary-grid { grid-template-columns: repeat(2, 1fr); } .form-grid.cols-3 { grid-template-columns: repeat(2, 1fr); } .dashboard-grid { grid-template-columns: 1fr; } }
 @media (max-width: 780px) {
@@ -253,6 +263,8 @@ textarea { resize: vertical; }
   .login-form { padding: 34px; }
   .form-grid.cols-2, .form-grid.cols-3 { grid-template-columns: 1fr; }
   .form-grid label.wide { grid-column: auto; }
+  .api-route-switches { grid-column: auto; }
+  .api-route-switches > div { grid-template-columns: 1fr; }
   .category-card { align-items: stretch; flex-direction: column; }
   .category-form { grid-template-columns: 1fr; }
   .danger-zone, .stock-zero-zone { align-items: stretch; flex-direction: column; }

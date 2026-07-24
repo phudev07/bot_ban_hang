@@ -94,8 +94,10 @@ class RoutedSupplier:
         self.balance = balance
         self.balance_lock = asyncio.Lock()
         self.buy_quantities: list[int] = []
+        self.fetch_product_ids: list[str] = []
 
     async def fetch_snapshot(self, product_id: str) -> SupplierSnapshot:
+        self.fetch_product_ids.append(product_id)
         return SupplierSnapshot(
             product_id=product_id,
             name="Routed GPT Plus",
@@ -1383,6 +1385,141 @@ def test_gpt_plus_equal_supplier_prices_prefer_sumi() -> None:
         assert result.ok is True
         assert sumi.buy_quantities == [1]
         assert lehai.buy_quantities == []
+        await engine.dispose()
+
+    asyncio.run(scenario())
+
+
+def test_gpt_plus_disabled_sumi_uses_only_lehai() -> None:
+    async def scenario() -> None:
+        engine, sessions = await make_database()
+        cipher = SecretCipher(Fernet.generate_key().decode())
+        sumi = RoutedSupplier(
+            "sumistore",
+            unit_price=20_000,
+            stock=10,
+            balance=200_000,
+        )
+        lehai = RoutedSupplier(
+            "lehai",
+            unit_price=25_000,
+            stock=10,
+            balance=250_000,
+        )
+        async with sessions() as session:
+            category = Category(name_vi="ChatGPT", name_en="ChatGPT")
+            session.add(category)
+            await session.flush()
+            product = Product(
+                category_id=category.id,
+                name_vi="GPT Plus",
+                name_en="GPT Plus",
+                price=30_000,
+                fulfillment_source="sumistore",
+                supplier_product_id="SP-GEF55PBV",
+                supplier_price=25_000,
+                supplier_markup=5_000,
+                sumistore_api_enabled=False,
+                lehai_api_enabled=True,
+            )
+            user = User(telegram_id=123456, full_name="Buyer", balance=30_000)
+            session.add_all([product, user])
+            await session.commit()
+            product_id = product.id
+
+        result = await purchase_product(
+            sessions,
+            user.telegram_id,
+            product_id,
+            cipher,
+            supplier_client=sumi,  # type: ignore[arg-type]
+            lehai_client=lehai,  # type: ignore[arg-type]
+        )
+
+        assert result.ok is True
+        assert sumi.fetch_product_ids == []
+        assert sumi.buy_quantities == []
+        assert lehai.fetch_product_ids == ["gpt_bh48_1m"]
+        assert lehai.buy_quantities == [1]
+        assert result.orders[0].cost_amount == 25_000
+        await engine.dispose()
+
+    asyncio.run(scenario())
+
+
+def test_gpt_plus_with_both_apis_disabled_sells_only_local_inventory() -> None:
+    async def scenario() -> None:
+        engine, sessions = await make_database()
+        cipher = SecretCipher(Fernet.generate_key().decode())
+        sumi = RoutedSupplier(
+            "sumistore",
+            unit_price=20_000,
+            stock=10,
+            balance=200_000,
+        )
+        lehai = RoutedSupplier(
+            "lehai",
+            unit_price=25_000,
+            stock=10,
+            balance=250_000,
+        )
+        async with sessions() as session:
+            category = Category(name_vi="ChatGPT", name_en="ChatGPT")
+            session.add(category)
+            await session.flush()
+            product = Product(
+                category_id=category.id,
+                name_vi="GPT Plus local only",
+                name_en="GPT Plus local only",
+                price=30_000,
+                fulfillment_source="sumistore",
+                supplier_product_id="SP-GEF55PBV",
+                supplier_price=25_000,
+                supplier_markup=5_000,
+                sumistore_api_enabled=False,
+                lehai_api_enabled=False,
+                external_stock=99,
+            )
+            user = User(telegram_id=123456, full_name="Buyer", balance=60_000)
+            session.add_all([product, user])
+            await session.flush()
+            session.add(
+                InventoryItem(
+                    product_id=product.id,
+                    encrypted_secret=cipher.encrypt("local-account|password"),
+                    cost_amount=22_000,
+                )
+            )
+            await session.commit()
+            product_id = product.id
+
+        first = await purchase_product(
+            sessions,
+            user.telegram_id,
+            product_id,
+            cipher,
+            supplier_client=sumi,  # type: ignore[arg-type]
+            lehai_client=lehai,  # type: ignore[arg-type]
+        )
+        second = await purchase_product(
+            sessions,
+            user.telegram_id,
+            product_id,
+            cipher,
+            supplier_client=sumi,  # type: ignore[arg-type]
+            lehai_client=lehai,  # type: ignore[arg-type]
+        )
+
+        assert first.ok is True
+        assert first.secrets == ["local-account|password"]
+        assert second.ok is False and second.message == "out_of_stock"
+        assert sumi.fetch_product_ids == []
+        assert sumi.buy_quantities == []
+        assert lehai.fetch_product_ids == []
+        assert lehai.buy_quantities == []
+        async with sessions() as session:
+            product = await session.get(Product, product_id)
+            assert product is not None and product.external_stock == 0
         await engine.dispose()
 
     asyncio.run(scenario())

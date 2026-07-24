@@ -27,6 +27,7 @@ from app.suppliers import (
     SupplierPurchase,
     SupplierSnapshot,
     clear_supplier_refresh_failure,
+    enabled_supplier_providers,
     fetch_sumistore_supplier_routes,
     mark_supplier_refresh_failure,
     plan_supplier_routes,
@@ -540,6 +541,7 @@ async def _route_lehai_topup_alert_to_gpt_plus(
         GPT_PLUS_SHOP_PRODUCT_ID,
         sumistore_client,
         lehai_client,
+        enabled_providers=enabled_supplier_providers(gpt_product),
     )
     plan = plan_supplier_routes(fetched.routes, 1)
     if not plan:
@@ -690,6 +692,18 @@ async def refresh_lehai_product(
     )
     if product.price_lock_enabled and recovered_stock <= 0:
         await release_price_lock_if_inventory_empty(session, product)
+    if "lehai" not in enabled_supplier_providers(product):
+        product.external_stock = recovered_stock
+        await apply_supplier_stock(
+            session,
+            product,
+            0,
+            notify_on_increase=False,
+            local_inventory_stock=recovered_stock,
+        )
+        product.supplier_synced_at = datetime.now(UTC)
+        await session.flush()
+        return product.external_stock
     if client is None:
         product.external_stock = recovered_stock
         await session.flush()
