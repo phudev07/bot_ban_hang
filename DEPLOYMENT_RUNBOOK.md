@@ -95,6 +95,9 @@ and binds port 8080 only to localhost. Caddy is the public reverse proxy.
 ## 5. Important application behavior
 
 - One multi-account purchase is one shop order (`batch_code`) with multiple order rows.
+- Each inventory item and order row stores its actual supplier provider. Admin order pages
+  must use this per-row value, not the product's primary fulfillment source; mixed batches
+  can show both Sumi and Le Hai.
 - Supplier cost is saved at delivery time. Dashboard profit is revenue minus cost minus
   referral commission.
 - Sumi, Le Hai, and RentSim keys live only in production `.env`.

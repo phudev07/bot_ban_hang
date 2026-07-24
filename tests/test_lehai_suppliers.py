@@ -1345,6 +1345,7 @@ def test_lehai_wallet_purchase_tracks_dynamic_cost_and_provider() -> None:
             stored_product = await session.get(Product, product.id)
             assert len(orders) == 2
             assert all(order.cost_amount == 23_000 for order in orders)
+            assert all(order.supplier_provider == "lehai" for order in orders)
             assert stored_product is not None and stored_product.price == 30_000
             assert purchase_audit is not None and purchase_audit.amount == -46_000
         await engine.dispose()
@@ -1408,6 +1409,7 @@ def test_lehai_direct_qr_purchase_uses_deposit_as_idempotency_key() -> None:
             order = await session.scalar(select(Order))
             assert order is not None and order.cost_amount == 23_000
             assert order.supplier_order_code == "LHP-ORDER-SERVICE"
+            assert order.supplier_provider == "lehai"
         await engine.dispose()
 
     asyncio.run(scenario())

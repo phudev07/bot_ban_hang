@@ -17,7 +17,7 @@ from aiogram.types import BufferedInputFile
 from fastapi import APIRouter, File, Form, Request, UploadFile
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Response
 from fastapi.templating import Jinja2Templates
-from sqlalchemy import String, cast, delete, func, literal, or_, select, update
+from sqlalchemy import String, case, cast, delete, func, literal, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from sqlalchemy.orm import aliased
 
@@ -207,6 +207,41 @@ def purchase_order_count():
     return func.count(func.distinct(order_group_key()))
 
 
+def order_supplier_provider(order: Order) -> str:
+    if order.supplier_provider in EXTERNAL_FULFILLMENT_SOURCES:
+        return order.supplier_provider
+    code = order.supplier_order_code or ""
+    if code.startswith("API-TELE-"):
+        return "sumistore"
+    if code.startswith("LHP-"):
+        return "lehai"
+    return "local"
+
+
+def order_supplier_provider_expression():
+    return case(
+        (
+            Order.supplier_provider.in_(EXTERNAL_FULFILLMENT_SOURCES),
+            Order.supplier_provider,
+        ),
+        (Order.supplier_order_code.like("API-TELE-%"), "sumistore"),
+        (Order.supplier_order_code.like("LHP-%"), "lehai"),
+        else_="local",
+    )
+
+
+def order_supplier_label(providers: set[str]) -> str:
+    ordered = [
+        provider
+        for provider in ("sumistore", "lehai", "local")
+        if provider in providers
+    ]
+    return " + ".join(
+        SUPPLIER_PROVIDER_LABELS.get(provider, "Kho bot")
+        for provider in ordered
+    )
+
+
 def group_order_rows(rows, limit: int | None = None) -> list[dict[str, object]]:
     groups: dict[str, dict[str, object]] = {}
     for order, product, user in rows:
@@ -220,6 +255,7 @@ def group_order_rows(rows, limit: int | None = None) -> list[dict[str, object]]:
                 "supplier_order_codes": (
                     [order.supplier_order_code] if order.supplier_order_code else []
                 ),
+                "supplier_providers": set(),
                 "sales_channel": order.sales_channel,
                 "quantity": 0,
                 "amount": 0,
@@ -242,6 +278,7 @@ def group_order_rows(rows, limit: int | None = None) -> list[dict[str, object]]:
             order.discount_amount
         )
         group["item_ids"].append(order.id)
+        group["supplier_providers"].add(order_supplier_provider(order))
         if (
             order.supplier_order_code
             and order.supplier_order_code not in group["supplier_order_codes"]
@@ -262,6 +299,12 @@ def group_order_rows(rows, limit: int | None = None) -> list[dict[str, object]]:
         ):
             group["delivered_at"] = order.delivered_at
     grouped = list(groups.values())
+    for group in grouped:
+        providers = group["supplier_providers"]
+        group["supplier_source_label"] = order_supplier_label(providers)
+        group["supplier_source_external"] = any(
+            provider in EXTERNAL_FULFILLMENT_SOURCES for provider in providers
+        )
     return grouped[:limit] if limit is not None else grouped
 
 
@@ -3284,7 +3327,7 @@ def create_dashboard_router(
         if status in {"completed", "pending", "failed"}:
             conditions.append(Order.status == status)
         if source in SELLABLE_FULFILLMENT_SOURCES:
-            conditions.append(Product.fulfillment_source == source)
+            conditions.append(order_supplier_provider_expression() == source)
         if channel in {"telegram", "api"}:
             conditions.append(Order.sales_channel == channel)
         if period == "today":

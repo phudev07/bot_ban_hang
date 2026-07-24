@@ -23,7 +23,7 @@
       <div><dt>Mã đơn shop</dt><dd><code>{{ order.shop_order_code }}</code></dd></div>
       <div><dt>Mã đơn API</dt><dd><code>{{ order.supplier_order_code or '—' }}</code></dd></div>
       <div><dt>Số lượng</dt><dd>{{ order.quantity }} tài khoản</dd></div>
-      <div><dt>Nguồn hàng</dt><dd>{{ product.fulfillment_source }}</dd></div>
+      <div><dt>Nguồn hàng</dt><dd>{{ order.supplier_source_label }}</dd></div>
       <div><dt>Kênh bán</dt><dd>{{ order.sales_channel }}</dd></div>
       <div><dt>Doanh thu</dt><dd>{{ order.amount|vnd }}</dd></div>
       <div><dt>Giá vốn thực tế</dt><dd>{{ order.cost_amount|vnd }}</dd></div>

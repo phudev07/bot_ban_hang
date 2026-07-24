@@ -489,6 +489,12 @@ async def initialize_database(engine, session_factory, seed_demo_data: bool) -> 
         await connection.execute(
             text(
                 "ALTER TABLE inventory_items ADD COLUMN IF NOT EXISTS "
+                "supplier_provider VARCHAR(32) NULL"
+            )
+        )
+        await connection.execute(
+            text(
+                "ALTER TABLE inventory_items ADD COLUMN IF NOT EXISTS "
                 "supplier_item_index INTEGER NULL"
             )
         )
@@ -496,6 +502,12 @@ async def initialize_database(engine, session_factory, seed_demo_data: bool) -> 
             text(
                 "CREATE INDEX IF NOT EXISTS ix_inventory_items_supplier_order_code "
                 "ON inventory_items (supplier_order_code)"
+            )
+        )
+        await connection.execute(
+            text(
+                "CREATE INDEX IF NOT EXISTS ix_inventory_items_supplier_provider "
+                "ON inventory_items (supplier_provider)"
             )
         )
         await connection.execute(
@@ -520,6 +532,55 @@ async def initialize_database(engine, session_factory, seed_demo_data: bool) -> 
             text(
                 "CREATE INDEX IF NOT EXISTS ix_orders_supplier_order_code "
                 "ON orders (supplier_order_code)"
+            )
+        )
+        await connection.execute(
+            text(
+                "ALTER TABLE orders ADD COLUMN IF NOT EXISTS "
+                "supplier_provider VARCHAR(32) NULL"
+            )
+        )
+        await connection.execute(
+            text(
+                "CREATE INDEX IF NOT EXISTS ix_orders_supplier_provider "
+                "ON orders (supplier_provider)"
+            )
+        )
+        await connection.execute(
+            text(
+                "UPDATE inventory_items AS item SET supplier_provider = COALESCE("
+                "(SELECT tx.provider FROM supplier_balance_transactions AS tx "
+                "WHERE tx.supplier_order_code = item.supplier_order_code "
+                "AND tx.provider IN ('sumistore', 'lehai') ORDER BY tx.id DESC LIMIT 1), "
+                "(SELECT attempt.provider FROM supplier_purchase_attempts AS attempt "
+                "WHERE attempt.supplier_order_code = item.supplier_order_code "
+                "AND attempt.provider IN ('sumistore', 'lehai') "
+                "ORDER BY attempt.id DESC LIMIT 1), "
+                "CASE WHEN item.supplier_order_code LIKE 'API-TELE-%' THEN 'sumistore' "
+                "WHEN item.supplier_order_code LIKE 'LHP-%' THEN 'lehai' END) "
+                "WHERE item.supplier_provider IS NULL "
+                "AND item.supplier_order_code IS NOT NULL"
+            )
+        )
+        await connection.execute(
+            text(
+                "UPDATE orders AS shop_order SET supplier_provider = COALESCE("
+                "(SELECT item.supplier_provider FROM inventory_items AS item "
+                "WHERE item.id = shop_order.inventory_item_id), "
+                "(SELECT tx.provider FROM supplier_balance_transactions AS tx "
+                "WHERE tx.supplier_order_code = shop_order.supplier_order_code "
+                "AND tx.provider IN ('sumistore', 'lehai') ORDER BY tx.id DESC LIMIT 1), "
+                "(SELECT attempt.provider FROM supplier_purchase_attempts AS attempt "
+                "WHERE attempt.supplier_order_code = shop_order.supplier_order_code "
+                "AND attempt.provider IN ('sumistore', 'lehai') "
+                "ORDER BY attempt.id DESC LIMIT 1), "
+                "CASE WHEN shop_order.supplier_order_code LIKE 'API-TELE-%' "
+                "THEN 'sumistore' WHEN shop_order.supplier_order_code LIKE 'LHP-%' "
+                "THEN 'lehai' END) WHERE shop_order.supplier_provider IS NULL "
+                "AND (shop_order.supplier_order_code IS NOT NULL OR EXISTS ("
+                "SELECT 1 FROM inventory_items AS source_item "
+                "WHERE source_item.id = shop_order.inventory_item_id "
+                "AND source_item.supplier_provider IS NOT NULL))"
             )
         )
         await connection.execute(

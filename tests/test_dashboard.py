@@ -9,6 +9,7 @@ from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from app.api import create_api
 from app.config import Settings
+from app.dashboard import group_order_rows
 from app.dashboard_security import hash_dashboard_password
 from app.database import Base
 from app.models import (
@@ -60,6 +61,77 @@ class DashboardSupplier:
             source_stock=self.stock,
             owner_balance=self.balance,
         )
+
+
+def test_grouped_orders_show_mixed_supplier_and_manual_inventory_sources() -> None:
+    now = datetime.now(UTC)
+    product = Product(id=1, category_id=1, name_vi="GPT Plus", name_en="GPT Plus")
+    user = User(telegram_id=1, full_name="Buyer")
+    rows = [
+        (
+            Order(
+                id=1,
+                user_id=1,
+                product_id=1,
+                inventory_item_id=1,
+                amount=30_000,
+                cost_amount=25_000,
+                discount_amount=0,
+                batch_code="BMIXED",
+                supplier_provider="sumistore",
+                status="completed",
+                sales_channel="telegram",
+                created_at=now,
+                delivered_at=now,
+            ),
+            product,
+            user,
+        ),
+        (
+            Order(
+                id=2,
+                user_id=1,
+                product_id=1,
+                inventory_item_id=2,
+                amount=30_000,
+                cost_amount=25_000,
+                discount_amount=0,
+                batch_code="BMIXED",
+                supplier_provider="lehai",
+                status="completed",
+                sales_channel="telegram",
+                created_at=now,
+                delivered_at=now,
+            ),
+            product,
+            user,
+        ),
+        (
+            Order(
+                id=3,
+                user_id=1,
+                product_id=1,
+                inventory_item_id=3,
+                amount=30_000,
+                cost_amount=20_000,
+                discount_amount=0,
+                batch_code="BLOCAL",
+                status="completed",
+                sales_channel="telegram",
+                created_at=now,
+                delivered_at=now,
+            ),
+            product,
+            user,
+        ),
+    ]
+
+    groups = {group["shop_order_code"]: group for group in group_order_rows(rows)}
+
+    assert groups["BMIXED"]["supplier_source_label"] == "Sumi + Lê Hải"
+    assert groups["BMIXED"]["supplier_source_external"] is True
+    assert groups["BLOCAL"]["supplier_source_label"] == "Kho bot"
+    assert groups["BLOCAL"]["supplier_source_external"] is False
 
 
 def test_admin_products_shows_selected_gpt_supplier_and_each_stock(tmp_path) -> None:
@@ -1421,6 +1493,7 @@ def test_dashboard_groups_multi_item_purchase_as_one_order(tmp_path) -> None:
                 InventoryItem(
                     product_id=product.id,
                     encrypted_secret=cipher.encrypt(secret),
+                    supplier_provider="lehai",
                     status="sold",
                 )
                 for secret in ("account-one:secret", "account-two:secret")
@@ -1437,6 +1510,7 @@ def test_dashboard_groups_multi_item_purchase_as_one_order(tmp_path) -> None:
                         cost_amount=15_000,
                         batch_code="B-SHOP-123",
                         supplier_order_code="API-ORDER-999",
+                        supplier_provider="lehai",
                         status="completed",
                     )
                     for item in items
@@ -1473,6 +1547,9 @@ def test_dashboard_groups_multi_item_purchase_as_one_order(tmp_path) -> None:
         assert "Mã API <code>API-ORDER-999</code>" in orders_page.text
         assert "2 tài khoản" in orders_page.text
         assert "40.000đ" in orders_page.text
+        assert re.search(r'<span class="status wait">Lê Hải</span>', orders_page.text)
+        assert "B-SHOP-123" in client.get("/admin/orders?source=lehai").text
+        assert "B-SHOP-123" not in client.get("/admin/orders?source=sumistore").text
         order_id = int(
             re.search(r'href="/admin/orders/(\d+)">Mở đơn</a>', orders_page.text).group(1)  # type: ignore[union-attr]
         )
@@ -1481,6 +1558,7 @@ def test_dashboard_groups_multi_item_purchase_as_one_order(tmp_path) -> None:
         assert "Đơn B-SHOP-123" in detail.text
         assert "Mã đơn API" in detail.text
         assert "API-ORDER-999" in detail.text
+        assert "Nguồn hàng</dt><dd>Lê Hải" in detail.text
         assert "account-one:secret" in detail.text
         assert "account-two:secret" in detail.text
 

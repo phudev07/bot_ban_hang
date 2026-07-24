@@ -1321,6 +1321,8 @@ def test_gpt_plus_combines_supplier_stock_and_prices_each_source_tier() -> None:
         assert [order.amount for order in result.orders].count(35_000) == 1
         assert [order.cost_amount for order in result.orders].count(25_000) == 10
         assert [order.cost_amount for order in result.orders].count(30_000) == 1
+        assert [order.supplier_provider for order in result.orders].count("lehai") == 10
+        assert [order.supplier_provider for order in result.orders].count("sumistore") == 1
         async with sessions() as session:
             product = await session.get(Product, product_id)
             assert product is not None
@@ -1385,6 +1387,7 @@ def test_gpt_plus_equal_supplier_prices_prefer_sumi() -> None:
         assert result.ok is True
         assert sumi.buy_quantities == [1]
         assert lehai.buy_quantities == []
+        assert result.orders[0].supplier_provider == "sumistore"
         await engine.dispose()
 
     asyncio.run(scenario())
@@ -1442,6 +1445,7 @@ def test_gpt_plus_disabled_sumi_uses_only_lehai() -> None:
         assert lehai.fetch_product_ids == ["gpt_bh48_1m"]
         assert lehai.buy_quantities == [1]
         assert result.orders[0].cost_amount == 25_000
+        assert result.orders[0].supplier_provider == "lehai"
         await engine.dispose()
 
     asyncio.run(scenario())
@@ -2051,6 +2055,7 @@ def test_external_purchase_uses_dynamic_price_and_delivers_accounts() -> None:
             assert all(order.amount == 20_000 for order in orders)
             assert all(order.cost_amount == 15_000 for order in orders)
             assert all(order.supplier_order_code == "API-TELE-TEST123" for order in orders)
+            assert all(order.supplier_provider == "sumistore" for order in orders)
             assert len({order.batch_code for order in orders}) == 1
             assert wallet_transaction is not None
             assert wallet_transaction.kind == "product_purchase"
@@ -2199,6 +2204,7 @@ def test_recovered_supplier_inventory_is_sold_before_buying_again() -> None:
                         encrypted_secret=cipher.encrypt(f"orphan{index}:password"),
                         cost_amount=15_000,
                         supplier_order_code="API-TELE-ORPHAN",
+                        supplier_provider="sumistore",
                         supplier_item_index=index,
                     )
                     for index in range(2)
@@ -2222,6 +2228,7 @@ def test_recovered_supplier_inventory_is_sold_before_buying_again() -> None:
             orders = list(await session.scalars(select(Order).order_by(Order.id)))
             assert all(order.cost_amount == 15_000 for order in orders)
             assert all(order.supplier_order_code == "API-TELE-ORPHAN" for order in orders)
+            assert all(order.supplier_provider == "sumistore" for order in orders)
         await engine.dispose()
 
     asyncio.run(scenario())
@@ -2448,6 +2455,7 @@ def test_external_direct_payment_delivers_supplier_account() -> None:
             assert order is not None and order.amount == 20_000
             assert order.cost_amount == 15_000
             assert order.supplier_order_code == "API-TELE-TEST123"
+            assert order.supplier_provider == "sumistore"
         await engine.dispose()
 
     asyncio.run(scenario())
@@ -2489,6 +2497,7 @@ def test_external_direct_payment_uses_recovered_inventory_first() -> None:
                     encrypted_secret=cipher.encrypt("recovered|password"),
                     cost_amount=12_000,
                     supplier_order_code="API-TELE-ORPHAN",
+                    supplier_provider="sumistore",
                     supplier_item_index=0,
                 )
             )
@@ -2524,6 +2533,7 @@ def test_external_direct_payment_uses_recovered_inventory_first() -> None:
             order = await session.scalar(select(Order))
             assert order is not None and order.cost_amount == 12_000
             assert order.supplier_order_code == "API-TELE-ORPHAN"
+            assert order.supplier_provider == "sumistore"
         await engine.dispose()
 
     asyncio.run(scenario())

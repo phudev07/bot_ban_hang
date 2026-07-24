@@ -317,6 +317,9 @@ class InventoryItem(Base):
     supplier_order_code: Mapped[str | None] = mapped_column(
         String(64), nullable=True, index=True
     )
+    supplier_provider: Mapped[str | None] = mapped_column(
+        String(32), nullable=True, index=True
+    )
     supplier_item_index: Mapped[int | None] = mapped_column(nullable=True)
     status: Mapped[str] = mapped_column(String(20), default="available", index=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
@@ -354,6 +357,9 @@ class Order(Base):
     )
     batch_code: Mapped[str | None] = mapped_column(String(32), nullable=True, index=True)
     supplier_order_code: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
+    supplier_provider: Mapped[str | None] = mapped_column(
+        String(32), nullable=True, index=True
+    )
     sales_channel: Mapped[str] = mapped_column(String(16), default="telegram", index=True)
     api_client_id: Mapped[int | None] = mapped_column(
         ForeignKey("api_clients.id", ondelete="SET NULL"), nullable=True, index=True

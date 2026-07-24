@@ -31,7 +31,7 @@
     <td><strong>Mã shop <code>{{ row.shop_order_code }}</code></strong><small>Mã API <code>{{ row.supplier_order_code or '—' }}</code><br>ID #{{ row.primary_order_id }} · {{ row.quantity }} tài khoản</small></td>
     <td><strong>{{ row.user.full_name }}</strong><small>@{{ row.user.username or '—' }} · {{ row.user.telegram_id }}</small></td>
     <td>{{ row.product.name_vi }}</td>
-    <td><span class="status {{ 'wait' if row.product.fulfillment_source != 'local' else 'on' }}">{{ row.product.fulfillment_source }}</span><small>{{ row.sales_channel }}</small></td>
+    <td><span class="status {{ 'wait' if row.supplier_source_external else 'on' }}">{{ row.supplier_source_label }}</span><small>{{ row.sales_channel }}</small></td>
     <td><strong>{{ row.amount|vnd }}</strong></td>
     <td>{{ row.cost_amount|vnd }}</td>
     <td><strong class="profit-text {{ 'loss' if row.amount < row.cost_amount else '' }}">{{ (row.amount - row.cost_amount)|vnd }}</strong></td>

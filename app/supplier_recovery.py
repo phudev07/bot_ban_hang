@@ -162,6 +162,7 @@ async def _store_recovered_order(
                         encrypted_secret=cipher.encrypt(account),
                         cost_amount=unit_price,
                         supplier_order_code=supplier_order_code,
+                        supplier_provider="sumistore",
                         supplier_item_index=item_index,
                         status="available",
                     )
