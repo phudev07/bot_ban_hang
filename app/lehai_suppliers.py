@@ -534,6 +534,7 @@ async def _route_lehai_topup_alert_to_gpt_plus(
     )
     if gpt_product is None:
         return False
+    stock_before = max(0, int(gpt_product.external_stock))
 
     fetched = await fetch_sumistore_supplier_routes(
         GPT_PLUS_SHOP_PRODUCT_ID,
@@ -550,7 +551,7 @@ async def _route_lehai_topup_alert_to_gpt_plus(
     ):
         return False
 
-    await refresh_external_product(
+    stock_after = await refresh_external_product(
         session,
         gpt_product,
         sumistore_client,
@@ -559,6 +560,26 @@ async def _route_lehai_topup_alert_to_gpt_plus(
         force_notify_on_increase=True,
         alert_provider="lehai",
     )
+    active_alert = await session.scalar(
+        select(ProductStockAlert.id)
+        .where(
+            ProductStockAlert.product_id == gpt_product.id,
+            ProductStockAlert.status.in_(("pending", "sending")),
+        )
+        .order_by(ProductStockAlert.id.desc())
+        .limit(1)
+    )
+    if active_alert is None and stock_after > 0:
+        session.add(
+            ProductStockAlert(
+                product_id=gpt_product.id,
+                provider="lehai",
+                stock_before=stock_before,
+                stock_after=stock_after,
+                sale_price=gpt_product.price,
+            )
+        )
+        await session.flush()
     return True
 
 

@@ -127,6 +127,63 @@ def test_stock_return_is_queued_once_and_sent_to_started_users() -> None:
     asyncio.run(scenario())
 
 
+def test_lehai_alert_is_delivered_for_multi_supplier_gpt_plus_product() -> None:
+    async def scenario() -> None:
+        engine, sessions = await make_database()
+        async with sessions() as session:
+            category = Category(name_vi="ChatGPT", name_en="ChatGPT")
+            session.add(category)
+            await session.flush()
+            product = Product(
+                category_id=category.id,
+                name_vi="GPT Plus",
+                name_en="GPT Plus",
+                price=30_000,
+                fulfillment_source="sumistore",
+                supplier_product_id="SP-GEF55PBV",
+                external_stock=28,
+                supplier_available_stock=28,
+                supplier_available_stock_initialized=True,
+            )
+            session.add(product)
+            await session.flush()
+            session.add_all(
+                [
+                    ProductStockAlert(
+                        product_id=product.id,
+                        provider="lehai",
+                        stock_before=28,
+                        stock_after=28,
+                        sale_price=30_000,
+                    ),
+                    User(
+                        telegram_id=1,
+                        full_name="Buyer",
+                        language="vi",
+                        has_started=True,
+                    ),
+                ]
+            )
+            await session.commit()
+
+        bot = FakeStockBot()
+        assert await deliver_pending_stock_alerts(
+            sessions,
+            bot,  # type: ignore[arg-type]
+            throttle_seconds=0,
+        ) == 1
+        assert len(bot.calls) == 1
+
+        async with sessions() as session:
+            alert = await session.scalar(select(ProductStockAlert))
+            assert alert is not None
+            assert alert.status == "sent"
+            assert alert.provider == "lehai"
+        await engine.dispose()
+
+    asyncio.run(scenario())
+
+
 def test_stock_return_during_flash_sale_uses_campaign_price_and_remaining_quantity() -> None:
     async def scenario() -> None:
         engine, sessions = await make_database()

@@ -22,6 +22,7 @@ from app.models import (
     User,
 )
 from app.stock_alerts import STOCK_ALERT_COOLDOWN, stock_alert_enabled
+from app.suppliers import supplier_provider_is_configured
 from app.utils import format_vnd, safe_html
 
 
@@ -999,7 +1000,11 @@ async def _claim_stock_alert(
         for alert, product in rows:
             if (
                 not product.active
-                or product.fulfillment_source != alert.provider
+                or not supplier_provider_is_configured(
+                    product.fulfillment_source,
+                    product.supplier_product_id,
+                    alert.provider,
+                )
                 or product.force_out_of_stock
                 or product.external_stock <= 0
                 or not stock_alert_enabled(product)

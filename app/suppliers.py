@@ -178,6 +178,20 @@ def is_multi_supplier_product(
     )
 
 
+def supplier_provider_is_configured(
+    fulfillment_source: str,
+    supplier_product_id: str | None,
+    provider: str,
+) -> bool:
+    """Return whether a provider is a configured route for this shop product."""
+    if provider == fulfillment_source:
+        return True
+    if fulfillment_source != "sumistore" or not supplier_product_id:
+        return False
+    alternative = SUMISTORE_ALTERNATIVE_PRODUCTS.get(supplier_product_id)
+    return alternative is not None and alternative[0] == provider
+
+
 def supplier_route_sort_key(route: SupplierRoute) -> tuple[int, int, str]:
     # When costs are equal, keep Sumi first as the deterministic preferred source.
     return (
