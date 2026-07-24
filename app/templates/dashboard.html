@@ -84,7 +84,7 @@
   <div class="table-wrap"><table><thead><tr><th>Lần nhập</th><th>Sản phẩm</th><th>Tồn mới</th><th>Giá shop</th><th>Trạng thái</th><th>Đã gửi</th><th>Nội dung</th><th>Thời gian</th></tr></thead><tbody>
     {% for row in recent_stock_alerts %}
     <tr>
-      <td><code>#{{ row.alert.id }}</code><small>{{ row.alert.provider }}</small></td>
+      <td><code>#{{ row.alert.id }}</code><small>{{ 'Kho nhập' if row.alert.provider == 'inventory' else row.alert.provider }}</small></td>
       <td><strong>{{ row.product.name_vi }}</strong><small><code>{{ row.product.supplier_product_id }}</code></small></td>
       <td><strong>{{ row.alert.stock_after }}</strong><small>trước đó {{ row.alert.stock_before }}</small></td>
       <td>{{ row.alert.sale_price|vnd }}</td>

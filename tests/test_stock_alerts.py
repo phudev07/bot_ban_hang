@@ -698,6 +698,12 @@ def test_inventory_import_alert_is_delivered_even_for_local_product() -> None:
                 stock_before=0,
                 stock_after=2,
             ) is True
+            first_item = await session.scalar(
+                select(InventoryItem).order_by(InventoryItem.id).limit(1)
+            )
+            assert first_item is not None
+            first_item.status = "sold"
+            first_item.sold_at = datetime.now(UTC)
             session.add(User(telegram_id=1, full_name="Buyer", has_started=True))
             await session.commit()
 
@@ -708,12 +714,59 @@ def test_inventory_import_alert_is_delivered_even_for_local_product() -> None:
             throttle_seconds=0,
         ) == 1
         assert len(bot.calls) == 1
-        assert "Kho vừa có: <b>2</b>" in bot.calls[0][1]
+        assert "Kho vừa có: <b>1</b>" in bot.calls[0][1]
         async with sessions() as session:
             alert = await session.scalar(select(ProductStockAlert))
             assert alert is not None
             assert alert.provider == "inventory"
             assert alert.status == "sent"
+        await engine.dispose()
+
+    asyncio.run(scenario())
+
+
+def test_disabled_stock_notifications_supersede_existing_inventory_alert() -> None:
+    async def scenario() -> None:
+        engine, sessions = await make_database()
+        async with sessions() as session:
+            category = Category(name_vi="Kho bot", name_en="Local")
+            session.add(category)
+            await session.flush()
+            product = Product(
+                category_id=category.id,
+                name_vi="Hàng nhập kho",
+                name_en="Imported stock",
+                price=25_000,
+                fulfillment_source="local",
+                stock_notifications_enabled=False,
+            )
+            session.add(product)
+            await session.flush()
+            session.add_all(
+                [
+                    InventoryItem(product_id=product.id, encrypted_secret="item-1"),
+                    ProductStockAlert(
+                        product_id=product.id,
+                        provider="inventory",
+                        stock_before=0,
+                        stock_after=1,
+                        sale_price=25_000,
+                    ),
+                    User(telegram_id=1, full_name="Buyer", has_started=True),
+                ]
+            )
+            await session.commit()
+
+        bot = FakeStockBot()
+        assert await deliver_pending_stock_alerts(
+            sessions,
+            bot,  # type: ignore[arg-type]
+            throttle_seconds=0,
+        ) == 0
+        assert bot.calls == []
+        async with sessions() as session:
+            alert = await session.scalar(select(ProductStockAlert))
+            assert alert is not None and alert.status == "superseded"
         await engine.dispose()
 
     asyncio.run(scenario())

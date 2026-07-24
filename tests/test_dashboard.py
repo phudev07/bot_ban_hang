@@ -1372,6 +1372,8 @@ def test_admin_can_import_recovered_external_inventory(tmp_path) -> None:
             follow_redirects=False,
         )
         assert imported.status_code == 303
+        assert "Kho nhập" in client.get("/admin/broadcasts?tab=stock").text
+        assert "Kho nhập" in client.get("/admin").text
 
     async def verify_database() -> None:
         async with sessions() as session:

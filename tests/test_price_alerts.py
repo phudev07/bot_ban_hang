@@ -155,6 +155,55 @@ def test_disabled_sale_notifications_still_update_price_without_queuing() -> Non
     asyncio.run(scenario())
 
 
+def test_disabled_sale_notifications_supersede_an_existing_pending_alert() -> None:
+    async def scenario() -> None:
+        engine, sessions = await make_database()
+        async with sessions() as session:
+            category = Category(name_vi="API", name_en="API")
+            session.add(category)
+            await session.flush()
+            product = Product(
+                category_id=category.id,
+                name_vi="Sale disabled",
+                name_en="Sale disabled",
+                price=14_000,
+                fulfillment_source="sumistore",
+                supplier_product_id="SP-SALE-OFF",
+                sale_notifications_enabled=False,
+                external_stock=5,
+            )
+            session.add(product)
+            await session.flush()
+            session.add_all(
+                [
+                    ProductPriceAlert(
+                        product_id=product.id,
+                        provider="sumistore",
+                        supplier_price_before=15_000,
+                        supplier_price_after=12_000,
+                        sale_price_before=17_000,
+                        sale_price_after=14_000,
+                    ),
+                    User(telegram_id=1, full_name="Buyer", has_started=True),
+                ]
+            )
+            await session.commit()
+
+        bot = FakeSaleBot()
+        assert await deliver_pending_sale_alerts(
+            sessions,
+            bot,  # type: ignore[arg-type]
+            throttle_seconds=0,
+        ) == 0
+        assert bot.calls == []
+        async with sessions() as session:
+            alert = await session.scalar(select(ProductPriceAlert))
+            assert alert is not None and alert.status == "superseded"
+        await engine.dispose()
+
+    asyncio.run(scenario())
+
+
 def test_pending_sale_is_sent_to_started_users_and_logged() -> None:
     async def scenario() -> None:
         engine, sessions = await make_database()
