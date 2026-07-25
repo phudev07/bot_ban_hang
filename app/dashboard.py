@@ -1557,7 +1557,7 @@ def create_dashboard_router(
         product_type: str = Form("account"),
         fulfillment_source: str = Form("local"),
         supplier_product_id: str = Form(""),
-        supplier_markup: str = Form("0"),
+        supplier_markup: str | None = Form(None),
         api_source_controls_present: str | None = Form(None),
         sumistore_api_enabled: str | None = Form(None),
         lehai_api_enabled: str | None = Form(None),
@@ -1577,7 +1577,9 @@ def create_dashboard_router(
         normalized_name = name_vi.strip()
         normalized_type = normalize_product_type(product_type)
         normalized_source = normalize_fulfillment_source(fulfillment_source)
-        parsed_markup = parse_vnd(supplier_markup) or 0
+        parsed_markup = (
+            parse_vnd(supplier_markup) or 0 if supplier_markup is not None else None
+        )
         normalized_supplier_id = supplier_product_id.strip() or None
         async with session_factory() as session:
             product = await session.scalar(
@@ -1617,9 +1619,6 @@ def create_dashboard_router(
                 if normalized_source in EXTERNAL_FULFILLMENT_SOURCES
                 else None
             )
-            product.supplier_markup = (
-                parsed_markup if normalized_source in EXTERNAL_FULFILLMENT_SOURCES else 0
-            )
             new_configured = set(
                 configured_supplier_providers(
                     product.fulfillment_source,
@@ -1648,6 +1647,11 @@ def create_dashboard_router(
                 if "lehai" in new_configured and "lehai" in old_configured
                 else True
             )
+            new_enabled = enabled_supplier_providers(product)
+            if normalized_source == "local":
+                product.supplier_markup = 0
+            elif new_enabled and parsed_markup is not None:
+                product.supplier_markup = parsed_markup
             if normalized_source == "local":
                 product.supplier_price = None
                 product.external_stock = 0

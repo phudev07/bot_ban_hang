@@ -308,9 +308,11 @@ def test_admin_can_disable_each_gpt_plus_api_source(tmp_path) -> None:
         products_page = client.get("/admin/products")
         assert re.search(r"Lê Hải:\s*<strong>Tắt</strong>", products_page.text)
 
+        both_off_form = product_form(csrf, price="32.000", supplier_markup="99.000")
+        both_off_form.pop("supplier_markup")
         both_off = client.post(
             f"/admin/products/{product_id}",
-            data=product_form(csrf),
+            data=both_off_form,
             follow_redirects=False,
         )
         assert both_off.status_code == 303
@@ -322,11 +324,40 @@ def test_admin_can_disable_each_gpt_plus_api_source(tmp_path) -> None:
                 assert product.sumistore_api_enabled is False
                 assert product.lehai_api_enabled is False
                 assert product.external_stock == 1
+                assert product.price == 32_000
+                assert product.supplier_markup == 5_000
 
         asyncio.run(verify_both_off())
         products_page = client.get("/admin/products")
         assert "API đang đấu: Đã tắt cả hai" in products_page.text
         assert re.search(r'<span class="stock[^"]*">1</span>', products_page.text)
+        disabled_edit_page = client.get(f"/admin/products/{product_id}")
+        assert 'id="product-price-label">Giá bán từ kho' in disabled_edit_page.text
+        assert re.search(
+            r'id="supplier-markup-input"[^>]*disabled', disabled_edit_page.text
+        )
+
+        enabled_again = client.post(
+            f"/admin/products/{product_id}",
+            data=product_form(
+                csrf,
+                price="32.000",
+                supplier_markup="7.000",
+                sumistore_api_enabled="1",
+            ),
+            follow_redirects=False,
+        )
+        assert enabled_again.status_code == 303
+
+        async def verify_enabled_again() -> None:
+            async with sessions() as session:
+                product = await session.get(Product, product_id)
+                assert product is not None
+                assert product.sumistore_api_enabled is True
+                assert product.lehai_api_enabled is False
+                assert product.supplier_markup == 7_000
+
+        asyncio.run(verify_enabled_again())
 
     asyncio.run(engine.dispose())
 
