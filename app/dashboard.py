@@ -2561,6 +2561,7 @@ def create_dashboard_router(
         csrf: str = Form(...),
         product_id: int = Form(...),
         items: str = Form(...),
+        cost_amount: str = Form(...),
         lock_sale_price: str | None = Form(None),
         notify_stock_arrival: str | None = Form(None),
     ) -> RedirectResponse:
@@ -2569,6 +2570,10 @@ def create_dashboard_router(
         if not valid_csrf(request, csrf):
             return RedirectResponse("/admin/inventory", status_code=303)
         parsed_items = split_inventory_items(items)
+        parsed_cost = parse_vnd(cost_amount)
+        if parsed_cost is None or parsed_cost < 0:
+            flash(request, "Giá vốn mỗi tài khoản không hợp lệ.", "error")
+            return RedirectResponse("/admin/inventory", status_code=303)
         lock_applied = False
         async with session_factory() as session:
             product = await session.scalar(
@@ -2602,11 +2607,7 @@ def create_dashboard_router(
                     InventoryItem(
                         product_id=product.id,
                         encrypted_secret=cipher.encrypt(item),
-                        cost_amount=(
-                            int(product.supplier_price or 0)
-                            if product.fulfillment_source in EXTERNAL_FULFILLMENT_SOURCES
-                            else 0
-                        ),
+                        cost_amount=parsed_cost,
                     )
                     for item in parsed_items
                 ]
@@ -2659,7 +2660,8 @@ def create_dashboard_router(
         lock_note = " và đã khóa giá bán" if lock_applied else ""
         flash(
             request,
-            f"Đã thêm {len(parsed_items)} sản phẩm vào kho{lock_note}{notification_note}.",
+            f"Đã thêm {len(parsed_items)} sản phẩm vào kho với giá vốn "
+            f"{format_vnd(parsed_cost)}/tài khoản{lock_note}{notification_note}.",
         )
         return RedirectResponse("/admin/inventory", status_code=303)
 

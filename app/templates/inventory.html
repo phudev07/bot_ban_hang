@@ -14,6 +14,10 @@
       <label>Dữ liệu kho
         <textarea name="items" rows="14" placeholder="user1:password1&#10;user2:password2&#10;&#10;Hoặc ngăn dữ liệu nhiều dòng bằng dòng ---" required></textarea>
       </label>
+      <label>Giá vốn mỗi tài khoản
+        <input name="cost_amount" inputmode="numeric" placeholder="Ví dụ: 35.000" required>
+        <small>Nhập đúng số tiền thực tế bạn đã bỏ ra cho một tài khoản. Doanh thu vẫn lấy theo giá bán; lợi nhuận sẽ bằng giá bán trừ giá vốn này và các chi phí liên quan.</small>
+      </label>
       <label class="check wide">
         <input type="checkbox" name="lock_sale_price" value="1">
         <span>Khóa cứng giá bán hiện tại cho lô hàng ôm này</span>
@@ -38,12 +42,13 @@
 <section class="panel">
   <div class="panel-head"><div><span>INVENTORY LOG</span><h2>Toàn bộ lịch sử kho</h2></div><small>100 mục mỗi trang</small></div>
   <div class="table-wrap"><table>
-    <thead><tr><th>ID kho</th><th>Sản phẩm</th><th>Trạng thái</th><th>Ngày nhập</th><th>Ngày bán</th><th></th></tr></thead>
+    <thead><tr><th>ID kho</th><th>Sản phẩm</th><th>Giá vốn</th><th>Trạng thái</th><th>Ngày nhập</th><th>Ngày bán</th><th></th></tr></thead>
     <tbody>
       {% for row in recent_items %}
       <tr>
         <td><code>#{{ row.item.id }}</code></td>
         <td>{{ row.product.name_vi }}<small>#{{ row.product.id }}</small></td>
+        <td><strong>{{ row.item.cost_amount|vnd }}</strong></td>
         <td><span class="status {{ 'on' if row.item.status == 'available' else 'off' }}">{{ 'Còn kho' if row.item.status == 'available' else 'Đã bán' }}</span></td>
         <td>{{ row.item.created_at|localtime }}</td>
         <td>{{ row.item.sold_at|localtime }}</td>
@@ -56,7 +61,7 @@
           {% else %}—{% endif %}
         </td>
       </tr>
-      {% else %}<tr><td colspan="6" class="empty">Chưa có dữ liệu kho.</td></tr>{% endfor %}
+      {% else %}<tr><td colspan="7" class="empty">Chưa có dữ liệu kho.</td></tr>{% endfor %}
     </tbody>
   </table></div>
   {{ render_pager(pager, 'mục kho') }}

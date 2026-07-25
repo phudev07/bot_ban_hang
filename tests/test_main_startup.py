@@ -6,7 +6,7 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from app.database import Base
-from app.main import delete_expired_api_audits, main, wait_for_server_started
+from app.main import delete_expired_api_audits, initialize_database, main, wait_for_server_started
 from app.models import ApiRequestAudit
 
 
@@ -23,6 +23,11 @@ def test_web_server_is_started_before_supplier_background_workers() -> None:
     assert "await sync_sumistore_products" not in source
     assert "await sync_lehai_products" not in source
     assert "await reconcile_supplier_balance" not in source
+
+
+def test_startup_cost_backfill_does_not_reprice_manual_inventory_orders() -> None:
+    source = inspect.getsource(initialize_database)
+    assert "orders.supplier_provider = 'sumistore'" in source
 
 
 def test_wait_for_server_started_waits_for_ready_flag() -> None:

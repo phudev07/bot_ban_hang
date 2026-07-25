@@ -717,7 +717,8 @@ async def initialize_database(engine, session_factory, seed_demo_data: bool) -> 
             text(
                 "UPDATE orders SET cost_amount = COALESCE(products.supplier_price, 0) "
                 "FROM products WHERE orders.product_id = products.id "
-                "AND products.fulfillment_source = 'sumistore' AND orders.cost_amount = 0"
+                "AND products.fulfillment_source = 'sumistore' AND orders.cost_amount = 0 "
+                "AND orders.supplier_provider = 'sumistore'"
             )
         )
         await connection.execute(
