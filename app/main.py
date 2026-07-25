@@ -31,7 +31,10 @@ from app.lehai_suppliers import (
     ensure_lehai_products,
     sync_lehai_products,
 )
-from app.inventory_dedup import backfill_inventory_fingerprints
+from app.inventory_dedup import (
+    backfill_historical_duplicate_alerts,
+    backfill_inventory_fingerprints,
+)
 from app.models import ApiRequestAudit, Category, Product
 from app.payment_expiry import payment_expiry_worker
 from app.rate_limit import BotSpamProtectionMiddleware
@@ -1195,6 +1198,15 @@ async def main() -> None:
         logging.getLogger(__name__).info(
             "Backfilled inventory account fingerprints: count=%s",
             fingerprinted_items,
+        )
+    historical_duplicates = await backfill_historical_duplicate_alerts(
+        session_factory,
+        cipher,
+    )
+    if historical_duplicates:
+        logging.getLogger(__name__).warning(
+            "Recorded historical duplicate inventory alerts: count=%s",
+            historical_duplicates,
         )
     bot = Bot(
         token=settings.bot_token.get_secret_value(),

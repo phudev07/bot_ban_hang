@@ -49,7 +49,7 @@
       <tr>
         <td>{{ row.alert.created_at|localtime }}<small>Cảnh báo #{{ row.alert.id }}</small></td>
         <td><code>{{ row.identifier }}</code></td>
-        <td><span class="status off">{{ 'Trùng trong chính lần nhập này' if row.alert.reason == 'duplicate_in_import' else 'Đã tồn tại trong kho/lịch sử bán' }}</span></td>
+        <td><span class="status off">{% if row.alert.reason == 'duplicate_in_import' %}Trùng trong chính lần nhập này{% elif row.alert.reason == 'historical_duplicate' %}Phát hiện khi rà lại kho cũ{% else %}Đã tồn tại trong kho/lịch sử bán{% endif %}</span></td>
         <td>{{ row.product.name_vi if row.product else 'Sản phẩm đã xóa' }}<small>#{{ row.alert.product_id }}</small></td>
         <td>{% if row.existing_item %}Kho #{{ row.existing_item.id }} · {{ row.existing_product.name_vi if row.existing_product else 'Sản phẩm đã xóa' }}<small>{{ 'Còn kho' if row.existing_item.status == 'available' else 'Đã bán' }}</small>{% else %}Dòng trước trong cùng lần nhập{% endif %}</td>
       </tr>

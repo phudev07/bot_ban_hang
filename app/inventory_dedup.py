@@ -2,7 +2,7 @@ import logging
 from dataclasses import dataclass
 
 from cryptography.fernet import InvalidToken
-from sqlalchemy import select, text
+from sqlalchemy import func, select, text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.models import InventoryDuplicateAlert, InventoryItem
@@ -121,3 +121,69 @@ async def backfill_inventory_fingerprints(
                 item.account_fingerprint = cipher.inventory_fingerprint(plaintext)
                 updated += 1
             await session.commit()
+
+
+async def backfill_historical_duplicate_alerts(
+    session_factory: async_sessionmaker[AsyncSession],
+    cipher: SecretCipher,
+) -> int:
+    """Expose duplicate accounts that already existed before fingerprinting was enabled."""
+    async with session_factory() as session:
+        repeated_fingerprints = list(
+            await session.scalars(
+                select(InventoryItem.account_fingerprint)
+                .where(InventoryItem.account_fingerprint.is_not(None))
+                .group_by(InventoryItem.account_fingerprint)
+                .having(func.count(InventoryItem.id) > 1)
+            )
+        )
+        if not repeated_fingerprints:
+            return 0
+        items = list(
+            await session.scalars(
+                select(InventoryItem)
+                .where(InventoryItem.account_fingerprint.in_(repeated_fingerprints))
+                .order_by(InventoryItem.account_fingerprint, InventoryItem.id)
+            )
+        )
+        grouped: dict[str, list[InventoryItem]] = {}
+        for item in items:
+            if item.account_fingerprint:
+                grouped.setdefault(item.account_fingerprint, []).append(item)
+
+        inserted = 0
+        for fingerprint, duplicate_items in grouped.items():
+            original = duplicate_items[0]
+            for duplicate in duplicate_items[1:]:
+                existing_alert = await session.scalar(
+                    select(InventoryDuplicateAlert.id).where(
+                        InventoryDuplicateAlert.product_id == duplicate.product_id,
+                        InventoryDuplicateAlert.existing_inventory_item_id == original.id,
+                        InventoryDuplicateAlert.account_fingerprint == fingerprint,
+                        InventoryDuplicateAlert.reason == "historical_duplicate",
+                    )
+                )
+                if existing_alert is not None:
+                    continue
+                try:
+                    plaintext = cipher.decrypt(duplicate.encrypted_secret)
+                except (InvalidToken, UnicodeDecodeError, ValueError):
+                    logger.warning(
+                        "Could not decrypt historical duplicate inventory item %s",
+                        duplicate.id,
+                    )
+                    continue
+                session.add(
+                    InventoryDuplicateAlert(
+                        product_id=duplicate.product_id,
+                        existing_inventory_item_id=original.id,
+                        account_fingerprint=fingerprint,
+                        encrypted_identifier=cipher.encrypt(
+                            inventory_account_identity(plaintext) or "Không xác định"
+                        ),
+                        reason="historical_duplicate",
+                    )
+                )
+                inserted += 1
+        await session.commit()
+        return inserted

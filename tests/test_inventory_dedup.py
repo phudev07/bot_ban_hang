@@ -5,8 +5,11 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from app.database import Base
-from app.inventory_dedup import backfill_inventory_fingerprints
-from app.models import Category, InventoryItem, Product
+from app.inventory_dedup import (
+    backfill_historical_duplicate_alerts,
+    backfill_inventory_fingerprints,
+)
+from app.models import Category, InventoryDuplicateAlert, InventoryItem, Product
 from app.utils import SecretCipher
 
 
@@ -37,15 +40,30 @@ def test_old_inventory_items_receive_fingerprints(tmp_path) -> None:
                     encrypted_secret=cipher.encrypt("Old@Example.com|password"),
                 )
             )
+            session.add(
+                InventoryItem(
+                    product_id=product.id,
+                    encrypted_secret=cipher.encrypt("old@example.com|other-password"),
+                )
+            )
             await session.commit()
 
-        assert await backfill_inventory_fingerprints(sessions, cipher) == 1
+        assert await backfill_inventory_fingerprints(sessions, cipher) == 2
+        assert await backfill_historical_duplicate_alerts(sessions, cipher) == 1
+        assert await backfill_historical_duplicate_alerts(sessions, cipher) == 0
         async with sessions() as session:
-            item = await session.scalar(select(InventoryItem))
-            assert item is not None
-            assert item.account_fingerprint == cipher.inventory_fingerprint(
+            items = list(
+                await session.scalars(select(InventoryItem).order_by(InventoryItem.id))
+            )
+            assert len(items) == 2
+            assert items[0].account_fingerprint == cipher.inventory_fingerprint(
                 "old@example.com|another-password"
             )
+            assert items[1].account_fingerprint == items[0].account_fingerprint
+            alert = await session.scalar(select(InventoryDuplicateAlert))
+            assert alert is not None
+            assert alert.reason == "historical_duplicate"
+            assert alert.existing_inventory_item_id == items[0].id
         await engine.dispose()
 
     asyncio.run(scenario())
