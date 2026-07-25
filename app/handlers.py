@@ -496,8 +496,17 @@ def create_router(
         session: AsyncSession,
         session_factory: async_sessionmaker[AsyncSession],
     ) -> None:
-        await callback.answer()
+        await callback.answer("⏳ Đang lấy số...")
         user = await get_or_create_user(callback, session)
+        loading_text = (
+            "⏳ <b>Getting a ChatGPT number...</b>\n\n"
+            "The bot is reserving your rental. Please wait and do not tap the rent button again."
+            if user.language == "en"
+            else "⏳ <b>Đang lấy số ChatGPT...</b>\n\n"
+            "Bot đang kết nối nguồn và giữ lượt thuê cho bạn. Vui lòng chờ, không bấm lại nút thuê số."
+        )
+        if callback.message:
+            await edit_or_send_text(callback.message, loading_text, reply_markup=None)
         result = await rent_sms_number(
             session_factory,
             user.telegram_id,
