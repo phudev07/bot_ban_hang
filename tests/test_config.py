@@ -116,9 +116,9 @@ def test_enabled_lehai_requires_buyer_key() -> None:
     settings = base_settings(
         lehai_enabled=True,
         lehai_api_key="tgb_test-only",
-        LEHAI_PRODUCT_IDS="cdk_pixel, cdk_ggpro_18m,cdk_pixel",
+        LEHAI_PRODUCT_IDS="cdk_pixel, gptupi_kbh12k,cdk_pixel",
     )
-    assert settings.lehai_product_ids == ("cdk_pixel", "cdk_ggpro_18m")
+    assert settings.lehai_product_ids == ("cdk_pixel", "gptap_bhf")
     assert settings.lehai_markup == 5_000
 
 

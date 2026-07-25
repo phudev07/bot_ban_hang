@@ -5,6 +5,11 @@ from pydantic import Field, SecretStr, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
+LEHAI_PRODUCT_ID_ALIASES = {
+    "gptupi_kbh12k": "gptap_bhf",
+}
+
+
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
 
@@ -65,7 +70,7 @@ class Settings(BaseSettings):
     lehai_base_url: str = "https://api.lehaipremium.me"
     lehai_api_key: SecretStr = SecretStr("")
     lehai_product_ids_text: str = Field(
-        default="cdk_pixel,cdk_ggpro_18m,gptupi_kbh12k",
+        default="cdk_pixel,cdk_ggpro_18m,gptap_bhf",
         validation_alias="LEHAI_PRODUCT_IDS",
     )
     lehai_markup: int = 5_000
@@ -235,7 +240,7 @@ class Settings(BaseSettings):
     @property
     def lehai_product_ids(self) -> tuple[str, ...]:
         configured = [
-            item.strip()
+            LEHAI_PRODUCT_ID_ALIASES.get(item.strip(), item.strip())
             for item in self.lehai_product_ids_text.split(",")
             if item.strip()
         ]

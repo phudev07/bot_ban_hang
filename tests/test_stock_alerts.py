@@ -657,9 +657,9 @@ def test_only_jio_is_featured_for_lehai_stock_notifications() -> None:
         category_id=1,
         name_vi="BHF GPT Plus",
         name_en="BHF GPT Plus",
-        price=135_000,
+        price=140_000,
         fulfillment_source="lehai",
-        supplier_product_id="gptupi_kbh12k",
+        supplier_product_id="gptap_bhf",
     )
 
     assert stock_alert_enabled(pixel) is False

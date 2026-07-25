@@ -53,7 +53,7 @@ def product_payload() -> dict[str, object]:
                 "stats": {"available": 260},
             },
             {
-                "_id": "gptupi_kbh12k",
+                "_id": "gptap_bhf",
                 "product_name": "BHF GPT PLUS GMAIL APPLE PAY",
                 "walletPricing": 130_000,
                 "description": "Gmail Apple Pay account",
@@ -1187,12 +1187,12 @@ def test_lehai_catalog_is_created_in_gemini_store_and_synced_dynamically() -> No
             assert [product.supplier_product_id for product in products] == [
                 "cdk_ggpro_18m",
                 "cdk_pixel",
-                "gptupi_kbh12k",
+                "gptap_bhf",
             ]
             assert [product.price for product in products] == [
                 32_000,
                 30_000,
-                135_000,
+                140_000,
             ]
             assert [product.external_stock for product in products] == [37, 40, 7]
             assert all(product.category_id == category.id for product in products[:2])

@@ -9,7 +9,7 @@ import httpx
 from sqlalchemy import delete, func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from app.config import Settings
+from app.config import LEHAI_PRODUCT_ID_ALIASES, Settings
 from app.models import (
     Category,
     InventoryItem,
@@ -71,7 +71,7 @@ LEHAI_PRODUCT_SEEDS: dict[str, dict[str, object]] = {
         ),
         "fallback_price": 27_000,
     },
-    "gptupi_kbh12k": {
+    "gptap_bhf": {
         "category_vi": "🤖Tài Khoản ChatGPT cá nhân",
         "category_en": "ChatGPT",
         "category_position": 1,
@@ -88,6 +88,7 @@ LEHAI_PRODUCT_SEEDS: dict[str, dict[str, object]] = {
             "Format: GPT email | password | 2FA secret."
         ),
         "fallback_price": 130_000,
+        "markup": 10_000,
     },
 }
 
@@ -613,6 +614,24 @@ async def ensure_lehai_products(
                 select(Product).where(Product.fulfillment_source == "lehai")
             )
         )
+        existing_by_supplier_id = {
+            product.supplier_product_id: product
+            for product in existing_products
+            if product.supplier_product_id
+        }
+        for product in existing_products:
+            canonical_id = LEHAI_PRODUCT_ID_ALIASES.get(product.supplier_product_id or "")
+            if not canonical_id or canonical_id in existing_by_supplier_id:
+                continue
+            seed = LEHAI_PRODUCT_SEEDS.get(canonical_id)
+            product.supplier_product_id = canonical_id
+            existing_by_supplier_id[canonical_id] = product
+            if seed is not None:
+                fallback_price = int(seed["fallback_price"])
+                markup = int(seed.get("markup") or settings.lehai_markup)
+                product.supplier_price = fallback_price
+                product.supplier_markup = markup
+                product.price = fallback_price + markup
         for product in existing_products:
             if product.supplier_product_id not in configured_ids:
                 product.active = False
@@ -645,6 +664,7 @@ async def ensure_lehai_products(
                 product.category_id = category.id
                 continue
             fallback_price = int(seed["fallback_price"])
+            markup = int(seed.get("markup") or settings.lehai_markup)
             session.add(
                 Product(
                     category_id=category.id,
@@ -652,13 +672,13 @@ async def ensure_lehai_products(
                     name_en=str(seed["name_en"]),
                     description_vi=str(seed["description_vi"]),
                     description_en=str(seed["description_en"]),
-                    price=fallback_price + settings.lehai_markup,
+                    price=fallback_price + markup,
                     product_type="account",
                     allow_quantity=True,
                     max_quantity=100,
                     fulfillment_source="lehai",
                     supplier_product_id=product_id,
-                    supplier_markup=settings.lehai_markup,
+                    supplier_markup=markup,
                     supplier_price=fallback_price,
                     external_stock=0,
                 )
