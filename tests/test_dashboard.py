@@ -1486,7 +1486,12 @@ def test_dashboard_groups_multi_item_purchase_as_one_order(tmp_path) -> None:
                 price=20_000,
                 fulfillment_source="sumistore",
             )
-            user = User(telegram_id=10001, full_name="Grouped Buyer", has_started=True)
+            user = User(
+                telegram_id=10001,
+                full_name="Grouped Buyer",
+                username="groupedbuyer",
+                has_started=True,
+            )
             session.add_all([product, user])
             await session.flush()
             items = [
@@ -1548,6 +1553,9 @@ def test_dashboard_groups_multi_item_purchase_as_one_order(tmp_path) -> None:
         assert "2 tài khoản" in orders_page.text
         assert "40.000đ" in orders_page.text
         assert re.search(r'<span class="status wait">Lê Hải</span>', orders_page.text)
+        assert "B-SHOP-123" in client.get(
+            "/admin/orders", params={"q": "@groupedbuyer"}
+        ).text
         assert "B-SHOP-123" in client.get("/admin/orders?source=lehai").text
         assert "B-SHOP-123" not in client.get("/admin/orders?source=sumistore").text
         order_id = int(

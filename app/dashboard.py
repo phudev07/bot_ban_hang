@@ -3313,15 +3313,17 @@ def create_dashboard_router(
         ]
         search_condition = None
         periods = dashboard_periods()
-        if q.strip():
-            needle = f"%{q.strip()}%"
+        normalized_query = q.strip()
+        if normalized_query:
+            needle = f"%{normalized_query}%"
+            username_needle = f"%{normalized_query.lstrip('@').strip()}%"
             search_condition = or_(
                 cast(Order.id, String).ilike(needle),
                 Order.batch_code.ilike(needle),
                 Order.supplier_order_code.ilike(needle),
                 cast(User.telegram_id, String).ilike(needle),
                 User.full_name.ilike(needle),
-                User.username.ilike(needle),
+                User.username.ilike(username_needle),
                 Product.name_vi.ilike(needle),
             )
         if status in {"completed", "pending", "failed"}:
