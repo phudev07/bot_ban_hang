@@ -1522,6 +1522,19 @@ def create_dashboard_router(
             categories = list(
                 await session.scalars(select(Category).order_by(Category.position, Category.id))
             )
+            local_stock = (
+                int(
+                    await session.scalar(
+                        select(func.count(InventoryItem.id)).where(
+                            InventoryItem.product_id == product_id,
+                            InventoryItem.status == "available",
+                        )
+                    )
+                    or 0
+                )
+                if product is not None
+                else 0
+            )
         if (
             product is None
             or product.fulfillment_source not in SELLABLE_FULFILLMENT_SOURCES
@@ -1539,6 +1552,7 @@ def create_dashboard_router(
                 categories=categories,
                 api_sources=supplier_source_rows(product),
                 api_routes_enabled=bool(enabled_supplier_providers(product)),
+                local_stock=local_stock,
                 stock_alert_mode=stock_alert_mode(product),
             ),
         )
@@ -1602,6 +1616,15 @@ def create_dashboard_router(
                 return RedirectResponse("/admin/products", status_code=303)
             old_source = product.fulfillment_source
             old_supplier_id = product.supplier_product_id
+            if (
+                old_source in EXTERNAL_FULFILLMENT_SOURCES
+                and old_supplier_id
+                and normalized_source == "local"
+            ):
+                # API products already support local inventory and always consume it first.
+                # Keep their routing identity; the per-provider switches are the safe local-only mode.
+                normalized_source = old_source
+                normalized_supplier_id = old_supplier_id
             old_configured = set(
                 configured_supplier_providers(old_source, old_supplier_id)
             )

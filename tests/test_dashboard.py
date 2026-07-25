@@ -287,6 +287,32 @@ def test_admin_can_disable_each_gpt_plus_api_source(tmp_path) -> None:
         csrf = re.search(r'name="csrf" value="([^"]+)"', edit_page.text).group(1)
         assert 'name="sumistore_api_enabled"' in edit_page.text
         assert 'name="lehai_api_enabled"' in edit_page.text
+        assert "Kho bot đang có 1 tài khoản và luôn được bán trước" in edit_page.text
+        assert re.search(r'<option value="local"[^>]*disabled', edit_page.text)
+
+        accidental_local = client.post(
+            f"/admin/products/{product_id}",
+            data=product_form(
+                csrf,
+                fulfillment_source="local",
+                supplier_product_id="",
+                sumistore_api_enabled="1",
+                lehai_api_enabled="1",
+            ),
+            follow_redirects=False,
+        )
+        assert accidental_local.status_code == 303
+
+        async def verify_hybrid_route_preserved() -> None:
+            async with sessions() as session:
+                product = await session.get(Product, product_id)
+                assert product is not None
+                assert product.fulfillment_source == "sumistore"
+                assert product.supplier_product_id == "SP-GEF55PBV"
+                assert product.sumistore_api_enabled is True
+                assert product.lehai_api_enabled is True
+
+        asyncio.run(verify_hybrid_route_preserved())
 
         only_sumi = client.post(
             f"/admin/products/{product_id}",
