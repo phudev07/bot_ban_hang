@@ -61,6 +61,14 @@ def test_inventory_identity_and_fingerprint_ignore_password_and_case() -> None:
     )
 
 
+def test_inventory_identity_ignores_supplier_contact_instructions() -> None:
+    cipher = SecretCipher(Fernet.generate_key().decode())
+
+    assert inventory_account_identity("Liên hệ @seller có hàng ngay sau 1p") == ""
+    assert inventory_account_identity("contact @seller for delivery") == ""
+    assert cipher.inventory_fingerprint("Liên hệ @seller có hàng ngay sau 1p") is None
+
+
 def test_verify_sepay_hmac() -> None:
     body = b'{"id":92704,"transferType":"in"}'
     timestamp = "1700000000"

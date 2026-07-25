@@ -84,7 +84,15 @@ def inventory_account_identity(raw_item: str) -> str:
     else:
         if ":" in candidate and not re.match(r"^[a-z][a-z0-9+.-]*://", candidate, re.I):
             candidate = candidate.split(":", 1)[0].strip()
-    return candidate.strip().strip("\"'")
+    candidate = candidate.strip().strip("\"'")
+    folded_candidate = "".join(
+        character
+        for character in unicodedata.normalize("NFKD", candidate).casefold()
+        if not unicodedata.combining(character)
+    )
+    if re.match(r"^(?:lien\s*he|contact)\b", folded_candidate):
+        return ""
+    return candidate
 
 
 def normalize_inventory_identity(raw_item: str) -> str:
@@ -105,8 +113,10 @@ class SecretCipher:
     def decrypt(self, ciphertext: str) -> str:
         return self.fernet.decrypt(ciphertext.encode()).decode()
 
-    def inventory_fingerprint(self, raw_item: str) -> str:
+    def inventory_fingerprint(self, raw_item: str) -> str | None:
         normalized = normalize_inventory_identity(raw_item)
+        if not normalized:
+            return None
         return hmac.new(
             self.inventory_fingerprint_key,
             normalized.encode(),

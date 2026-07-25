@@ -67,3 +67,44 @@ def test_old_inventory_items_receive_fingerprints(tmp_path) -> None:
         await engine.dispose()
 
     asyncio.run(scenario())
+
+
+def test_supplier_contact_instructions_do_not_create_duplicate_alerts(tmp_path) -> None:
+    async def scenario() -> None:
+        engine = create_async_engine(
+            f"sqlite+aiosqlite:///{(tmp_path / 'inventory-contact.db').as_posix()}"
+        )
+        async with engine.begin() as connection:
+            await connection.run_sync(Base.metadata.create_all)
+        sessions = async_sessionmaker(engine, expire_on_commit=False)
+        cipher = SecretCipher(Fernet.generate_key().decode())
+        async with sessions() as session:
+            category = Category(name_vi="Test", name_en="Test")
+            session.add(category)
+            await session.flush()
+            product = Product(
+                category_id=category.id,
+                name_vi="Supplier item",
+                name_en="Supplier item",
+                price=10_000,
+            )
+            session.add(product)
+            await session.flush()
+            for _ in range(2):
+                session.add(
+                    InventoryItem(
+                        product_id=product.id,
+                        encrypted_secret=cipher.encrypt(
+                            "Liên hệ @seller có hàng ngay sau 1p"
+                        ),
+                    )
+                )
+            await session.commit()
+
+        assert await backfill_inventory_fingerprints(sessions, cipher) == 0
+        assert await backfill_historical_duplicate_alerts(sessions, cipher) == 0
+        async with sessions() as session:
+            assert await session.scalar(select(InventoryDuplicateAlert)) is None
+        await engine.dispose()
+
+    asyncio.run(scenario())

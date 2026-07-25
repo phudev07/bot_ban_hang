@@ -16,7 +16,7 @@ INVENTORY_IMPORT_ADVISORY_LOCK = 734220260725
 @dataclass(frozen=True)
 class AcceptedInventoryItem:
     raw_item: str
-    account_fingerprint: str
+    account_fingerprint: str | None
 
 
 @dataclass(frozen=True)
@@ -45,13 +45,19 @@ async def filter_duplicate_inventory(
         )
         for item in raw_items
     ]
-    candidate_fingerprints = {fingerprint for _, _, fingerprint in candidates}
-    existing_rows = list(
-        await session.scalars(
-            select(InventoryItem)
-            .where(InventoryItem.account_fingerprint.in_(candidate_fingerprints))
-            .order_by(InventoryItem.id.desc())
+    candidate_fingerprints = {
+        fingerprint for _, _, fingerprint in candidates if fingerprint is not None
+    }
+    existing_rows = (
+        list(
+            await session.scalars(
+                select(InventoryItem)
+                .where(InventoryItem.account_fingerprint.in_(candidate_fingerprints))
+                .order_by(InventoryItem.id.desc())
+            )
         )
+        if candidate_fingerprints
+        else []
     )
     existing_by_fingerprint: dict[str, InventoryItem] = {}
     for existing_item in existing_rows:
@@ -63,12 +69,15 @@ async def filter_duplicate_inventory(
     seen_fingerprints: set[str] = set()
     for item, identifier, fingerprint in candidates:
         reason: str | None = None
-        existing_item = existing_by_fingerprint.get(fingerprint)
-        if fingerprint in seen_fingerprints:
-            reason = "duplicate_in_import"
-        elif existing_item is not None:
-            reason = "duplicate_existing"
-        seen_fingerprints.add(fingerprint)
+        existing_item = (
+            existing_by_fingerprint.get(fingerprint) if fingerprint is not None else None
+        )
+        if fingerprint is not None:
+            if fingerprint in seen_fingerprints:
+                reason = "duplicate_in_import"
+            elif existing_item is not None:
+                reason = "duplicate_existing"
+            seen_fingerprints.add(fingerprint)
         if reason is None:
             accepted.append(AcceptedInventoryItem(item, fingerprint))
             continue
@@ -118,8 +127,10 @@ async def backfill_inventory_fingerprints(
                 except (InvalidToken, UnicodeDecodeError, ValueError):
                     logger.warning("Could not fingerprint inventory item %s", item.id)
                     continue
-                item.account_fingerprint = cipher.inventory_fingerprint(plaintext)
-                updated += 1
+                fingerprint = cipher.inventory_fingerprint(plaintext)
+                if fingerprint is not None:
+                    item.account_fingerprint = fingerprint
+                    updated += 1
             await session.commit()
 
 
