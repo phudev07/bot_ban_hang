@@ -11,8 +11,13 @@
           {% for row in import_products %}<option value="{{ row.product.id }}">#{{ row.product.id }} · {{ row.product.name_vi }}{{ ' · TB hàng về đang tắt' if not row.product.stock_notifications_enabled else '' }}</option>{% endfor %}
         </select>
       </label>
-      <label>Dữ liệu kho
-        <textarea name="items" rows="14" placeholder="user1:password1&#10;user2:password2&#10;&#10;Hoặc ngăn dữ liệu nhiều dòng bằng dòng ---" required></textarea>
+      <label class="inventory-items-field">
+        <span class="inventory-field-heading">
+          <span>Dữ liệu kho</span>
+          <output class="inventory-count" data-inventory-count aria-live="polite">0 tài khoản</output>
+        </span>
+        <textarea name="items" rows="14" data-inventory-items placeholder="user1:password1&#10;user2:password2&#10;user3:password3" required></textarea>
+        <small>Mỗi tài khoản một dòng. Dòng trống không được tính vào số lượng.</small>
       </label>
       <label>Giá vốn mỗi tài khoản
         <input name="cost_amount" inputmode="numeric" placeholder="Ví dụ: 35.000" required>
@@ -28,7 +33,7 @@
         <span>Gửi thông báo hàng về sau khi nhập kho</span>
         <small>Không cần nạp tiền vào API. Bot dùng số hàng vừa nhập và giá bán hiện tại; nếu đang Flash Sale sẽ thông báo giá và số suất Flash Sale còn lại.</small>
       </label>
-      <p class="hint">Mỗi dòng là một món. Nếu một món có nhiều dòng, ngăn các món bằng dòng <code>---</code>. Dữ liệu được mã hóa trước khi lưu.</p>
+      <p class="hint">Số lượng phía trên cập nhật ngay khi nhập hoặc dán dữ liệu. Dữ liệu được mã hóa trước khi lưu.</p>
       <button class="button primary" type="submit" {{ 'disabled' if not import_products else '' }}>Mã hóa và nhập kho</button>
     </form>
   </section>
@@ -84,4 +89,29 @@
   </table></div>
   {{ render_pager(pager, 'mục kho') }}
 </section>
+<script>
+  (() => {
+    const textarea = document.querySelector('[data-inventory-items]');
+    const counter = document.querySelector('[data-inventory-count]');
+    if (!textarea || !counter) return;
+
+    const countInventoryItems = (value) => {
+      const normalized = value.replace(/\r\n?/g, '\n').trim();
+      if (!normalized) return 0;
+      if (normalized.includes('\n---\n')) {
+        return normalized.split('\n---\n').filter((item) => item.trim()).length;
+      }
+      return normalized.split('\n').filter((line) => line.trim()).length;
+    };
+
+    const updateCounter = () => {
+      const count = countInventoryItems(textarea.value);
+      counter.textContent = `${count.toLocaleString('vi-VN')} tài khoản`;
+      counter.classList.toggle('has-items', count > 0);
+    };
+
+    textarea.addEventListener('input', updateCounter);
+    updateCounter();
+  })();
+</script>
 {% endblock %}

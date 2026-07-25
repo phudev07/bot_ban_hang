@@ -86,6 +86,11 @@ code { padding: 2px 5px; border-radius: 5px; background: #ede9df; color: #39413d
 .form-grid.cols-3 { grid-template-columns: repeat(3, minmax(0,1fr)); }
 .form-grid label { display: grid; gap: 7px; color: #46504a; font-size: 12px; font-weight: 700; }
 .form-grid label.wide { grid-column: 1 / -1; }
+.inventory-field-heading { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.inventory-count { display: inline-flex; min-width: 92px; justify-content: center; padding: 5px 9px; border: 1px solid #d8ddd5; border-radius: 999px; color: var(--muted); background: #f3f4ef; font-size: 11px; font-weight: 700; transition: .15s; }
+.inventory-count.has-items { border-color: #b7d7c9; color: #0e6547; background: #e0f1e9; }
+.inventory-items-field textarea { font-family: "SFMono-Regular", Consolas, monospace; line-height: 1.55; }
+.inventory-items-field small { color: var(--muted); font-weight: 500; }
 .api-dependent-field { transition: opacity .15s ease; }
 .api-dependent-field.is-disabled { opacity: .52; }
 .api-dependent-field.is-disabled input { cursor: not-allowed; background: #ece9e1; }

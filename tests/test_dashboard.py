@@ -1491,6 +1491,9 @@ def test_admin_can_import_recovered_external_inventory(tmp_path) -> None:
         assert 'name="cost_amount"' in inventory_page.text
         assert 'name="lock_sale_price"' in inventory_page.text
         assert 'name="notify_stock_arrival"' in inventory_page.text
+        assert 'data-inventory-items' in inventory_page.text
+        assert 'data-inventory-count' in inventory_page.text
+        assert "Mỗi tài khoản một dòng" in inventory_page.text
         csrf = re.search(r'name="csrf" value="([^"]+)"', inventory_page.text).group(1)
         imported = client.post(
             "/admin/inventory",
