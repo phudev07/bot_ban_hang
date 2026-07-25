@@ -8,6 +8,8 @@ from app.utils import (
     build_sepay_qr_url,
     find_deposit_code,
     format_vnd,
+    inventory_account_identity,
+    normalize_inventory_identity,
     parse_vnd,
     verify_sepay_hmac,
 )
@@ -41,6 +43,22 @@ def test_secret_cipher_round_trip() -> None:
     encrypted = cipher.encrypt("user:password")
     assert "user:password" not in encrypted
     assert cipher.decrypt(encrypted) == "user:password"
+
+
+def test_inventory_identity_and_fingerprint_ignore_password_and_case() -> None:
+    cipher = SecretCipher(Fernet.generate_key().decode())
+    assert inventory_account_identity("Email: User@Example.com\nPassword: secret") == (
+        "User@Example.com"
+    )
+    assert normalize_inventory_identity(" USER@example.com | first-password ") == (
+        "user@example.com"
+    )
+    assert cipher.inventory_fingerprint("User@Example.com|first-password") == (
+        cipher.inventory_fingerprint("user@example.com|different-password")
+    )
+    assert cipher.inventory_fingerprint("other@example.com|first-password") != (
+        cipher.inventory_fingerprint("user@example.com|first-password")
+    )
 
 
 def test_verify_sepay_hmac() -> None:

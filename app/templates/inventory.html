@@ -40,6 +40,24 @@
   </section>
 </div>
 <section class="panel">
+  <div class="panel-head"><div><span>DUPLICATE CHECK</span><h2>Tài khoản nghi ngờ / trùng</h2></div><small>{{ duplicate_alert_count }} cảnh báo · hiện 100 cảnh báo mới nhất</small></div>
+  <p class="hint">Các tài khoản trong bảng này đã bị bỏ qua, không được cộng vào kho. Định danh được mã hóa trong database và chỉ giải mã khi Admin mở trang này.</p>
+  <div class="table-wrap"><table>
+    <thead><tr><th>Thời gian</th><th>Tài khoản nghi ngờ</th><th>Lý do</th><th>Sản phẩm đang nhập</th><th>Đã thấy tại</th></tr></thead>
+    <tbody>
+      {% for row in duplicate_rows %}
+      <tr>
+        <td>{{ row.alert.created_at|localtime }}<small>Cảnh báo #{{ row.alert.id }}</small></td>
+        <td><code>{{ row.identifier }}</code></td>
+        <td><span class="status off">{{ 'Trùng trong chính lần nhập này' if row.alert.reason == 'duplicate_in_import' else 'Đã tồn tại trong kho/lịch sử bán' }}</span></td>
+        <td>{{ row.product.name_vi if row.product else 'Sản phẩm đã xóa' }}<small>#{{ row.alert.product_id }}</small></td>
+        <td>{% if row.existing_item %}Kho #{{ row.existing_item.id }} · {{ row.existing_product.name_vi if row.existing_product else 'Sản phẩm đã xóa' }}<small>{{ 'Còn kho' if row.existing_item.status == 'available' else 'Đã bán' }}</small>{% else %}Dòng trước trong cùng lần nhập{% endif %}</td>
+      </tr>
+      {% else %}<tr><td colspan="5" class="empty">Chưa phát hiện tài khoản trùng.</td></tr>{% endfor %}
+    </tbody>
+  </table></div>
+</section>
+<section class="panel">
   <div class="panel-head"><div><span>INVENTORY LOG</span><h2>Toàn bộ lịch sử kho</h2></div><small>100 mục mỗi trang</small></div>
   <div class="table-wrap"><table>
     <thead><tr><th>ID kho</th><th>Sản phẩm</th><th>Giá vốn</th><th>Trạng thái</th><th>Ngày nhập</th><th>Ngày bán</th><th></th></tr></thead>

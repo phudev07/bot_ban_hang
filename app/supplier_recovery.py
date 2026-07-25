@@ -160,6 +160,7 @@ async def _store_recovered_order(
                     InventoryItem(
                         product_id=product.id,
                         encrypted_secret=cipher.encrypt(account),
+                        account_fingerprint=cipher.inventory_fingerprint(account),
                         cost_amount=unit_price,
                         supplier_order_code=supplier_order_code,
                         supplier_provider="sumistore",

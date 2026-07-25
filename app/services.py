@@ -219,6 +219,7 @@ async def preserve_supplier_purchase_for_resale(
             InventoryItem(
                 product_id=product.id,
                 encrypted_secret=cipher.encrypt(secret_value),
+                account_fingerprint=cipher.inventory_fingerprint(secret_value),
                 cost_amount=unit_cost,
                 supplier_order_code=purchase.order_code or None,
                 supplier_provider=purchase.provider,
@@ -1536,6 +1537,7 @@ async def _purchase_product(
                         item = InventoryItem(
                             product_id=product.id,
                             encrypted_secret=cipher.encrypt(secret_value),
+                            account_fingerprint=cipher.inventory_fingerprint(secret_value),
                             cost_amount=unit_cost,
                             supplier_order_code=purchase.order_code or None,
                             supplier_provider=purchase.provider,
@@ -2581,6 +2583,9 @@ async def _process_sepay_payment(
                                                     product_id=product.id,
                                                     encrypted_secret=cipher.encrypt(
                                                         secret_value
+                                                    ),
+                                                    account_fingerprint=(
+                                                        cipher.inventory_fingerprint(secret_value)
                                                     ),
                                                     cost_amount=unit_cost,
                                                     supplier_order_code=(

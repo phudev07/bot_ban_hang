@@ -184,6 +184,7 @@ async def recover_supplier_order(
             InventoryItem(
                 product_id=product.id,
                 encrypted_secret=cipher.encrypt(account),
+                account_fingerprint=cipher.inventory_fingerprint(account),
                 cost_amount=purchase.unit_price,
                 supplier_order_code=purchase.order_code,
                 supplier_provider=purchase.provider,

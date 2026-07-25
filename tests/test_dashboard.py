@@ -20,6 +20,7 @@ from app.models import (
     Category,
     Deposit,
     DiscountCode,
+    InventoryDuplicateAlert,
     InventoryItem,
     Order,
     PaymentTransaction,
@@ -1507,15 +1508,52 @@ def test_admin_can_import_recovered_external_inventory(tmp_path) -> None:
         assert "Kho nhập" in client.get("/admin/broadcasts?tab=stock").text
         assert "Kho nhập" in client.get("/admin").text
 
+        checked_import = client.post(
+            "/admin/inventory",
+            data={
+                "csrf": csrf,
+                "product_id": str(product_id),
+                "items": (
+                    "MICS.RETRY-6H+5FRUX@ICLOUD.COM|new-password|new-key\n"
+                    "clean-account@example.com|password|key\n"
+                    "clean-account@example.com|another-password|another-key"
+                ),
+                "cost_amount": "9.000",
+            },
+            follow_redirects=False,
+        )
+        assert checked_import.status_code == 303
+        duplicate_page = client.get("/admin/inventory")
+        assert "MICS.RETRY-6H+5FRUX@ICLOUD.COM" in duplicate_page.text
+        assert "clean-account@example.com" in duplicate_page.text
+        assert "Đã tồn tại trong kho/lịch sử bán" in duplicate_page.text
+        assert "Trùng trong chính lần nhập này" in duplicate_page.text
+
     async def verify_database() -> None:
         async with sessions() as session:
-            item = await session.scalar(select(InventoryItem))
-            assert item is not None
-            assert item.product_id == product_id
-            assert item.cost_amount == 8_000
+            items = list(
+                await session.scalars(select(InventoryItem).order_by(InventoryItem.id))
+            )
+            assert len(items) == 2
+            assert items[0].product_id == product_id
+            assert items[0].cost_amount == 8_000
+            assert items[0].account_fingerprint is not None
+            assert items[1].cost_amount == 9_000
+            assert items[1].account_fingerprint is not None
+            alerts = list(
+                await session.scalars(
+                    select(InventoryDuplicateAlert).order_by(InventoryDuplicateAlert.id)
+                )
+            )
+            assert [alert.reason for alert in alerts] == [
+                "duplicate_existing",
+                "duplicate_in_import",
+            ]
+            assert alerts[0].existing_inventory_item_id == items[0].id
+            assert alerts[1].existing_inventory_item_id is None
             product = await session.get(Product, product_id)
             assert product is not None and product.price_lock_enabled is True
-            assert product.external_stock == 6
+            assert product.external_stock == 7
             alert = await session.scalar(select(ProductStockAlert))
             assert alert is not None
             assert alert.provider == "inventory"

@@ -22,6 +22,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from sqlalchemy.orm import aliased
 
 from app.config import Settings
+from app.inventory_dedup import filter_duplicate_inventory
 from app.lehai_suppliers import LeHaiPremiumClient
 from app.models import (
     BalanceAdjustment,
@@ -33,6 +34,7 @@ from app.models import (
     Deposit,
     DiscountCode,
     FlashSaleCampaign,
+    InventoryDuplicateAlert,
     InventoryItem,
     Order,
     PaymentTransaction,
@@ -2541,6 +2543,71 @@ def create_dashboard_router(
                 .limit(ADMIN_PAGE_SIZE)
             )
             recent_items = [{"item": item, "product": product} for item, product in inventory_rows]
+            duplicate_alert_count = int(
+                await session.scalar(select(func.count(InventoryDuplicateAlert.id))) or 0
+            )
+            duplicate_alerts = list(
+                await session.scalars(
+                    select(InventoryDuplicateAlert)
+                    .order_by(InventoryDuplicateAlert.id.desc())
+                    .limit(ADMIN_PAGE_SIZE)
+                )
+            )
+            duplicate_product_ids = {alert.product_id for alert in duplicate_alerts}
+            existing_item_ids = {
+                alert.existing_inventory_item_id
+                for alert in duplicate_alerts
+                if alert.existing_inventory_item_id is not None
+            }
+            existing_items = {
+                item.id: item
+                for item in (
+                    list(
+                        await session.scalars(
+                            select(InventoryItem).where(InventoryItem.id.in_(existing_item_ids))
+                        )
+                    )
+                    if existing_item_ids
+                    else []
+                )
+            }
+            duplicate_product_ids.update(item.product_id for item in existing_items.values())
+            duplicate_products = {
+                product.id: product
+                for product in (
+                    list(
+                        await session.scalars(
+                            select(Product).where(Product.id.in_(duplicate_product_ids))
+                        )
+                    )
+                    if duplicate_product_ids
+                    else []
+                )
+            }
+            duplicate_rows = []
+            for alert in duplicate_alerts:
+                try:
+                    identifier = cipher.decrypt(alert.encrypted_identifier)
+                except Exception:
+                    identifier = "Không đọc được định danh"
+                existing_item = (
+                    existing_items.get(alert.existing_inventory_item_id)
+                    if alert.existing_inventory_item_id is not None
+                    else None
+                )
+                duplicate_rows.append(
+                    {
+                        "alert": alert,
+                        "identifier": identifier,
+                        "product": duplicate_products.get(alert.product_id),
+                        "existing_item": existing_item,
+                        "existing_product": (
+                            duplicate_products.get(existing_item.product_id)
+                            if existing_item is not None
+                            else None
+                        ),
+                    }
+                )
         return templates.TemplateResponse(
             request,
             "inventory.html",
@@ -2551,6 +2618,8 @@ def create_dashboard_router(
                 products=products,
                 import_products=products,
                 recent_items=recent_items,
+                duplicate_rows=duplicate_rows,
+                duplicate_alert_count=duplicate_alert_count,
                 pager=pager,
             ),
         )
@@ -2575,6 +2644,8 @@ def create_dashboard_router(
             flash(request, "Giá vốn mỗi tài khoản không hợp lệ.", "error")
             return RedirectResponse("/admin/inventory", status_code=303)
         lock_applied = False
+        duplicate_count = 0
+        accepted_items: list[str] = []
         async with session_factory() as session:
             product = await session.scalar(
                 select(Product).where(Product.id == product_id).with_for_update()
@@ -2586,6 +2657,23 @@ def create_dashboard_router(
                 or not parsed_items
             ):
                 flash(request, "Sản phẩm hoặc dữ liệu kho không hợp lệ.", "error")
+                return RedirectResponse("/admin/inventory", status_code=303)
+            duplicate_check = await filter_duplicate_inventory(
+                session,
+                cipher,
+                product_id=product.id,
+                raw_items=parsed_items,
+            )
+            duplicate_count = duplicate_check.duplicate_count
+            accepted_items = [candidate.raw_item for candidate in duplicate_check.accepted]
+            if not accepted_items:
+                await session.commit()
+                flash(
+                    request,
+                    f"Không có tài khoản sạch để nhập; đã bỏ qua {duplicate_count} "
+                    "tài khoản nghi ngờ/trùng. Xem bảng cảnh báo bên dưới.",
+                    "error",
+                )
                 return RedirectResponse("/admin/inventory", status_code=303)
             local_stock_before = int(
                 await session.scalar(
@@ -2606,10 +2694,11 @@ def create_dashboard_router(
                 [
                     InventoryItem(
                         product_id=product.id,
-                        encrypted_secret=cipher.encrypt(item),
+                        encrypted_secret=cipher.encrypt(candidate.raw_item),
+                        account_fingerprint=candidate.account_fingerprint,
                         cost_amount=parsed_cost,
                     )
-                    for item in parsed_items
+                    for candidate in duplicate_check.accepted
                 ]
             )
             await session.flush()
@@ -2660,7 +2749,11 @@ def create_dashboard_router(
         lock_note = " và đã khóa giá bán" if lock_applied else ""
         flash(
             request,
-            f"Đã thêm {len(parsed_items)} sản phẩm vào kho với giá vốn "
+            f"Đã thêm {len(accepted_items)} sản phẩm vào kho với giá vốn "
+            f"{format_vnd(parsed_cost)}/tài khoản{lock_note}{notification_note}"
+            f"; bỏ qua {duplicate_count} tài khoản nghi ngờ/trùng."
+            if duplicate_count
+            else f"Đã thêm {len(accepted_items)} sản phẩm vào kho với giá vốn "
             f"{format_vnd(parsed_cost)}/tài khoản{lock_note}{notification_note}.",
         )
         return RedirectResponse("/admin/inventory", status_code=303)

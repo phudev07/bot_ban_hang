@@ -31,6 +31,7 @@ from app.lehai_suppliers import (
     ensure_lehai_products,
     sync_lehai_products,
 )
+from app.inventory_dedup import backfill_inventory_fingerprints
 from app.models import ApiRequestAudit, Category, Product
 from app.payment_expiry import payment_expiry_worker
 from app.rate_limit import BotSpamProtectionMiddleware
@@ -478,6 +479,18 @@ async def initialize_database(engine, session_factory, seed_demo_data: bool) -> 
             text(
                 "ALTER TABLE inventory_items ADD COLUMN IF NOT EXISTS "
                 "cost_amount BIGINT NOT NULL DEFAULT 0"
+            )
+        )
+        await connection.execute(
+            text(
+                "ALTER TABLE inventory_items ADD COLUMN IF NOT EXISTS "
+                "account_fingerprint VARCHAR(64) NULL"
+            )
+        )
+        await connection.execute(
+            text(
+                "CREATE INDEX IF NOT EXISTS ix_inventory_items_account_fingerprint "
+                "ON inventory_items (account_fingerprint)"
             )
         )
         await connection.execute(
@@ -1177,6 +1190,12 @@ async def main() -> None:
     rentsim_client = create_rentsim_client(settings)
 
     cipher = SecretCipher(settings.inventory_encryption_key.get_secret_value())
+    fingerprinted_items = await backfill_inventory_fingerprints(session_factory, cipher)
+    if fingerprinted_items:
+        logging.getLogger(__name__).info(
+            "Backfilled inventory account fingerprints: count=%s",
+            fingerprinted_items,
+        )
     bot = Bot(
         token=settings.bot_token.get_secret_value(),
         default=DefaultBotProperties(parse_mode=ParseMode.HTML),

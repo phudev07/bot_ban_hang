@@ -313,6 +313,9 @@ class InventoryItem(Base):
     id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
     product_id: Mapped[int] = mapped_column(ForeignKey("products.id", ondelete="CASCADE"))
     encrypted_secret: Mapped[str] = mapped_column(Text)
+    account_fingerprint: Mapped[str | None] = mapped_column(
+        String(64), nullable=True, index=True
+    )
     cost_amount: Mapped[int] = mapped_column(BigInteger, default=0)
     supplier_order_code: Mapped[str | None] = mapped_column(
         String(64), nullable=True, index=True
@@ -326,6 +329,24 @@ class InventoryItem(Base):
     sold_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
     product: Mapped[Product] = relationship(back_populates="inventory")
+
+
+class InventoryDuplicateAlert(Base):
+    __tablename__ = "inventory_duplicate_alerts"
+
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    product_id: Mapped[int] = mapped_column(
+        ForeignKey("products.id", ondelete="CASCADE"), index=True
+    )
+    existing_inventory_item_id: Mapped[int | None] = mapped_column(
+        ForeignKey("inventory_items.id", ondelete="SET NULL"), nullable=True, index=True
+    )
+    account_fingerprint: Mapped[str] = mapped_column(String(64), index=True)
+    encrypted_identifier: Mapped[str] = mapped_column(Text)
+    reason: Mapped[str] = mapped_column(String(32), index=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), index=True
+    )
 
 
 class Order(Base):

@@ -10,10 +10,11 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.broadcasts import queue_broadcast
 from app.config import Settings
+from app.inventory_dedup import filter_duplicate_inventory
 from app.models import Category, InventoryItem, Order, Product, User
 from app.states import BroadcastStates
 from app.suppliers import EXTERNAL_FULFILLMENT_SOURCES
-from app.utils import SecretCipher, format_vnd
+from app.utils import SecretCipher, format_vnd, parse_vnd
 
 
 def create_admin_router(settings: Settings, cipher: SecretCipher) -> Router:
@@ -86,7 +87,7 @@ def create_admin_router(settings: Settings, cipher: SecretCipher) -> Router:
             "/products\n"
             "/addcategory Tên danh mục\n"
             "/addproduct category_id | tên | giá | mô tả\n"
-            "/addstock product_id rồi xuống dòng nhập hàng; ngăn các món bằng dòng ---\n"
+            "/addstock product_id | giá vốn rồi xuống dòng nhập hàng; ngăn bằng ---\n"
             "/thongbao - gửi thông báo tới tất cả người đã /start"
         )
 
@@ -298,27 +299,70 @@ def create_admin_router(settings: Settings, cipher: SecretCipher) -> Router:
             return
         raw = (message.text or "").partition(" ")[2].strip()
         first_line, separator, stock_text = raw.partition("\n")
-        if not separator or not first_line.isdigit() or not stock_text.strip():
+        header = [part.strip() for part in first_line.split("|", 1)]
+        cost_amount = parse_vnd(header[1]) if len(header) == 2 else None
+        if (
+            not separator
+            or len(header) != 2
+            or not header[0].isdigit()
+            or cost_amount is None
+            or not stock_text.strip()
+        ):
             await message.answer(
-                "Cú pháp:\n<code>/addstock 1\naccount:password\n---\nkey-thu-hai</code>"
+                "Cú pháp:\n<code>/addstock 4 | 35.000\n"
+                "account:password\n---\nkey-thu-hai</code>"
             )
             return
-        product = await session.get(Product, int(first_line))
+        product = await session.scalar(
+            select(Product).where(Product.id == int(header[0])).with_for_update()
+        )
         if product is None:
             await message.answer("Không tìm thấy sản phẩm.")
             return
         items = [item.strip() for item in stock_text.split("\n---\n") if item.strip()]
+        duplicate_check = await filter_duplicate_inventory(
+            session,
+            cipher,
+            product_id=product.id,
+            raw_items=items,
+        )
         session.add_all(
             [
-                InventoryItem(product_id=product.id, encrypted_secret=cipher.encrypt(item))
-                for item in items
+                InventoryItem(
+                    product_id=product.id,
+                    encrypted_secret=cipher.encrypt(candidate.raw_item),
+                    account_fingerprint=candidate.account_fingerprint,
+                    cost_amount=cost_amount,
+                )
+                for candidate in duplicate_check.accepted
             ]
         )
+        await session.flush()
+        if product.fulfillment_source in EXTERNAL_FULFILLMENT_SOURCES:
+            local_stock = int(
+                await session.scalar(
+                    select(func.count(InventoryItem.id)).where(
+                        InventoryItem.product_id == product.id,
+                        InventoryItem.status == "available",
+                    )
+                )
+                or 0
+            )
+            product.external_stock = local_stock + max(
+                0,
+                int(product.supplier_available_stock),
+            )
         await session.commit()
-        try:
-            await message.delete()
-        except Exception:
-            pass
-        await message.answer(f"Đã thêm {len(items)} món vào kho của {escape(product.name_vi)}.")
+        if duplicate_check.accepted:
+            try:
+                await message.delete()
+            except Exception:
+                pass
+        await message.answer(
+            f"Đã thêm {len(duplicate_check.accepted)} món sạch vào kho của "
+            f"{escape(product.name_vi)} với vốn {format_vnd(cost_amount)}/món; "
+            f"bỏ qua {duplicate_check.duplicate_count} món nghi ngờ/trùng. "
+            "Chi tiết nằm tại Admin → Nhập kho."
+        )
 
     return router

@@ -2,6 +2,7 @@ import hashlib
 import hmac
 import re
 import time
+import unicodedata
 from html import escape
 from urllib.parse import urlencode
 
@@ -65,12 +66,49 @@ def safe_html(value: object) -> str:
     return escape(str(value), quote=True)
 
 
+def inventory_account_identity(raw_item: str) -> str:
+    """Extract the account/key identifier without retaining its password or recovery data."""
+    first_line = next((line.strip() for line in raw_item.splitlines() if line.strip()), "")
+    if not first_line:
+        return ""
+    labelled = re.match(
+        r"^(?:e-?mail|mail|user(?:name)?|account|tài\s*khoản)\s*[:=]\s*(.+)$",
+        first_line,
+        flags=re.IGNORECASE,
+    )
+    candidate = labelled.group(1).strip() if labelled else first_line
+    for delimiter in ("|", "\t", ",", ";"):
+        if delimiter in candidate:
+            candidate = candidate.split(delimiter, 1)[0].strip()
+            break
+    else:
+        if ":" in candidate and not re.match(r"^[a-z][a-z0-9+.-]*://", candidate, re.I):
+            candidate = candidate.split(":", 1)[0].strip()
+    return candidate.strip().strip("\"'")
+
+
+def normalize_inventory_identity(raw_item: str) -> str:
+    identity = inventory_account_identity(raw_item)
+    return unicodedata.normalize("NFKC", identity).strip().casefold()
+
+
 class SecretCipher:
     def __init__(self, key: str) -> None:
         self.fernet = Fernet(key.encode())
+        self.inventory_fingerprint_key = hashlib.sha256(
+            b"inventory-account-fingerprint\0" + key.encode()
+        ).digest()
 
     def encrypt(self, plaintext: str) -> str:
         return self.fernet.encrypt(plaintext.encode()).decode()
 
     def decrypt(self, ciphertext: str) -> str:
         return self.fernet.decrypt(ciphertext.encode()).decode()
+
+    def inventory_fingerprint(self, raw_item: str) -> str:
+        normalized = normalize_inventory_identity(raw_item)
+        return hmac.new(
+            self.inventory_fingerprint_key,
+            normalized.encode(),
+            hashlib.sha256,
+        ).hexdigest()
