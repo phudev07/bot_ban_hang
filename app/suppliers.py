@@ -906,6 +906,7 @@ async def sync_sumistore_products(
                 select(Product).where(
                     Product.fulfillment_source == "sumistore",
                     Product.active.is_(True),
+                    Product.archived_at.is_(None),
                 )
             )
         )

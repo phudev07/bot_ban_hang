@@ -530,6 +530,7 @@ async def _route_lehai_topup_alert_to_gpt_plus(
             Product.fulfillment_source == "sumistore",
             Product.supplier_product_id == GPT_PLUS_SHOP_PRODUCT_ID,
             Product.active.is_(True),
+            Product.archived_at.is_(None),
             Product.force_out_of_stock.is_(False),
         )
         .with_for_update()
@@ -857,6 +858,7 @@ async def sync_lehai_products(
                 select(Product).where(
                     Product.fulfillment_source == "lehai",
                     Product.active.is_(True),
+                    Product.archived_at.is_(None),
                 )
             )
         )

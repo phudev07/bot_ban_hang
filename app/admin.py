@@ -226,7 +226,13 @@ def create_admin_router(settings: Settings, cipher: SecretCipher) -> Router:
     async def list_products(message: Message, session: AsyncSession) -> None:
         if await reject_if_not_admin(message):
             return
-        products = list(await session.scalars(select(Product).order_by(Product.id)))
+        products = list(
+            await session.scalars(
+                select(Product)
+                .where(Product.archived_at.is_(None))
+                .order_by(Product.id)
+            )
+        )
         if not products:
             await message.answer("Chưa có sản phẩm.")
             return

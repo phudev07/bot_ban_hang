@@ -1108,7 +1108,12 @@ async def _purchase_product(
             product = await session.scalar(
                 select(Product).where(Product.id == product_id).with_for_update()
             )
-            if user is None or product is None or not product.active:
+            if (
+                user is None
+                or product is None
+                or not product.active
+                or product.archived_at is not None
+            ):
                 return PurchaseResult(False, "not_found")
             if product.force_out_of_stock:
                 return PurchaseResult(False, "out_of_stock")
@@ -2829,8 +2834,10 @@ async def active_categories(session: AsyncSession) -> list[Category]:
         select(Category)
         .where(
             Category.active.is_(True),
+            Category.archived_at.is_(None),
             Category.products.any(
                 Product.active.is_(True)
+                & Product.archived_at.is_(None)
                 & Product.fulfillment_source.in_(SELLABLE_FULFILLMENT_SOURCES)
                 & (Product.product_type == "account")
             ),
@@ -2845,6 +2852,10 @@ async def active_products(session: AsyncSession, category_id: int | None = None)
         select(Product)
         .where(
             Product.active.is_(True),
+            Product.archived_at.is_(None),
+            Product.category.has(
+                Category.active.is_(True) & Category.archived_at.is_(None)
+            ),
             Product.fulfillment_source.in_(SELLABLE_FULFILLMENT_SOURCES),
             Product.product_type == "account",
         )

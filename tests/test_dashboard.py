@@ -32,6 +32,7 @@ from app.models import (
     User,
     WalletTransaction,
 )
+from app.services import active_products
 from app.suppliers import SupplierSnapshot
 from app.utils import SecretCipher
 
@@ -62,6 +63,121 @@ class DashboardSupplier:
             source_stock=self.stock,
             owner_balance=self.balance,
         )
+
+
+def test_archived_catalog_items_disappear_but_keep_financial_history(tmp_path) -> None:
+    engine, sessions, ids = None, None, None
+
+    async def initialize():
+        nonlocal engine, sessions, ids
+        database_path = (tmp_path / "dashboard-archive-product.db").as_posix()
+        engine = create_async_engine(f"sqlite+aiosqlite:///{database_path}")
+        async with engine.begin() as connection:
+            await connection.run_sync(Base.metadata.create_all)
+        sessions = async_sessionmaker(engine, expire_on_commit=False)
+        async with sessions() as session:
+            category = Category(name_vi="Claude Max", name_en="Claude Max")
+            user = User(telegram_id=123456, full_name="Refunded buyer")
+            session.add_all([category, user])
+            await session.flush()
+            product = Product(
+                category_id=category.id,
+                name_vi="Claude Max 20 KBH",
+                name_en="Claude Max 20 KBH",
+                price=49_000,
+                fulfillment_source="local",
+            )
+            session.add(product)
+            await session.flush()
+            item = InventoryItem(
+                product_id=product.id,
+                encrypted_secret="historical-delivery",
+                cost_amount=39_000,
+                status="sold",
+                sold_at=datetime.now(UTC),
+            )
+            session.add(item)
+            await session.flush()
+            session.add_all(
+                [
+                    Order(
+                        user_id=user.telegram_id,
+                        product_id=product.id,
+                        inventory_item_id=item.id,
+                        amount=49_000,
+                        cost_amount=39_000,
+                        status="completed",
+                        delivered_at=datetime.now(UTC),
+                    ),
+                    Deposit(
+                        user_id=user.telegram_id,
+                        code="NAPCLAUDETEST",
+                        requested_amount=49_000,
+                        paid_amount=49_000,
+                        payment_kind="direct_purchase",
+                        product_id=product.id,
+                        status="paid",
+                    ),
+                ]
+            )
+            await session.commit()
+            ids = (category.id, product.id)
+
+    asyncio.run(initialize())
+    assert engine is not None and sessions is not None and ids is not None
+    category_id, product_id = ids
+    encryption_key = Fernet.generate_key().decode()
+    settings = Settings(
+        _env_file=None,
+        bot_token="123456:ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghi",
+        inventory_encryption_key=encryption_key,
+        dashboard_enabled=True,
+        dashboard_username="admin",
+        dashboard_password_hash=hash_dashboard_password("dashboard-password"),
+        dashboard_session_secret="session-secret-long-enough-for-tests",
+    )
+    app = create_api(settings, sessions, FakeBot(), SecretCipher(encryption_key))  # type: ignore[arg-type]
+
+    with TestClient(app, base_url="https://testserver") as client:
+        client.post(
+            "/admin/login",
+            data={"username": "admin", "password": "dashboard-password"},
+        )
+        products_page = client.get("/admin/products")
+        csrf = re.search(r'name="csrf" value="([^"]+)"', products_page.text).group(1)  # type: ignore[union-attr]
+        assert "Claude Max 20 KBH" in products_page.text
+
+        archived_product = client.post(
+            f"/admin/products/{product_id}/delete",
+            data={"csrf": csrf},
+            follow_redirects=False,
+        )
+        assert archived_product.status_code == 303
+        assert "Claude Max 20 KBH" not in client.get("/admin/products").text
+        assert "Claude Max 20 KBH" in client.get("/admin/orders").text
+
+        archived_category = client.post(
+            f"/admin/categories/{category_id}/delete",
+            data={"csrf": csrf},
+            follow_redirects=False,
+        )
+        assert archived_category.status_code == 303
+        assert "Claude Max" not in client.get("/admin/categories").text
+
+    async def verify_history() -> None:
+        async with sessions() as session:
+            category = await session.get(Category, category_id)
+            product = await session.get(Product, product_id)
+            assert category is not None and category.archived_at is not None
+            assert product is not None and product.archived_at is not None
+            assert product.active is False
+            assert await active_products(session) == []
+            assert int(await session.scalar(select(func.count(Order.id))) or 0) == 1
+            assert int(await session.scalar(select(func.count(Deposit.id))) or 0) == 1
+            assert int(await session.scalar(select(func.count(InventoryItem.id))) or 0) == 1
+
+    asyncio.run(verify_history())
+    asyncio.run(engine.dispose())
 
 
 def test_grouped_orders_show_mixed_supplier_and_manual_inventory_sources() -> None:

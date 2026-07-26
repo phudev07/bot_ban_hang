@@ -416,6 +416,7 @@ def create_public_api_router(
             if (
                 product is None
                 or not product.active
+                or product.archived_at is not None
                 or product.product_type != "account"
                 or product.fulfillment_source not in SELLABLE_FULFILLMENT_SOURCES
             ):
@@ -476,6 +477,7 @@ def create_public_api_router(
                     select(Product.id).where(
                         Product.id == body.product_id,
                         Product.active.is_(True),
+                        Product.archived_at.is_(None),
                         Product.product_type == "account",
                         Product.fulfillment_source.in_(SELLABLE_FULFILLMENT_SOURCES),
                     )

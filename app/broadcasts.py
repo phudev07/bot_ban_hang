@@ -880,6 +880,7 @@ async def _claim_sale_alert(
         for alert, product in rows:
             if (
                 not product.active
+                or product.archived_at is not None
                 or getattr(product, "sale_notifications_enabled", True) is False
                 or product.price_lock_enabled
                 or product.price != alert.sale_price_after
@@ -1007,6 +1008,7 @@ async def _claim_stock_alert(
             inventory_alert = alert.provider == INVENTORY_STOCK_ALERT_PROVIDER
             if (
                 not product.active
+                or product.archived_at is not None
                 or getattr(product, "stock_notifications_enabled", True) is False
                 or (
                     not inventory_alert
@@ -1242,6 +1244,7 @@ async def _claim_flash_sale(
                 campaign.status != "active"
                 or product is None
                 or not product.active
+                or product.archived_at is not None
                 or unsafe_status is not None
             ):
                 campaign.notification_status = "superseded"

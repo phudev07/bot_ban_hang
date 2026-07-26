@@ -1163,7 +1163,11 @@ def create_dashboard_router(
             return redirect_to_login()
         async with session_factory() as session:
             rows = list(
-                await session.scalars(select(Category).order_by(Category.position, Category.id))
+                await session.scalars(
+                    select(Category)
+                    .where(Category.archived_at.is_(None))
+                    .order_by(Category.position, Category.id)
+                )
             )
         return templates.TemplateResponse(
             request,
@@ -1257,7 +1261,10 @@ def create_dashboard_router(
             category = await session.get(Category, category_id)
             product_count = int(
                 await session.scalar(
-                    select(func.count(Product.id)).where(Product.category_id == category_id)
+                    select(func.count(Product.id)).where(
+                        Product.category_id == category_id,
+                        Product.archived_at.is_(None),
+                    )
                 )
                 or 0
             )
@@ -1271,7 +1278,17 @@ def create_dashboard_router(
                     "error",
                 )
                 return RedirectResponse("/admin/categories", status_code=303)
-            await session.delete(category)
+            historical_product_count = int(
+                await session.scalar(
+                    select(func.count(Product.id)).where(Product.category_id == category_id)
+                )
+                or 0
+            )
+            if historical_product_count:
+                category.active = False
+                category.archived_at = datetime.now(UTC)
+            else:
+                await session.delete(category)
             await session.commit()
         flash(request, "Đã xóa gian hàng trống.")
         return RedirectResponse("/admin/categories", status_code=303)
@@ -1308,6 +1325,8 @@ def create_dashboard_router(
             .outerjoin(stock_query, stock_query.c.product_id == Product.id)
             .outerjoin(coupon_query, coupon_query.c.product_id == Product.id)
             .where(
+                Product.archived_at.is_(None),
+                Category.archived_at.is_(None),
                 Product.fulfillment_source.in_(SELLABLE_FULFILLMENT_SOURCES),
                 Product.product_type == "account",
             )
@@ -1364,7 +1383,11 @@ def create_dashboard_router(
         async with session_factory() as session:
             products = await product_rows(session)
             categories = list(
-                await session.scalars(select(Category).order_by(Category.position, Category.id))
+                await session.scalars(
+                    select(Category)
+                    .where(Category.archived_at.is_(None))
+                    .order_by(Category.position, Category.id)
+                )
             )
         gpt_row = next(
             (
@@ -1474,7 +1497,8 @@ def create_dashboard_router(
             flash(request, "Thông tin sản phẩm không hợp lệ.", "error")
             return RedirectResponse("/admin/products", status_code=303)
         async with session_factory() as session:
-            if await session.get(Category, category_id) is None:
+            category = await session.get(Category, category_id)
+            if category is None or category.archived_at is not None:
                 flash(request, "Gian hàng không tồn tại.", "error")
                 return RedirectResponse("/admin/products", status_code=303)
             session.add(
@@ -1522,7 +1546,11 @@ def create_dashboard_router(
         async with session_factory() as session:
             product = await session.get(Product, product_id)
             categories = list(
-                await session.scalars(select(Category).order_by(Category.position, Category.id))
+                await session.scalars(
+                    select(Category)
+                    .where(Category.archived_at.is_(None))
+                    .order_by(Category.position, Category.id)
+                )
             )
             local_stock = (
                 int(
@@ -1539,6 +1567,7 @@ def create_dashboard_router(
             )
         if (
             product is None
+            or product.archived_at is not None
             or product.fulfillment_source not in SELLABLE_FULFILLMENT_SOURCES
             or product.product_type != "account"
         ):
@@ -1605,6 +1634,8 @@ def create_dashboard_router(
             if (
                 product is None
                 or category is None
+                or product.archived_at is not None
+                or category.archived_at is not None
                 or not normalized_name
                 or not parsed_price
                 or normalized_type is None
@@ -1781,6 +1812,7 @@ def create_dashboard_router(
             )
             if (
                 product is None
+                or product.archived_at is not None
                 or product.product_type != "account"
                 or product.fulfillment_source not in SELLABLE_FULFILLMENT_SOURCES
             ):
@@ -1853,13 +1885,62 @@ def create_dashboard_router(
             if product is None:
                 return RedirectResponse("/admin/products", status_code=303)
             if order_count or payment_count:
+                now = datetime.now(UTC)
+                product.active = False
+                product.archived_at = now
+                product.force_out_of_stock = True
+                product.sale_notifications_enabled = False
+                product.stock_notifications_enabled = False
+                await session.execute(
+                    delete(InventoryItem).where(
+                        InventoryItem.product_id == product_id,
+                        InventoryItem.status == "available",
+                    )
+                )
+                await session.execute(
+                    update(DiscountCode)
+                    .where(DiscountCode.product_id == product_id)
+                    .values(active=False)
+                )
+                await session.execute(
+                    update(QuantityDiscount)
+                    .where(QuantityDiscount.product_id == product_id)
+                    .values(active=False)
+                )
+                await session.execute(
+                    update(ProductPriceAlert)
+                    .where(
+                        ProductPriceAlert.product_id == product_id,
+                        ProductPriceAlert.status.in_(("pending", "sending")),
+                    )
+                    .values(status="superseded")
+                )
+                await session.execute(
+                    update(ProductStockAlert)
+                    .where(
+                        ProductStockAlert.product_id == product_id,
+                        ProductStockAlert.status.in_(("pending", "sending")),
+                    )
+                    .values(status="superseded")
+                )
+                await session.execute(
+                    update(FlashSaleCampaign)
+                    .where(
+                        FlashSaleCampaign.product_id == product_id,
+                        FlashSaleCampaign.status == "active",
+                    )
+                    .values(
+                        status="cancelled",
+                        ended_at=now,
+                        notification_status="superseded",
+                    )
+                )
+                await session.commit()
                 flash(
                     request,
-                    "Sản phẩm đã có đơn hoặc thanh toán nên không thể xóa. "
-                    "Hãy tắt trạng thái hiển thị để giữ lịch sử.",
-                    "error",
+                    "Đã xóa sản phẩm khỏi vận hành; lịch sử đơn và thanh toán vẫn được giữ nguyên.",
                 )
-                return RedirectResponse(f"/admin/products/{product_id}", status_code=303)
+                return RedirectResponse("/admin/products", status_code=303)
             await session.execute(
                 delete(InventoryItem).where(InventoryItem.product_id == product_id)
             )
@@ -2060,6 +2141,7 @@ def create_dashboard_router(
                 if (
                     product is None
                     or not product.active
+                    or product.archived_at is not None
                     or product.product_type != "account"
                     or product.fulfillment_source not in SELLABLE_FULFILLMENT_SOURCES
                     or parsed_sale_price >= product.price
@@ -2171,6 +2253,7 @@ def create_dashboard_router(
                 await session.scalars(
                     select(Product)
                     .where(
+                        Product.archived_at.is_(None),
                         Product.fulfillment_source.in_(SELLABLE_FULFILLMENT_SOURCES),
                         Product.product_type == "account",
                     )
@@ -2181,6 +2264,7 @@ def create_dashboard_router(
                 select(DiscountCode, Product)
                 .join(Product, Product.id == DiscountCode.product_id)
                 .where(
+                    Product.archived_at.is_(None),
                     Product.fulfillment_source.in_(SELLABLE_FULFILLMENT_SOURCES),
                     Product.product_type == "account",
                 )
@@ -2196,6 +2280,7 @@ def create_dashboard_router(
                 select(QuantityDiscount, Product)
                 .join(Product, Product.id == QuantityDiscount.product_id)
                 .where(
+                    Product.archived_at.is_(None),
                     Product.fulfillment_source.in_(SELLABLE_FULFILLMENT_SOURCES),
                     Product.product_type == "account",
                 )
@@ -2220,6 +2305,7 @@ def create_dashboard_router(
                     .join(Product, Product.id == DiscountCode.product_id)
                     .where(
                         DiscountCode.active.is_(True),
+                        Product.archived_at.is_(None),
                         Product.fulfillment_source.in_(SELLABLE_FULFILLMENT_SOURCES),
                         Product.product_type == "account",
                     )
@@ -2231,6 +2317,7 @@ def create_dashboard_router(
                     select(func.coalesce(func.sum(DiscountCode.used_count), 0))
                     .join(Product, Product.id == DiscountCode.product_id)
                     .where(
+                        Product.archived_at.is_(None),
                         Product.fulfillment_source.in_(SELLABLE_FULFILLMENT_SOURCES),
                         Product.product_type == "account",
                     )
@@ -2249,6 +2336,7 @@ def create_dashboard_router(
                     .join(Product, Product.id == QuantityDiscount.product_id)
                     .where(
                         QuantityDiscount.active.is_(True),
+                        Product.archived_at.is_(None),
                         Product.fulfillment_source.in_(SELLABLE_FULFILLMENT_SOURCES),
                         Product.product_type == "account",
                     )
@@ -2303,6 +2391,7 @@ def create_dashboard_router(
             product = await session.get(Product, product_id)
             if (
                 product is None
+                or product.archived_at is not None
                 or product.fulfillment_source not in SELLABLE_FULFILLMENT_SOURCES
                 or product.product_type != "account"
             ):
@@ -2440,6 +2529,7 @@ def create_dashboard_router(
             )
             if (
                 product is None
+                or product.archived_at is not None
                 or product.fulfillment_source not in SELLABLE_FULFILLMENT_SOURCES
                 or product.product_type != "account"
                 or duplicate is not None
@@ -2524,6 +2614,7 @@ def create_dashboard_router(
         async with session_factory() as session:
             products = await product_rows(session)
             inventory_conditions = (
+                Product.archived_at.is_(None),
                 Product.fulfillment_source.in_(SELLABLE_FULFILLMENT_SOURCES),
                 Product.product_type == "account",
             )
@@ -2654,6 +2745,7 @@ def create_dashboard_router(
             )
             if (
                 product is None
+                or product.archived_at is not None
                 or product.fulfillment_source not in SELLABLE_FULFILLMENT_SOURCES
                 or product.product_type != "account"
                 or not parsed_items

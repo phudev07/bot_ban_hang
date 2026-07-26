@@ -630,6 +630,24 @@ async def initialize_database(engine, session_factory, seed_demo_data: bool) -> 
             )
         )
         await connection.execute(
+            text("ALTER TABLE categories ADD COLUMN IF NOT EXISTS archived_at TIMESTAMPTZ NULL")
+        )
+        await connection.execute(
+            text("ALTER TABLE products ADD COLUMN IF NOT EXISTS archived_at TIMESTAMPTZ NULL")
+        )
+        await connection.execute(
+            text(
+                "CREATE INDEX IF NOT EXISTS ix_categories_archived_at "
+                "ON categories (archived_at)"
+            )
+        )
+        await connection.execute(
+            text(
+                "CREATE INDEX IF NOT EXISTS ix_products_archived_at "
+                "ON products (archived_at)"
+            )
+        )
+        await connection.execute(
             text(
                 "CREATE INDEX IF NOT EXISTS ix_users_has_started "
                 "ON users (has_started)"

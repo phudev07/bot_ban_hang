@@ -19,7 +19,11 @@ async def release_supplier_price_lock(
         .with_for_update()
         .execution_options(populate_existing=True)
     )
-    if locked_product is None or not locked_product.price_lock_enabled:
+    if (
+        locked_product is None
+        or locked_product.archived_at is not None
+        or not locked_product.price_lock_enabled
+    ):
         return False
 
     locked_product.price_lock_enabled = False
@@ -95,7 +99,7 @@ async def apply_supplier_price(
         .with_for_update()
         .execution_options(populate_existing=True)
     )
-    if locked_product is None:
+    if locked_product is None or locked_product.archived_at is not None:
         return False
 
     previous_supplier_price = locked_product.supplier_price

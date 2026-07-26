@@ -53,6 +53,7 @@ async def queue_inventory_stock_alert(
     if (
         locked_product is None
         or not locked_product.active
+        or locked_product.archived_at is not None
         or locked_product.force_out_of_stock
         or getattr(locked_product, "stock_notifications_enabled", True) is False
     ):
@@ -108,7 +109,7 @@ async def apply_supplier_stock(
         .with_for_update()
         .execution_options(populate_existing=True)
     )
-    if locked_product is None:
+    if locked_product is None or locked_product.archived_at is not None:
         return False
 
     new_stock = max(0, int(supplier_available_stock))
