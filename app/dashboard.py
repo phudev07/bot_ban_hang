@@ -2063,15 +2063,11 @@ def create_dashboard_router(
                     or product.product_type != "account"
                     or product.fulfillment_source not in SELLABLE_FULFILLMENT_SOURCES
                     or parsed_sale_price >= product.price
-                    or (
-                        product.fulfillment_source in EXTERNAL_FULFILLMENT_SOURCES
-                        and parsed_sale_price < int(product.supplier_price or 0)
-                    )
                 ):
                     flash(
                         request,
-                        "Sản phẩm không hợp lệ; giá sale phải thấp hơn giá bán nhưng "
-                        "không được thấp hơn giá vốn API hiện tại.",
+                        "Sản phẩm không hợp lệ; giá sale phải lớn hơn 0 và thấp hơn "
+                        "giá bán hiện tại.",
                         "error",
                     )
                     return RedirectResponse("/admin/flash-sales", status_code=303)
@@ -2121,6 +2117,12 @@ def create_dashboard_router(
                         product_id=product.id,
                         original_price=product.price,
                         sale_price=parsed_sale_price,
+                        supplier_price_at_start=(
+                            int(product.supplier_price)
+                            if product.fulfillment_source in EXTERNAL_FULFILLMENT_SOURCES
+                            and product.supplier_price is not None
+                            else None
+                        ),
                         total_quantity=total_quantity,
                         message_text=campaign_message,
                         telegram_photo_file_id=telegram_photo_file_id,

@@ -160,6 +160,12 @@ async def initialize_database(engine, session_factory, seed_demo_data: bool) -> 
         )
         await connection.execute(
             text(
+                "ALTER TABLE flash_sale_campaigns ADD COLUMN IF NOT EXISTS "
+                "supplier_price_at_start BIGINT NULL"
+            )
+        )
+        await connection.execute(
+            text(
                 "ALTER TABLE orders ADD COLUMN IF NOT EXISTS "
                 "flash_sale_id INTEGER NULL REFERENCES flash_sale_campaigns(id) "
                 "ON DELETE SET NULL"

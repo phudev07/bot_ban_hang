@@ -17,6 +17,7 @@ from app.flash_sales import (
     active_flash_sale,
     complete_deposit_flash_sale,
     consume_flash_sale,
+    flash_sale_cost_exceeded,
     flash_sale_remaining,
     release_deposit_flash_sale,
     reserve_flash_sale,
@@ -1224,15 +1225,28 @@ async def _purchase_product(
                 if multi_plan
                 else None
             )
-            if (
-                multi_quote is not None
-                and pricing.flash_sale is not None
-                and any(
-                    allocation.route.snapshot.unit_price
-                    > allocation.final_unit_price
-                    for allocation in multi_quote.allocations
+            unsafe_quote_cost = (
+                next(
+                    (
+                        allocation.route.snapshot.unit_price
+                        for allocation in multi_quote.allocations
+                        if pricing.flash_sale is not None
+                        and flash_sale_cost_exceeded(
+                            pricing.flash_sale,
+                            allocation.route.snapshot.unit_price,
+                        )
+                    ),
+                    None,
                 )
-            ):
+                if multi_quote is not None and pricing.flash_sale is not None
+                else None
+            )
+            if unsafe_quote_cost is not None and pricing.flash_sale is not None:
+                stop_unsafe_flash_sale(
+                    pricing.flash_sale,
+                    product,
+                    supplier_cost=unsafe_quote_cost,
+                )
                 return PurchaseResult(
                     False,
                     "flash_sale_unavailable",
@@ -1483,7 +1497,12 @@ async def _purchase_product(
                     cost_unit_price = supplier_purchases[0][1]
                     if (
                         pricing.flash_sale is not None
-                        and cost_unit_price > pricing.flash_sale.sale_price
+                        and stop_unsafe_flash_sale(
+                            pricing.flash_sale,
+                            product,
+                            supplier_cost=cost_unit_price,
+                        )
+                        == "cost_exceeded"
                     ):
                         recovery_code = await preserve_supplier_purchase_for_resale(
                             session,
@@ -2281,13 +2300,6 @@ async def _process_sepay_payment(
                         not in {"cost_exceeded", "price_invalid"}
                         and (
                             product is None
-                            or product.fulfillment_source
-                            not in EXTERNAL_FULFILLMENT_SOURCES
-                            or int(product.supplier_price or 0)
-                            <= deposit_campaign.sale_price
-                        )
-                        and (
-                            product is None
                             or deposit_campaign.sale_price < product.price
                         )
                     )
@@ -2378,8 +2390,6 @@ async def _process_sepay_payment(
                                         unsafe_status is None
                                         and deposit_campaign.status
                                         not in {"cost_exceeded", "price_invalid"}
-                                        and int(product.supplier_price or 0)
-                                        <= deposit_campaign.sale_price
                                         and deposit_campaign.sale_price < product.price
                                     )
                                 supplier_stock = max(
@@ -2427,14 +2437,31 @@ async def _process_sepay_payment(
                                         multi_plan,
                                         locked_pricing,
                                     )
+                                    unsafe_quote_cost = next(
+                                        (
+                                            allocation.route.snapshot.unit_price
+                                            for allocation in multi_quote.allocations
+                                            if deposit_campaign is not None
+                                            and flash_sale_cost_exceeded(
+                                                deposit_campaign,
+                                                allocation.route.snapshot.unit_price,
+                                            )
+                                        ),
+                                        None,
+                                    )
+                                    if (
+                                        unsafe_quote_cost is not None
+                                        and deposit_campaign is not None
+                                    ):
+                                        stop_unsafe_flash_sale(
+                                            deposit_campaign,
+                                            product,
+                                            supplier_cost=unsafe_quote_cost,
+                                        )
                                     quote_is_safe = (
                                         multi_quote.total_amount
                                         == deposit.requested_amount
-                                        and not any(
-                                            allocation.route.snapshot.unit_price
-                                            > allocation.final_unit_price
-                                            for allocation in multi_quote.allocations
-                                        )
+                                        and unsafe_quote_cost is None
                                     )
                                     if not quote_is_safe:
                                         multi_plan = ()
@@ -2542,8 +2569,12 @@ async def _process_sepay_payment(
                                         if (
                                             not multi_plan
                                             and deposit_campaign is not None
-                                            and supplier_unit_cost
-                                            > deposit_campaign.sale_price
+                                            and stop_unsafe_flash_sale(
+                                                deposit_campaign,
+                                                product,
+                                                supplier_cost=supplier_unit_cost,
+                                            )
+                                            == "cost_exceeded"
                                         ):
                                             recovery_code = await preserve_supplier_purchase_for_resale(
                                                 session,

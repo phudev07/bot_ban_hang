@@ -1,6 +1,6 @@
 from datetime import UTC, datetime
 
-from sqlalchemy import or_, select
+from sqlalchemy import and_, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models import Deposit, FlashSaleCampaign, Product
@@ -13,8 +13,13 @@ class FlashSaleUnavailable(RuntimeError):
 def unsafe_flash_sale_status(
     campaign: FlashSaleCampaign,
     product: Product,
+    *,
+    supplier_cost: int | None = None,
 ) -> str | None:
-    if product.supplier_price is not None and campaign.sale_price < product.supplier_price:
+    current_supplier_cost = (
+        product.supplier_price if supplier_cost is None else supplier_cost
+    )
+    if flash_sale_cost_exceeded(campaign, current_supplier_cost):
         return "cost_exceeded"
     if campaign.sale_price >= product.price:
         return "price_invalid"
@@ -24,8 +29,14 @@ def unsafe_flash_sale_status(
 def stop_unsafe_flash_sale(
     campaign: FlashSaleCampaign,
     product: Product,
+    *,
+    supplier_cost: int | None = None,
 ) -> str | None:
-    status = unsafe_flash_sale_status(campaign, product)
+    status = unsafe_flash_sale_status(
+        campaign,
+        product,
+        supplier_cost=supplier_cost,
+    )
     if status is None:
         return None
     campaign.status = status
@@ -33,6 +44,17 @@ def stop_unsafe_flash_sale(
     if campaign.notification_status in {"pending", "sending"}:
         campaign.notification_status = "superseded"
     return status
+
+
+def flash_sale_cost_exceeded(
+    campaign: FlashSaleCampaign,
+    supplier_cost: int | None,
+) -> bool:
+    if supplier_cost is None or supplier_cost <= campaign.sale_price:
+        return False
+    starting_cost = campaign.supplier_price_at_start
+    # Legacy campaigns have no baseline, so retain the original strict guard.
+    return starting_cost is None or supplier_cost > starting_cost
 
 
 def flash_sale_remaining(campaign: FlashSaleCampaign) -> int:
@@ -62,6 +84,11 @@ async def active_flash_sale(
             or_(
                 Product.supplier_price.is_(None),
                 FlashSaleCampaign.sale_price >= Product.supplier_price,
+                and_(
+                    FlashSaleCampaign.supplier_price_at_start.is_not(None),
+                    Product.supplier_price
+                    <= FlashSaleCampaign.supplier_price_at_start,
+                ),
             ),
         )
         .order_by(FlashSaleCampaign.id.desc())
@@ -106,6 +133,11 @@ async def active_flash_sale_campaigns(
                 or_(
                     Product.supplier_price.is_(None),
                     FlashSaleCampaign.sale_price >= Product.supplier_price,
+                    and_(
+                        FlashSaleCampaign.supplier_price_at_start.is_not(None),
+                        Product.supplier_price
+                        <= FlashSaleCampaign.supplier_price_at_start,
+                    ),
                 ),
             )
             .order_by(FlashSaleCampaign.id.desc())

@@ -15,6 +15,7 @@ from app.dashboard_security import hash_dashboard_password
 from app.database import Base
 from app.flash_sales import (
     FlashSaleUnavailable,
+    active_flash_sale,
     consume_flash_sale,
     flash_sale_remaining,
     release_flash_sale_reservation,
@@ -364,6 +365,7 @@ def test_supplier_cost_spike_preserves_accounts_and_does_not_charge_flash_buyer(
                 product_id=product.id,
                 original_price=15_000,
                 sale_price=12_000,
+                supplier_price_at_start=10_000,
                 total_quantity=1,
                 message_text="Cost guard sale",
             )
@@ -537,6 +539,7 @@ def test_flash_qr_cost_spike_refunds_wallet_and_preserves_supplier_account() -> 
                 product_id=product.id,
                 original_price=15_000,
                 sale_price=12_000,
+                supplier_price_at_start=10_000,
                 total_quantity=1,
                 message_text="QR cost guard",
             )
@@ -614,6 +617,7 @@ def test_supplier_cost_increase_stops_flash_sale() -> None:
                 product_id=product.id,
                 original_price=15_000,
                 sale_price=12_000,
+                supplier_price_at_start=10_000,
                 total_quantity=5,
                 message_text="API sale",
             )
@@ -626,6 +630,152 @@ def test_supplier_cost_increase_stops_flash_sale() -> None:
             assert campaign.status == "cost_exceeded"
             assert campaign.notification_status == "superseded"
             assert campaign.ended_at is not None
+        await engine.dispose()
+
+    asyncio.run(scenario())
+
+
+def test_intentional_below_cost_sale_only_stops_after_cost_increases() -> None:
+    async def scenario() -> None:
+        engine, sessions = await make_database()
+        async with sessions() as session:
+            category = Category(name_vi="API", name_en="API")
+            session.add(category)
+            await session.flush()
+            product = Product(
+                category_id=category.id,
+                name_vi="Intentional Loss Leader",
+                name_en="Intentional Loss Leader",
+                price=15_000,
+                fulfillment_source="sumistore",
+                supplier_product_id="SP-LOSS-LEADER",
+                supplier_price=10_000,
+                supplier_markup=5_000,
+                supplier_synced_at=datetime.now(UTC),
+                external_stock=5,
+            )
+            session.add(product)
+            await session.flush()
+            campaign = FlashSaleCampaign(
+                product_id=product.id,
+                original_price=15_000,
+                sale_price=9_000,
+                supplier_price_at_start=10_000,
+                total_quantity=3,
+                message_text="Intentional below-cost sale",
+            )
+            session.add(campaign)
+            await session.commit()
+
+            assert await active_flash_sale(session, product.id) is not None
+
+            await apply_supplier_price(session, product, 9_500)
+            await session.flush()
+            assert campaign.status == "active"
+            assert await active_flash_sale(session, product.id) is not None
+
+            await apply_supplier_price(session, product, 10_001)
+            await session.flush()
+            assert campaign.status == "cost_exceeded"
+            assert campaign.ended_at is not None
+        await engine.dispose()
+
+    asyncio.run(scenario())
+
+
+def test_intentional_below_cost_sale_fulfills_wallet_and_qr_orders() -> None:
+    async def scenario() -> None:
+        engine, sessions = await make_database()
+        cipher = SecretCipher(Fernet.generate_key().decode())
+        supplier = ConcurrentFlashSupplier(unit_price=10_000, stock=2)
+        async with sessions() as session:
+            category = Category(name_vi="API", name_en="API")
+            session.add(category)
+            await session.flush()
+            product = Product(
+                category_id=category.id,
+                name_vi="Below Cost Fulfillment",
+                name_en="Below Cost Fulfillment",
+                price=15_000,
+                fulfillment_source="sumistore",
+                supplier_product_id="SP-BELOW-COST-FULFILLMENT",
+                supplier_price=10_000,
+                supplier_markup=5_000,
+                supplier_synced_at=datetime.now(UTC),
+                external_stock=2,
+            )
+            wallet_user = User(
+                telegram_id=32_001,
+                full_name="Wallet loss leader buyer",
+                balance=20_000,
+            )
+            qr_user = User(
+                telegram_id=32_002,
+                full_name="QR loss leader buyer",
+                balance=0,
+            )
+            session.add_all([product, wallet_user, qr_user])
+            await session.flush()
+            campaign = FlashSaleCampaign(
+                product_id=product.id,
+                original_price=15_000,
+                sale_price=9_000,
+                supplier_price_at_start=10_000,
+                total_quantity=2,
+                message_text="Intentional below-cost fulfillment",
+            )
+            session.add(campaign)
+            await session.commit()
+            product_id = product.id
+            campaign_id = campaign.id
+
+        wallet_result = await purchase_product(
+            sessions,
+            wallet_user.telegram_id,
+            product_id,
+            cipher,
+            supplier_client=supplier,  # type: ignore[arg-type]
+            expected_flash_sale_id=campaign_id,
+        )
+        assert wallet_result.ok is True
+        assert wallet_result.total_amount == 9_000
+        assert wallet_result.orders[0].cost_amount == 10_000
+
+        async with sessions() as session:
+            deposit = await create_deposit(
+                session,
+                qr_user.telegram_id,
+                9_000,
+                payment_kind="direct_purchase",
+                product_id=product_id,
+                flash_sale_id=campaign_id,
+                flash_sale_quantity=1,
+            )
+            deposit_code = deposit.code
+
+        qr_result = await process_sepay_payment(
+            sessions,
+            {
+                "id": "FLASH-QR-INTENTIONAL-LOSS",
+                "transferType": "in",
+                "transferAmount": 9_000,
+                "content": deposit_code,
+            },
+            cipher=cipher,
+            supplier_client=supplier,  # type: ignore[arg-type]
+        )
+        assert qr_result.status == "direct_purchase_completed"
+
+        async with sessions() as session:
+            campaign = await session.get(FlashSaleCampaign, campaign_id)
+            stored_wallet_user = await session.get(User, wallet_user.telegram_id)
+            orders = list(await session.scalars(select(Order).order_by(Order.id)))
+            assert campaign is not None and campaign.status == "completed"
+            assert campaign.sold_quantity == 2
+            assert stored_wallet_user is not None and stored_wallet_user.balance == 11_000
+            assert len(orders) == 2
+            assert {order.amount for order in orders} == {9_000}
+            assert {order.cost_amount for order in orders} == {10_000}
         await engine.dispose()
 
     asyncio.run(scenario())
@@ -804,7 +954,7 @@ def test_flash_notification_restart_only_sends_unfinished_recipients() -> None:
     asyncio.run(scenario())
 
 
-def test_admin_flash_sale_page_creation_cost_guard_and_image_upload(tmp_path) -> None:
+def test_admin_flash_sale_page_allows_intentional_loss_and_image_upload(tmp_path) -> None:
     async def setup_database():
         engine, sessions = await make_database((tmp_path / "flash-admin.db").as_posix())
         async with sessions() as session:
@@ -860,25 +1010,12 @@ def test_admin_flash_sale_page_creation_cost_guard_and_image_upload(tmp_path) ->
         assert token_match is not None
         csrf = token_match.group(1)
 
-        below_cost = client.post(
-            "/admin/flash-sales",
-            data={
-                "csrf": csrf,
-                "product_id": product_id,
-                "sale_price": "9999",
-                "total_quantity": 2,
-                "message_text": "Không được tạo",
-            },
-            follow_redirects=True,
-        )
-        assert "không được thấp hơn giá vốn API" in below_cost.text
-
         created = client.post(
             "/admin/flash-sales",
             data={
                 "csrf": csrf,
                 "product_id": product_id,
-                "sale_price": "12000",
+                "sale_price": "9999",
                 "total_quantity": 2,
                 "message_text": "⚡ Flash riêng của shop",
             },
@@ -894,7 +1031,8 @@ def test_admin_flash_sale_page_creation_cost_guard_and_image_upload(tmp_path) ->
         async with sessions() as session:
             campaigns = list(await session.scalars(select(FlashSaleCampaign)))
             assert len(campaigns) == 1
-            assert campaigns[0].sale_price == 12_000
+            assert campaigns[0].sale_price == 9_999
+            assert campaigns[0].supplier_price_at_start == 10_000
             assert campaigns[0].telegram_photo_file_id == "telegram-flash-photo"
 
     asyncio.run(verify())

@@ -120,6 +120,9 @@ class FlashSaleCampaign(Base):
     )
     original_price: Mapped[int] = mapped_column(BigInteger)
     sale_price: Mapped[int] = mapped_column(BigInteger)
+    supplier_price_at_start: Mapped[int | None] = mapped_column(
+        BigInteger, nullable=True
+    )
     total_quantity: Mapped[int]
     sold_quantity: Mapped[int] = mapped_column(default=0, server_default="0")
     reserved_quantity: Mapped[int] = mapped_column(default=0, server_default="0")
