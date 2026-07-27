@@ -17,7 +17,7 @@
   <article class="finance-card {{ 'featured' if key == 'month' else '' }}">
     <div class="finance-card-head"><span>{{ label }}</span><b>{{ item.orders }} đơn hàng</b></div>
     <strong>{{ item.profit|vnd }}</strong><small>Lợi nhuận ròng · biên {{ item.margin }}%</small>
-    <dl><div><dt>Nick đã bán</dt><dd>{{ item.accounts }}</dd></div><div><dt>Doanh thu</dt><dd>{{ item.revenue|vnd }}</dd></div><div><dt>Giá vốn API</dt><dd>{{ item.cost|vnd }}</dd></div><div><dt>Hoa hồng 5%</dt><dd>{{ item.referral|vnd }}</dd></div><div><dt>Đã giảm giá</dt><dd>{{ item.discount|vnd }}</dd></div></dl>
+    <dl><div><dt>Nick đã bán</dt><dd>{{ item.accounts }}</dd></div><div><dt>Doanh thu</dt><dd>{{ item.revenue|vnd }}</dd></div><div><dt>Giá vốn API</dt><dd>{{ item.cost|vnd }}</dd></div><div><dt>Hoa hồng giới thiệu</dt><dd>{{ item.referral|vnd }}</dd></div><div><dt>Đã giảm giá</dt><dd>{{ item.discount|vnd }}</dd></div></dl>
   </article>
   {% endfor %}
 </section>

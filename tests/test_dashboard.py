@@ -926,7 +926,7 @@ def test_dashboard_login_catalog_inventory_and_balance(tmp_path) -> None:
 
         referrals_page = client.get("/admin/referrals")
         assert referrals_page.status_code == 200
-        assert "Hoa hồng 5%" in referrals_page.text
+        assert "Hoa hồng 2%" in referrals_page.text
 
         products_page = client.get("/admin/products")
         category_id = int(

@@ -222,7 +222,7 @@ async def rent_sms_number(
     *,
     markup: int = 1_000,
     cooldown_seconds: int = 60,
-    referral_commission_percent: int = 5,
+    referral_commission_percent: int = 2,
     now: datetime | None = None,
 ) -> SmsRentResult:
     if client is None:
@@ -603,7 +603,7 @@ async def poll_pending_sms_rentals(
     client: RentSimClient,
     *,
     poll_seconds: int = 5,
-    referral_commission_percent: int = 5,
+    referral_commission_percent: int = 2,
     request_recovery_seconds: int = 120,
     limit: int = 50,
     now: datetime | None = None,

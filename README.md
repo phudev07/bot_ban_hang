@@ -28,7 +28,7 @@ giao hang tu dong va menu tieng Viet/Anh.
   gia ban, ton kho, nap vi va dat mua tai khoan tu dong.
 - Moi nick Telegram tu co mot API client khi mo muc `API dau kho`; API ID co dinh,
   API Secret co the tu doi va secret cu mat hieu luc ngay.
-- Gioi thieu ban be nhan 5% so tien thuc tra cua moi don thanh cong. Hoa hong duoc
+- Gioi thieu ban be nhan 2% so tien thuc tra cua moi don thanh cong. Hoa hong duoc
   cong vao vi mot lan cho moi ma don shop, ke ca don Telegram, QR va API.
 
 Chi ban tai khoan ma ban co quyen phan phoi.

@@ -1023,7 +1023,7 @@ async def purchase_product(
     sales_channel: str = "telegram",
     api_client_id: int | None = None,
     api_order_request_id: int | None = None,
-    referral_commission_percent: int = 5,
+    referral_commission_percent: int = 2,
     on_fulfillment_started: FulfillmentStartedCallback | None = None,
     supplier_idempotency_key: str | None = None,
     expected_flash_sale_id: int | None = None,
@@ -2053,7 +2053,7 @@ async def process_sepay_payment(
     payment_prefix: str = "NAP",
     cipher: SecretCipher | None = None,
     supplier_client: SumistoreClient | None = None,
-    referral_commission_percent: int = 5,
+    referral_commission_percent: int = 2,
     on_fulfillment_started: FulfillmentStartedCallback | None = None,
     lehai_client: LeHaiPremiumClient | None = None,
 ) -> PaymentResult:

@@ -97,7 +97,7 @@ class Settings(BaseSettings):
     shop_api_rate_limit_per_minute: int = 60
     shop_api_signature_tolerance_seconds: int = 300
     shop_api_audit_retention_days: int = 30
-    referral_commission_percent: int = 5
+    referral_commission_percent: int = 2
 
     inventory_encryption_key: SecretStr
     web_host: str = "0.0.0.0"

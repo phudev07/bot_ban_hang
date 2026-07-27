@@ -139,7 +139,7 @@ def test_sms_rental_charges_wallet_enforces_cooldown_and_unlocks_after_otp() -> 
             reward = await session.scalar(select(ReferralReward))
             rentals = list(await session.scalars(select(SmsRental).order_by(SmsRental.id)))
             assert buyer is not None and buyer.balance == 6_000
-            assert referrer is not None and referrer.balance == 100
+            assert referrer is not None and referrer.balance == 40
             assert reward is not None and reward.shop_order_code == rentals[0].shop_order_code
             assert [rental.status for rental in rentals] == ["success", "pending"]
         await engine.dispose()

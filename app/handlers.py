@@ -2058,16 +2058,17 @@ def create_router(
         stats = await referral_stats(session, user.telegram_id)
         bot_user = await bot.get_me()
         referral_url = f"https://t.me/{bot_user.username}?start=ref_{user.referral_code}"
+        commission_percent = settings.referral_commission_percent
         text = (
-            "🎁 <b>Giới thiệu bạn bè · Hoa hồng 5%</b>\n\n"
+            f"🎁 <b>Giới thiệu bạn bè · Hoa hồng {commission_percent}%</b>\n\n"
             f"Link của bạn:\n<code>{escape(referral_url)}</code>\n\n"
             f"• Người đã mời: <b>{stats.invited_users}</b>\n"
             f"• Đơn đã nhận hoa hồng: <b>{stats.rewarded_orders}</b>\n"
             f"• Tổng hoa hồng: <b>{format_vnd(stats.total_commission)}</b>\n\n"
-            "Bạn nhận 5% số tiền thực trả của mọi đơn thành công từ người được giới thiệu. "
+            f"Bạn nhận {commission_percent}% số tiền thực trả của mọi đơn thành công từ người được giới thiệu. "
             "Hoa hồng được cộng thẳng vào ví."
             if user.language == "vi"
-            else "🎁 <b>Refer friends · 5% commission</b>\n\n"
+            else f"🎁 <b>Refer friends · {commission_percent}% commission</b>\n\n"
             f"Your link:\n<code>{escape(referral_url)}</code>\n\n"
             f"• Invited users: <b>{stats.invited_users}</b>\n"
             f"• Rewarded orders: <b>{stats.rewarded_orders}</b>\n"
