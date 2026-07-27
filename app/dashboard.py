@@ -620,6 +620,31 @@ def default_flash_sale_message(
     )
 
 
+def balance_adjustment_notification(
+    *,
+    amount: int,
+    balance: int,
+    reason: str,
+    language: str,
+) -> str:
+    signed_amount = f"{'+' if amount > 0 else '-'}{format_vnd(abs(amount))}"
+    if language == "en":
+        return (
+            "💰 <b>Your wallet balance was adjusted</b>\n\n"
+            f"• Change: <b>{signed_amount}</b>\n"
+            f"• Reason: <b>{escape(reason)}</b>\n"
+            f"• Current balance: <b>{format_vnd(balance)}</b>\n\n"
+            "This adjustment was made by the shop administrator."
+        )
+    return (
+        "💰 <b>Số dư ví đã được điều chỉnh</b>\n\n"
+        f"• Thay đổi: <b>{signed_amount}</b>\n"
+        f"• Lý do: <b>{escape(reason)}</b>\n"
+        f"• Số dư hiện tại: <b>{format_vnd(balance)}</b>\n\n"
+        "Điều chỉnh này được thực hiện bởi quản trị viên của shop."
+    )
+
+
 def create_dashboard_router(
     settings: Settings,
     session_factory: async_sessionmaker[AsyncSession],
@@ -3459,6 +3484,7 @@ def create_dashboard_router(
         parsed_amount = parse_vnd(amount)
         adjustment = sign * (parsed_amount or 0)
         clean_reason = reason.strip()
+        notification_text = ""
         async with session_factory() as session:
             async with session.begin():
                 user = await session.scalar(
@@ -3491,7 +3517,30 @@ def create_dashboard_router(
                     reference_id=str(balance_adjustment.id),
                     description=f"{clean_reason} · thực hiện bởi {admin_username}",
                 )
-        flash(request, "Đã cập nhật số dư và ghi lịch sử audit.")
+                notification_text = balance_adjustment_notification(
+                    amount=adjustment,
+                    balance=user.balance,
+                    reason=clean_reason,
+                    language=user.language,
+                )
+        notified = False
+        if bot is not None:
+            try:
+                await bot.send_message(user_id, notification_text)
+                notified = True
+            except Exception:
+                logger.exception(
+                    "Could not notify user %s about Admin balance adjustment",
+                    user_id,
+                )
+        if notified:
+            flash(request, "Đã cập nhật số dư, ghi lịch sử và báo cho khách hàng.")
+        else:
+            flash(
+                request,
+                "Đã cập nhật số dư nhưng chưa gửi được thông báo Telegram cho khách.",
+                "error",
+            )
         return RedirectResponse(f"/admin/users/{user_id}", status_code=303)
 
     @router.post("/admin/users/{user_id}/toggle-block")

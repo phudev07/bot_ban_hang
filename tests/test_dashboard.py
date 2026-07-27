@@ -9,7 +9,7 @@ from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from app.api import create_api
 from app.config import Settings
-from app.dashboard import group_order_rows
+from app.dashboard import balance_adjustment_notification, group_order_rows
 from app.dashboard_security import hash_dashboard_password
 from app.database import Base
 from app.models import (
@@ -136,7 +136,8 @@ def test_archived_catalog_items_disappear_but_keep_financial_history(tmp_path) -
         dashboard_password_hash=hash_dashboard_password("dashboard-password"),
         dashboard_session_secret="session-secret-long-enough-for-tests",
     )
-    app = create_api(settings, sessions, FakeBot(), SecretCipher(encryption_key))  # type: ignore[arg-type]
+    bot = FakeBot()
+    app = create_api(settings, sessions, bot, SecretCipher(encryption_key))  # type: ignore[arg-type]
 
     with TestClient(app, base_url="https://testserver") as client:
         client.post(
@@ -249,6 +250,26 @@ def test_grouped_orders_show_mixed_supplier_and_manual_inventory_sources() -> No
     assert groups["BMIXED"]["supplier_source_external"] is True
     assert groups["BLOCAL"]["supplier_source_label"] == "Kho bot"
     assert groups["BLOCAL"]["supplier_source_external"] is False
+
+
+def test_balance_adjustment_notification_shows_sign_reason_and_new_balance() -> None:
+    added = balance_adjustment_notification(
+        amount=10_000,
+        balance=60_000,
+        reason="Hoàn tiền <đơn lỗi>",
+        language="vi",
+    )
+    deducted = balance_adjustment_notification(
+        amount=-5_000,
+        balance=55_000,
+        reason="Điều chỉnh nhầm tiền",
+        language="vi",
+    )
+
+    assert "<b>+10.000đ</b>" in added
+    assert "Hoàn tiền &lt;đơn lỗi&gt;" in added
+    assert "<b>60.000đ</b>" in added
+    assert "<b>-5.000đ</b>" in deducted
 
 
 def test_admin_products_shows_selected_gpt_supplier_and_each_stock(tmp_path) -> None:
@@ -758,7 +779,8 @@ def test_dashboard_login_catalog_inventory_and_balance(tmp_path) -> None:
         dashboard_password_hash=hash_dashboard_password("dashboard-password"),
         dashboard_session_secret="session-secret-long-enough-for-tests",
     )
-    app = create_api(settings, sessions, FakeBot(), SecretCipher(encryption_key))  # type: ignore[arg-type]
+    bot = FakeBot()
+    app = create_api(settings, sessions, bot, SecretCipher(encryption_key))  # type: ignore[arg-type]
 
     with TestClient(app, base_url="https://testserver") as client:
         protected = client.get("/admin", follow_redirects=False)
@@ -1078,6 +1100,12 @@ def test_dashboard_login_catalog_inventory_and_balance(tmp_path) -> None:
         )
         assert adjusted.status_code == 303
         assert adjusted.headers["location"] == "/admin/users/6799701918"
+        assert bot.messages
+        assert bot.messages[-1][0][0] == 6799701918
+        assert "Số dư ví đã được điều chỉnh" in str(bot.messages[-1][0][1])
+        assert "+10.000đ" in str(bot.messages[-1][0][1])
+        assert "dashboard-test" in str(bot.messages[-1][0][1])
+        assert "60.000đ" in str(bot.messages[-1][0][1])
         user_detail = client.get(adjusted.headers["location"])
         assert user_detail.status_code == 200
         assert "WALLET LEDGER" in user_detail.text
