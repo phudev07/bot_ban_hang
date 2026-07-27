@@ -75,7 +75,14 @@ from app.sms_rentals import (
 )
 from app.states import DepositStates, PurchaseStates
 from app.suppliers import EXTERNAL_FULFILLMENT_SOURCES, SumistoreClient
-from app.utils import SecretCipher, build_sepay_qr_url, format_vnd, parse_vnd
+from app.utils import (
+    SecretCipher,
+    build_sepay_qr_url,
+    format_vnd,
+    parse_vnd,
+    safe_customer_html,
+    sanitize_customer_text,
+)
 
 
 COUPON_ERROR_MESSAGES = {
@@ -200,7 +207,7 @@ def create_router(
     def bundle_values(orders, user: User) -> tuple[list[int], str, str, list[str], int]:
         order_ids = [order.id for order in orders]
         shop_order_code = orders[0].shop_order_code
-        product_name = (
+        product_name = sanitize_customer_text(
             orders[0].product.name_en if user.language == "en" else orders[0].product.name_vi
         )
         secrets = [cipher.decrypt(order.inventory_item.encrypted_secret) for order in orders]
@@ -693,8 +700,12 @@ def create_router(
         pricing = await product_pricing(session, product)
         display_price = pricing.final_unit_price if pricing is not None else product.price
         quantity_discounts = await active_quantity_discounts(session, product.id)
-        name = product.name_en if user.language == "en" else product.name_vi
-        description = product.description_en if user.language == "en" else product.description_vi
+        name = sanitize_customer_text(
+            product.name_en if user.language == "en" else product.name_vi
+        )
+        description = sanitize_customer_text(
+            product.description_en if user.language == "en" else product.description_vi
+        )
         labels = (
             ("Price", "In stock", "Description")
             if user.language == "en"
@@ -706,8 +717,8 @@ def create_router(
                 f"<s>{format_vnd(product.price)}</s> → <b>{format_vnd(display_price)}</b>"
             )
         text = (
-            f"📦 <b>{escape(name)}</b>\n\n"
-            f"📝 {labels[2]}: {escape(description or '—')}\n\n"
+            f"📦 <b>{safe_customer_html(name)}</b>\n\n"
+            f"📝 {labels[2]}: {safe_customer_html(description or '—')}\n\n"
             f"💵 {labels[0]}: {price_text}\n"
             f"📊 {labels[1]}: <b>{stock}</b>"
         )
@@ -855,7 +866,7 @@ def create_router(
                     )
                     text = (
                         "💳 <b>Số dư chưa đủ</b>\n\n"
-                        f"Sản phẩm: <b>{escape(product.name_vi)}</b>\n"
+                        f"Sản phẩm: <b>{safe_customer_html(product.name_vi)}</b>\n"
                         f"Số lượng: <b>{quantity}</b>\n"
                         f"{coupon_line_vi}"
                         f"{quantity_line_vi}"
@@ -865,7 +876,7 @@ def create_router(
                         "Số dư hiện có vẫn được giữ nguyên."
                         if user.language == "vi"
                         else "💳 <b>Insufficient balance</b>\n\n"
-                        f"Product: <b>{escape(product.name_en)}</b>\n"
+                        f"Product: <b>{safe_customer_html(product.name_en)}</b>\n"
                         f"Quantity: <b>{quantity}</b>\n"
                         f"{coupon_line_en}"
                         f"{quantity_line_en}"
@@ -892,7 +903,7 @@ def create_router(
             await target.answer(labels.get(result.message, "Error"))
             return result.message
         if result.orders and result.secrets:
-            product_name = (
+            product_name = sanitize_customer_text(
                 result.orders[0].product.name_en
                 if user.language == "en"
                 else result.orders[0].product.name_vi
@@ -966,11 +977,11 @@ def create_router(
         await state.set_state(PurchaseStates.waiting_for_coupon)
         await state.update_data(product_id=product.id)
         prompt = (
-            f"🏷 <b>Nhập mã giảm giá</b>\n\nSản phẩm: <b>{escape(product.name_vi)}</b>\n"
+            f"🏷 <b>Nhập mã giảm giá</b>\n\nSản phẩm: <b>{safe_customer_html(product.name_vi)}</b>\n"
             "Gửi mã giảm giá bạn muốn sử dụng."
             if user.language == "vi"
             else f"🏷 <b>Apply a discount code</b>\n\nProduct: "
-            f"<b>{escape(product.name_en)}</b>\nSend the code you want to use."
+            f"<b>{safe_customer_html(product.name_en)}</b>\nSend the code you want to use."
         )
         if callback.message:
             await callback.message.edit_text(prompt, reply_markup=back_menu(user.language))
@@ -1098,13 +1109,13 @@ def create_router(
             return
         text = (
             f"🧮 <b>Chọn số lượng</b>\n\n"
-            f"• Sản phẩm: <b>{escape(product.name_vi)}</b>\n"
+            f"• Sản phẩm: <b>{safe_customer_html(product.name_vi)}</b>\n"
             f"• Đơn giá: <b>{format_vnd(display_price)}</b>\n"
             f"• Còn hàng: <b>{stock}</b>\n"
             f"• Tối đa mỗi lần: <b>{maximum}</b>"
             if user.language == "vi"
             else f"🧮 <b>Choose quantity</b>\n\n"
-            f"• Product: <b>{escape(product.name_en)}</b>\n"
+            f"• Product: <b>{safe_customer_html(product.name_en)}</b>\n"
             f"• Unit price: <b>{format_vnd(display_price)}</b>\n"
             f"• In stock: <b>{stock}</b>\n"
             f"• Maximum per order: <b>{maximum}</b>"
@@ -1514,7 +1525,9 @@ def create_router(
             total_amount,
             deposit.code,
         )
-        product_name = product.name_en if user.language == "en" else product.name_vi
+        product_name = sanitize_customer_text(
+            product.name_en if user.language == "en" else product.name_vi
+        )
         price_breakdown_vi = (
             "• Chi tiết giá: "
             + " + ".join(
@@ -1573,7 +1586,7 @@ def create_router(
         )
         text = (
             "🧾 <b>Thanh toán sản phẩm</b>\n\n"
-            f"• Sản phẩm: <b>{escape(product_name)}</b>\n"
+            f"• Sản phẩm: <b>{safe_customer_html(product_name)}</b>\n"
             f"• Số lượng: <b>{quantity}</b>\n"
             f"{price_breakdown_vi}"
             f"{coupon_line_vi}"
@@ -1588,7 +1601,7 @@ def create_router(
             "\n\n⏳ QR chỉ có hiệu lực 5 phút. Quá hạn bot sẽ xóa tin nhắn và giao dịch thất bại."
             if user.language == "vi"
             else "🧾 <b>Product payment</b>\n\n"
-            f"• Product: <b>{escape(product_name)}</b>\n"
+            f"• Product: <b>{safe_customer_html(product_name)}</b>\n"
             f"• Quantity: <b>{quantity}</b>\n"
             f"{price_breakdown_en}"
             f"{coupon_line_en}"

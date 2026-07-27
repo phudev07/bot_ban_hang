@@ -39,7 +39,7 @@ from app.partner_services import api_signature
 from app.services import active_products, available_stock, purchase_product
 from app.suppliers import SumistoreClient
 from app.suppliers import EXTERNAL_FULFILLMENT_SOURCES, SELLABLE_FULFILLMENT_SOURCES
-from app.utils import SecretCipher
+from app.utils import SecretCipher, sanitize_customer_text
 
 
 templates = Jinja2Templates(directory=Path(__file__).parent / "templates")
@@ -49,6 +49,10 @@ API_ID_PATTERN = re.compile(r"^VS[0-9A-F]{16}$")
 API_SIGNATURE_PATTERN = re.compile(r"^[0-9a-fA-F]{64}$")
 API_NONCE_PATTERN = re.compile(r"^[A-Za-z0-9._~:-]{12,128}$")
 IDEMPOTENCY_KEY_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{7,127}$")
+_INTERNAL_SUPPLIER_ERROR_RE = re.compile(
+    r"^(?:supplier|provider|rentsim|sentsim)[_-]",
+    re.IGNORECASE,
+)
 
 
 CLOUDFLARE_NETWORKS = tuple(
@@ -135,6 +139,13 @@ def api_docs_url(settings: Settings) -> str:
     return f"{origin}/docs"
 
 
+def public_order_failure_code(message: str) -> str:
+    """Never expose an upstream provider/error identifier through the public API."""
+    if _INTERNAL_SUPPLIER_ERROR_RE.match(message):
+        return "ORDER_UNAVAILABLE"
+    return message.upper()
+
+
 def create_public_api_docs_router(settings: Settings) -> APIRouter:
     router = APIRouter(tags=["shop-api-docs"])
 
@@ -173,7 +184,7 @@ def order_payload(
         "channel": representative.sales_channel,
         "product": {
             "id": representative.product.id,
-            "name": representative.product.name_vi,
+            "name": sanitize_customer_text(representative.product.name_vi),
         },
         "quantity": len(orders),
         "unit_price": representative.amount,
@@ -394,8 +405,8 @@ def create_public_api_router(
                 values.append(
                     {
                         "id": product.id,
-                        "name": product.name_vi,
-                        "description": product.description_vi,
+                        "name": sanitize_customer_text(product.name_vi),
+                        "description": sanitize_customer_text(product.description_vi),
                         "price": flash_sale.sale_price if flash_sale else product.price,
                         "flash_sale_id": flash_sale.id if flash_sale else None,
                         "stock": stock,
@@ -427,8 +438,8 @@ def create_public_api_router(
                 stock = min(stock, flash_sale_remaining(flash_sale))
             return {
                 "id": product.id,
-                "name": product.name_vi,
-                "description": product.description_vi,
+                "name": sanitize_customer_text(product.name_vi),
+                "description": sanitize_customer_text(product.description_vi),
                 "price": flash_sale.sale_price if flash_sale else product.price,
                 "flash_sale_id": flash_sale.id if flash_sale else None,
                 "stock": stock,
@@ -655,7 +666,7 @@ def create_public_api_router(
                 )
                 raise api_error(
                     status_code,
-                    result.message.upper(),
+                    public_order_failure_code(result.message),
                     "Order could not be completed",
                 )
             stored_request.status = "completed"
@@ -669,7 +680,7 @@ def create_public_api_router(
                 "channel": "api",
                 "product": {
                     "id": result.orders[0].product.id,
-                    "name": result.orders[0].product.name_vi,
+                    "name": sanitize_customer_text(result.orders[0].product.name_vi),
                 },
                 "quantity": len(result.orders),
                 "unit_price": result.orders[0].amount,

@@ -179,6 +179,44 @@ def test_broadcast_requires_confirmation_before_delivery() -> None:
     asyncio.run(scenario())
 
 
+def test_broadcast_rejects_supplier_identity_before_staging() -> None:
+    async def scenario() -> None:
+        engine, sessions = await make_database()
+        async with sessions() as session:
+            session.add(User(telegram_id=1, full_name="Started", has_started=True))
+            await session.commit()
+            settings = Settings(
+                _env_file=None,
+                bot_token="123456:ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghi",
+                inventory_encryption_key=Fernet.generate_key().decode(),
+                sepay_enabled=False,
+                ADMIN_IDS="42",
+            )
+            router = create_admin_router(
+                settings,
+                SecretCipher(settings.inventory_encryption_key.get_secret_value()),
+            )
+            begin = next(
+                handler.callback
+                for handler in router.message.handlers
+                if handler.callback.__name__ == "begin_broadcast"
+            )
+            source = FakeMessage(message_id=30)
+            source.text = "SumiStore sale: https://sumistore.me/api"
+            command = FakeMessage(message_id=31, reply_to_message=source)
+            state = FakeState()
+            bot = FakeBot()
+
+            await begin(command, bot, session, state)
+
+            assert state.current is None
+            assert bot.copy_calls == []
+            assert "Không thể gửi thông báo có tên nguồn hàng" in command.answers[-1][0]
+        await engine.dispose()
+
+    asyncio.run(scenario())
+
+
 def test_broadcast_photo_gets_confirmation_button_on_preview() -> None:
     async def scenario() -> None:
         engine, sessions = await make_database()

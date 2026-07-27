@@ -7,7 +7,7 @@ and server logs.
 
 from html import escape
 
-from app.utils import format_vnd
+from app.utils import format_vnd, safe_customer_html
 
 
 def storefront_text(
@@ -136,7 +136,7 @@ def poll_notification_text(item) -> str:
                 f"• Order: <code>{escape(item.shop_order_code)}</code>\n"
                 f"• Number: <code>{escape(item.phone_number)}</code>\n"
                 f"• OTP: <code>{escape(item.otp_code or '—')}</code>\n"
-                f"• Message: {escape(item.otp_content or '—')}\n\n"
+                f"• Message: {safe_customer_html(item.otp_content or '—')}\n\n"
                 "You can rent another number once 60 seconds have passed from this rental."
             )
         return (
@@ -144,7 +144,7 @@ def poll_notification_text(item) -> str:
             f"• Mã đơn: <code>{escape(item.shop_order_code)}</code>\n"
             f"• Số điện thoại: <code>{escape(item.phone_number)}</code>\n"
             f"• Mã OTP: <code>{escape(item.otp_code or '—')}</code>\n"
-            f"• Nội dung: {escape(item.otp_content or '—')}\n\n"
+            f"• Nội dung: {safe_customer_html(item.otp_content or '—')}\n\n"
             "Bạn có thể thuê số tiếp theo sau khi đủ 60 giây tính từ lượt thuê này."
         )
     if item.status == "refunded":

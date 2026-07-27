@@ -9,7 +9,7 @@ from urllib.parse import quote
 
 from app.i18n import tr
 from app.models import Category, Order, Product
-from app.utils import format_vnd
+from app.utils import format_vnd, sanitize_customer_text
 
 
 def quick_access_keyboard(language: str) -> ReplyKeyboardMarkup:
@@ -168,7 +168,7 @@ def referral_menu(language: str, referral_url: str) -> InlineKeyboardMarkup:
 def categories_menu(categories: list[Category], language: str) -> InlineKeyboardMarkup:
     builder = InlineKeyboardBuilder()
     for category in categories:
-        name = category.name_en if language == "en" else category.name_vi
+        name = sanitize_customer_text(category.name_en if language == "en" else category.name_vi)
         builder.button(text=name, callback_data=f"cat:{category.id}")
     builder.adjust(1)
     builder.row(InlineKeyboardButton(text=tr(language, "back"), callback_data="back:menu"))
@@ -183,7 +183,7 @@ def products_menu(
 ) -> InlineKeyboardMarkup:
     builder = InlineKeyboardBuilder()
     for product in products:
-        name = product.name_en if language == "en" else product.name_vi
+        name = sanitize_customer_text(product.name_en if language == "en" else product.name_vi)
         display_price = (prices or {}).get(product.id, product.price)
         builder.button(
             text=f"{name} · {format_vnd(display_price)}", callback_data=f"prod:{product.id}"
@@ -375,7 +375,7 @@ def order_history_menu(orders: list[Order], language: str) -> InlineKeyboardMark
     builder = InlineKeyboardBuilder()
     for grouped_orders in list(groups.values())[:10]:
         representative = min(grouped_orders, key=lambda item: item.id)
-        name = (
+        name = sanitize_customer_text(
             representative.product.name_en
             if language == "en"
             else representative.product.name_vi

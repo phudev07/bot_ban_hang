@@ -66,6 +66,55 @@ def safe_html(value: object) -> str:
     return escape(str(value), quote=True)
 
 
+# Supplier identity belongs in admin reconciliation only. Product names and
+# descriptions are editable data, so redact provider names/URLs at every public
+# delivery boundary instead of relying on each caller to remember the policy.
+_SUPPLIER_URL_RE = re.compile(
+    r"https?://[^\s<>\"']*(?:sumistore|lehaipremium|rentsim|sentsim)[^\s<>\"']*",
+    re.IGNORECASE,
+)
+_SUPPLIER_DOMAIN_RE = re.compile(
+    r"\b(?:api\.)?(?:sumistore\.me|lehaipremium\.me|rentsim\.net|sentsim\.[a-z]{2,})\b",
+    re.IGNORECASE,
+)
+_SUPPLIER_NAME_RE = re.compile(
+    r"(?<![\w])(?:sumistore|sumi|l[eê]\s*h(?:ải|ai)(?:\s*premium)?|lehai(?:premium)?|"
+    r"rent\s*sim|rentsim|sentsim)(?![\w])",
+    re.IGNORECASE,
+)
+_SUPPLIER_ERROR_RE = re.compile(
+    r"\b(?:provider|supplier)_[a-z0-9_]{3,}\b",
+    re.IGNORECASE,
+)
+_SUPPLIER_PRODUCT_ID_RE = re.compile(r"\bSP-[A-Z0-9][A-Z0-9_-]{5,}\b", re.IGNORECASE)
+_SUPPLIER_ALIAS_RE = re.compile(
+    r"\b(?:cdk_[a-z0-9_]+|sale_[a-z0-9_]+|gpt_bh[a-z0-9_]+)\b",
+    re.IGNORECASE,
+)
+
+
+def sanitize_customer_text(value: object) -> str:
+    """Remove supplier identities and technical source markers from public text."""
+    text = str(value or "")
+    text = _SUPPLIER_URL_RE.sub("nguồn hàng", text)
+    text = _SUPPLIER_DOMAIN_RE.sub("nguồn hàng", text)
+    text = _SUPPLIER_ERROR_RE.sub("lỗi hệ thống", text)
+    text = _SUPPLIER_PRODUCT_ID_RE.sub("mã sản phẩm", text)
+    text = _SUPPLIER_ALIAS_RE.sub("mã sản phẩm", text)
+    return _SUPPLIER_NAME_RE.sub("nguồn hàng", text)
+
+
+def safe_customer_html(value: object) -> str:
+    """Sanitize public text and escape it for Telegram HTML output."""
+    return safe_html(sanitize_customer_text(value))
+
+
+def contains_supplier_identity(value: object) -> bool:
+    """Return whether public text contains a supplier name or source marker."""
+    original = str(value or "")
+    return bool(original) and sanitize_customer_text(original) != original
+
+
 def inventory_account_identity(raw_item: str) -> str:
     """Extract the account/key identifier without retaining its password or recovery data."""
     first_line = next((line.strip() for line in raw_item.splitlines() if line.strip()), "")

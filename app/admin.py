@@ -14,7 +14,12 @@ from app.inventory_dedup import filter_duplicate_inventory
 from app.models import Category, InventoryItem, Order, Product, User
 from app.states import BroadcastStates
 from app.suppliers import EXTERNAL_FULFILLMENT_SOURCES
-from app.utils import SecretCipher, format_vnd, parse_vnd
+from app.utils import (
+    SecretCipher,
+    contains_supplier_identity,
+    format_vnd,
+    parse_vnd,
+)
 
 
 def create_admin_router(settings: Settings, cipher: SecretCipher) -> Router:
@@ -98,6 +103,21 @@ def create_admin_router(settings: Settings, cipher: SecretCipher) -> Router:
         session: AsyncSession,
         state: FSMContext,
     ) -> None:
+        source_parts = [
+            getattr(source, "text", None),
+            getattr(source, "caption", None),
+        ]
+        for media_field in ("document", "audio", "video", "animation"):
+            media = getattr(source, media_field, None)
+            source_parts.append(getattr(media, "file_name", None))
+        source_text = "\n".join(part for part in source_parts if part)
+        if contains_supplier_identity(source_text):
+            await state.clear()
+            await admin_message.answer(
+                "Không thể gửi thông báo có tên nguồn hàng, URL nguồn hoặc mã lỗi kỹ thuật. "
+                "Hãy đổi nội dung sang cách gọi chung của shop."
+            )
+            return
         recipient_count = int(
             await session.scalar(
                 select(func.count(User.telegram_id)).where(User.has_started.is_(True))

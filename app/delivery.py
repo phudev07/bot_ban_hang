@@ -5,7 +5,7 @@ from aiogram.types import (
     InlineKeyboardMarkup,
 )
 
-from app.utils import format_vnd, safe_html
+from app.utils import format_vnd, safe_html, sanitize_customer_text
 
 
 MAX_MESSAGE_PREVIEW = 10
@@ -21,6 +21,7 @@ def delivery_text(
     language: str,
     paid_by_qr: bool = False,
 ) -> str:
+    product_name = sanitize_customer_text(product_name)
     preview = secrets[:MAX_MESSAGE_PREVIEW]
     items = "\n".join(safe_html(secret) for secret in preview)
     account_block = f"<pre>{items}</pre>"
@@ -107,6 +108,7 @@ def delivery_file(
     total_amount: int,
     language: str,
 ) -> BufferedInputFile:
+    product_name = sanitize_customer_text(product_name)
     if language == "en":
         header = [
             "PURCHASED DIGITAL GOODS",
