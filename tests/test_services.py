@@ -27,9 +27,11 @@ from app.services import (
     cancel_wallet_deposit,
     CouponValidationError,
     create_deposit,
+    multi_supplier_quote,
     order_bundle,
     process_sepay_payment,
     product_pricing,
+    ProductPricing,
     purchase_quantity_limit,
     purchase_product,
     recent_orders,
@@ -59,8 +61,10 @@ class FakeSupplier:
         self.balance = balance
         self.stock = stock
         self.buy_calls = 0
+        self.fetch_calls = 0
 
     async def fetch_snapshot(self, product_id: str) -> SupplierSnapshot:
+        self.fetch_calls += 1
         return SupplierSnapshot(
             product_id=product_id,
             name="ChatGPT Plus",
@@ -77,6 +81,38 @@ class FakeSupplier:
             unit_price=15_000,
             accounts=tuple(f"chatgpt{index}:password" for index in range(1, quantity + 1)),
         )
+
+
+def test_qr_quote_uses_local_inventory_without_calling_supplier() -> None:
+    async def scenario() -> None:
+        product = Product(
+            fulfillment_source="sumistore",
+            supplier_product_id="SP-GEF55PBV",
+            sumistore_api_enabled=True,
+            lehai_api_enabled=False,
+            supplier_markup=5_000,
+            price=35_000,
+        )
+        client = FakeSupplier(balance=0, stock=100)
+        pricing = ProductPricing(
+            original_unit_price=35_000,
+            discount_per_unit=0,
+            final_unit_price=35_000,
+        )
+
+        quote = await multi_supplier_quote(
+            product,
+            1,
+            pricing,
+            client,  # type: ignore[arg-type]
+            None,
+            local_stock=1,
+        )
+
+        assert quote is None
+        assert client.fetch_calls == 0
+
+    asyncio.run(scenario())
 
 
 class RoutedSupplier:

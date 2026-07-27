@@ -584,6 +584,12 @@ async def available_stock(
             await session.commit()
         return max(0, product.external_stock)
     return int(
+        await local_inventory_stock(session, product_id)
+    )
+
+
+async def local_inventory_stock(session: AsyncSession, product_id: int) -> int:
+    return int(
         await session.scalar(
             select(func.count(InventoryItem.id)).where(
                 InventoryItem.product_id == product_id,
@@ -785,7 +791,11 @@ async def multi_supplier_quote(
     pricing: ProductPricing,
     sumistore_client: SumistoreClient | None,
     lehai_client: LeHaiPremiumClient | None,
+    *,
+    local_stock: int = 0,
 ) -> MultiSupplierQuote | None:
+    if max(0, int(local_stock)) >= quantity:
+        return None
     if not is_multi_supplier_product(
         product.fulfillment_source,
         product.supplier_product_id,

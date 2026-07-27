@@ -56,6 +56,7 @@ from app.services import (
     CouponValidationError,
     create_deposit,
     ensure_user,
+    local_inventory_stock,
     multi_supplier_quote,
     order_bundle,
     PendingDepositLimitReached,
@@ -1413,15 +1414,16 @@ def create_router(
         if quantity > 1 and not product.allow_quantity:
             await callback.answer("Sản phẩm không hỗ trợ mua nhiều.", show_alert=True)
             return
-        if (
+        local_stock = await local_inventory_stock(session, product.id)
+        if local_stock < quantity and (
             await available_stock(
                 session,
                 product.id,
                 supplier_client,
-            lehai_client=lehai_client,
-            refresh_external=True,
-            refresh_max_age_seconds=settings.supplier_ui_cache_seconds,
-        )
+                lehai_client=lehai_client,
+                refresh_external=True,
+                refresh_max_age_seconds=settings.supplier_ui_cache_seconds,
+            )
             < quantity
         ):
             await callback.answer("Sản phẩm vừa hết hàng.", show_alert=True)
@@ -1458,6 +1460,7 @@ def create_router(
             pricing,
             supplier_client,
             lehai_client,
+            local_stock=local_stock,
         )
         if supplier_quote is not None and not supplier_quote.available:
             await callback.answer(
