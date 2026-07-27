@@ -5,7 +5,7 @@ from app.delivery import (
 )
 
 
-def test_delivery_card_has_copy_buttons_and_txt_download() -> None:
+def test_delivery_card_has_only_copy_all_and_txt_download() -> None:
     secrets = ["account1@example.com:password1", "account2@example.com:password2"]
     text = delivery_text(
         shop_order_code="BTEST123",
@@ -25,15 +25,36 @@ def test_delivery_card_has_copy_buttons_and_txt_download() -> None:
     assert "<pre>account1@example.com:password1\naccount2@example.com:password2</pre>" in text
     assert "1. account1@example.com:password1" not in text
     assert "2. account2@example.com:password2" not in text
-    assert keyboard.inline_keyboard[0][0].copy_text.text == secrets[0]
-    assert keyboard.inline_keyboard[1][0].copy_text.text == secrets[1]
-    assert "#1" not in keyboard.inline_keyboard[0][0].text
-    assert "#2" not in keyboard.inline_keyboard[1][0].text
+    copy_buttons = [
+        button
+        for row in keyboard.inline_keyboard
+        for button in row
+        if button.copy_text is not None
+    ]
+    assert len(copy_buttons) == 1
+    assert copy_buttons[0].text == "📋 Sao chép tất cả"
+    assert copy_buttons[0].copy_text.text == "\n".join(secrets)
     assert any(
         button.callback_data == "ordertxt:11"
         for row in keyboard.inline_keyboard
         for button in row
     )
+
+
+def test_long_delivery_uses_txt_without_creating_many_copy_buttons() -> None:
+    secrets = [f"account-{index}-" + ("x" * 80) for index in range(5)]
+    keyboard = delivery_keyboard(
+        primary_order_id=12,
+        secrets=secrets,
+        language="vi",
+    )
+
+    assert not any(
+        button.copy_text is not None
+        for row in keyboard.inline_keyboard
+        for button in row
+    )
+    assert keyboard.inline_keyboard[0][0].callback_data == "ordertxt:12"
 
 
 def test_delivery_file_contains_all_accounts() -> None:

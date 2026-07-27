@@ -9,7 +9,6 @@ from app.utils import format_vnd, safe_html
 
 
 MAX_MESSAGE_PREVIEW = 10
-MAX_COPY_BUTTONS = 8
 MAX_COPY_TEXT_LENGTH = 256
 
 
@@ -42,7 +41,7 @@ def delivery_text(
             f"• Quantity: <b>{len(secrets)}</b>\n"
             f"• Total: <b>{format_vnd(total_amount)}</b>\n\n"
             f"<b>Your accounts/codes</b>\n{account_block}\n\n"
-            "Use the copy buttons or download the TXT file. Keep this information private."
+            "Use the copy-all button or download the TXT file. Keep this information private."
         )
 
     title = "Thanh toán và giao hàng thành công" if paid_by_qr else "Mua hàng thành công"
@@ -64,21 +63,8 @@ def delivery_keyboard(
     language: str,
 ) -> InlineKeyboardMarkup:
     rows: list[list[InlineKeyboardButton]] = []
-    copy_label = "Sao chép" if language == "vi" else "Copy"
-    for secret in secrets[:MAX_COPY_BUTTONS]:
-        if len(secret) > MAX_COPY_TEXT_LENGTH:
-            continue
-        rows.append(
-            [
-                InlineKeyboardButton(
-                    text=f"📋 {copy_label}",
-                    copy_text=CopyTextButton(text=secret),
-                )
-            ]
-        )
-
     combined = "\n".join(secrets)
-    if len(secrets) > 1 and len(combined) <= MAX_COPY_TEXT_LENGTH:
+    if combined and len(combined) <= MAX_COPY_TEXT_LENGTH:
         rows.append(
             [
                 InlineKeyboardButton(
