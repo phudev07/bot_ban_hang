@@ -65,6 +65,7 @@ from app.services import (
     recent_orders,
     user_activity_stats,
 )
+from app.sms_customer_messages import rental_failure_text, storefront_text
 from app.sms_rentals import (
     attach_sms_rental_message,
     attach_sms_waiting_message,
@@ -485,40 +486,12 @@ def create_router(
             settings.rentsim_markup,
             fallback_unit_cost=settings.rentsim_fallback_price,
         )
-        if user.language == "en":
-            connection_line = (
-                f"• Available now: <b>{availability.effective_stock}</b>"
-                if availability.connected
-                else "• Provider connection: <b>temporarily unavailable</b>"
-            )
-            text = (
-                "📲 <b>Rent a ChatGPT SMS number</b>\n\n"
-                "• Country: <b>Cambodia</b>\n"
-                f"• Price: <b>{format_vnd(availability.sale_price)}</b>\n"
-                f"{connection_line}\n\n"
-                "Wallet balance only. A direct QR payment is not available for SMS rentals. "
-                "If no OTP arrives, you can rent another number after 60 seconds.\n"
-                "Numbers that do not receive an OTP are refunded to your wallet.\n\n"
-                "An OTP may arrive after 8-10 minutes. If you rent a new number and the old "
-                "number later receives an OTP, both rentals are charged."
-            )
-        else:
-            connection_line = (
-                f"• Có thể thuê ngay: <b>{availability.effective_stock}</b> số"
-                if availability.connected
-                else "• Kết nối nhà cung cấp: <b>đang tạm gián đoạn</b>"
-            )
-            text = (
-                "📲 <b>Thuê số nhận SMS ChatGPT</b>\n\n"
-                "• Quốc gia: <b>Cambodia</b>\n"
-                f"• Giá thuê: <b>{format_vnd(availability.sale_price)}</b>\n"
-                f"{connection_line}\n\n"
-                "Chỉ thanh toán bằng số dư ví, không có QR thanh toán trực tiếp.\n\n"
-                "Nếu không có OTP có thể thuê số khác sau 60 giây.\n"
-                "Các số thuê không nhận được OTP sẽ được hoàn tiền về ví.\n\n"
-                "OTP có thể về chậm. Nếu bạn thuê số mới và số cũ sau đó vẫn nhận "
-                "được mã, cả hai lượt thuê đều được tính phí."
-            )
+        text = storefront_text(
+            user.language,
+            connected=availability.connected,
+            sale_price=availability.sale_price,
+            effective_stock=availability.effective_stock,
+        )
         if callback.message:
             await edit_or_send_text(
                 callback.message,
@@ -557,69 +530,14 @@ def create_router(
             referral_commission_percent=settings.referral_commission_percent,
         )
         if not result.ok:
-            if user.language == "en":
-                messages = {
-                    "disabled": "The SMS provider has not been configured yet.",
-                    "out_of_stock": (
-                        "ChatGPT Cambodia numbers are currently out of stock. Your wallet "
-                        "was not charged or has already been refunded."
-                    ),
-                    "insufficient": (
-                        f"Your wallet needs {format_vnd(result.sale_amount)}, but currently has "
-                        f"{format_vnd(result.balance)}. Please deposit into your wallet first."
-                    ),
-                    "cooldown": (
-                        f"Please wait another {result.retry_after} seconds before renting "
-                        "another number."
-                    ),
-                    "blocked": "Your account is blocked. Please contact support.",
-                    "invalid_key": "The SMS provider key is unavailable. Please try again later.",
-                    "provider_unavailable": "The SMS provider is temporarily unavailable.",
-                    "provider_result_unknown": (
-                        f"The provider result is unclear. {format_vnd(result.sale_amount)} is "
-                        "temporarily held while the order is reviewed; it has not been marked "
-                        "as a successful rental or refunded yet."
-                    ),
-                    "provider_error_refunded": (
-                        "RentSim returned a temporary error and did not charge its wallet. "
-                        "Your rental amount has been refunded. Please try again after 60 seconds."
-                    ),
-                }
-                text = f"⚠️ {messages.get(result.message, 'Could not rent a number. Your wallet was not charged.')}"
-            else:
-                messages = {
-                    "disabled": "Nguồn thuê số chưa được cấu hình.",
-                    "out_of_stock": (
-                        "Số ChatGPT Cambodia hiện đang hết hàng. Ví không bị trừ hoặc tiền "
-                        "giữ đã được hoàn lại."
-                    ),
-                    "insufficient": (
-                        f"Ví cần {format_vnd(result.sale_amount)} nhưng hiện có "
-                        f"{format_vnd(result.balance)}. Hãy nạp vào ví trước."
-                    ),
-                    "cooldown": (
-                        f"Bạn cần chờ thêm {result.retry_after} giây mới được thuê số tiếp theo."
-                    ),
-                    "blocked": "Tài khoản đang bị khóa. Hãy liên hệ hỗ trợ.",
-                    "invalid_key": "Key nguồn thuê số đang lỗi. Hãy thử lại sau.",
-                    "provider_unavailable": "Nguồn thuê số đang tạm gián đoạn.",
-                    "provider_result_unknown": (
-                        f"Kết quả thuê số chưa xác định. Khoản {format_vnd(result.sale_amount)} "
-                        "đang được tạm giữ để đối soát, chưa tính là thuê thành công và cũng chưa "
-                        "tự động hoàn nhầm. Admin đã được cảnh báo để kiểm tra."
-                    ),
-                    "provider_error_refunded": (
-                        "RentSim trả về lỗi tạm thời và không trừ tiền nguồn. "
-                        f"Khoản {format_vnd(result.sale_amount)} đã được hoàn vào ví. "
-                        "Bạn thử thuê lại sau 60 giây."
-                    ),
-                }
-                default_message = (
-                    "Không thể thuê số. Nếu ví đã bị trừ thì hệ thống đã tự động hoàn lại."
-                    if result.status == "refunded"
-                    else "Không thể thuê số và ví không bị trừ tiền."
-                )
-                text = f"⚠️ {messages.get(result.message, default_message)}"
+            text = rental_failure_text(
+                user.language,
+                message=result.message,
+                status=result.status,
+                sale_amount=result.sale_amount,
+                balance=result.balance,
+                retry_after=result.retry_after,
+            )
             if callback.message:
                 await edit_or_send_text(
                     callback.message,
