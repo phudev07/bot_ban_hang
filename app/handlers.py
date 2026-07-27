@@ -34,6 +34,7 @@ from app.keyboards import (
     product_detail,
     products_menu,
     purchase_payment_options,
+    quick_access_keyboard,
     quantity_menu,
     referral_menu,
     sms_rental_menu,
@@ -137,7 +138,8 @@ def home_text(user: User, settings: Settings) -> str:
             f"• Username: {username}\n"
             f"👛 Available balance: <b>{format_vnd(user.balance)}</b>\n\n"
             "<b>Priority actions</b>\n"
-            "• Quick buy, Deposit, My codes\n\n"
+            "• Quick buy, Deposit, My codes\n"
+            "• Use the three buttons below the chat for quick access.\n\n"
             f"💬 Support: @{escape(settings.support_username)}"
             f"{group_line_en}"
         )
@@ -147,7 +149,8 @@ def home_text(user: User, settings: Settings) -> str:
         f"• Username: {username}\n"
         f"👛 Số dư khả dụng: <b>{format_vnd(user.balance)}</b>\n\n"
         "<b>Ưu tiên trước</b>\n"
-        "• Mua nhanh, Nạp tiền, Lấy code\n\n"
+        "• Mua nhanh, Nạp tiền, Lấy code\n"
+        "• Dùng ba nút dưới ô chat để thao tác nhanh.\n\n"
         f"💬 Hỗ trợ: @{escape(settings.support_username)}"
         f"{group_line_vi}"
     )
@@ -234,28 +237,7 @@ def create_router(
             f"• Tổng tiền đã nạp: <b>{format_vnd(stats.total_deposited)}</b>"
         )
 
-    @router.message(CommandStart())
-    async def start(
-        message: Message,
-        session: AsyncSession,
-        state: FSMContext,
-        command: CommandObject,
-    ) -> None:
-        await state.clear()
-        referral_code = None
-        if command.args and command.args.lower().startswith("ref_"):
-            referral_code = command.args[4:]
-        user = await get_or_create_user(message, session, referral_code)
-        user.has_started = True
-        await session.commit()
-        await message.answer(
-            home_text(user, settings),
-            reply_markup=main_menu(user.language, sms_enabled=rentsim_client is not None),
-            disable_web_page_preview=True,
-        )
-
-    @router.message(Command("muanhanh"))
-    async def quick_buy_command(message: Message, session: AsyncSession) -> None:
+    async def send_quick_buy(message: Message, session: AsyncSession) -> None:
         user = await get_or_create_user(message, session)
         products = await active_products(session)
         flash_prices = await active_flash_sale_prices(
@@ -274,8 +256,7 @@ def create_router(
             ),
         )
 
-    @router.message(Command("naptien"))
-    async def deposit_command(message: Message, session: AsyncSession) -> None:
+    async def send_deposit_menu(message: Message, session: AsyncSession) -> None:
         user = await get_or_create_user(message, session)
         if not settings.sepay_enabled:
             text = (
@@ -293,6 +274,66 @@ def create_router(
             f"Choose an amount. Minimum {format_vnd(settings.min_deposit)}."
         )
         await message.answer(text, reply_markup=deposit_amounts(user.language))
+
+    @router.message(CommandStart())
+    async def start(
+        message: Message,
+        session: AsyncSession,
+        state: FSMContext,
+        command: CommandObject,
+    ) -> None:
+        await state.clear()
+        referral_code = None
+        if command.args and command.args.lower().startswith("ref_"):
+            referral_code = command.args[4:]
+        user = await get_or_create_user(message, session, referral_code)
+        user.has_started = True
+        await session.commit()
+        await message.answer(
+            home_text(user, settings),
+            reply_markup=quick_access_keyboard(user.language),
+            disable_web_page_preview=True,
+        )
+
+    @router.message(Command("muanhanh"))
+    async def quick_buy_command(message: Message, session: AsyncSession) -> None:
+        await send_quick_buy(message, session)
+
+    @router.message(Command("naptien"))
+    async def deposit_command(message: Message, session: AsyncSession) -> None:
+        await send_deposit_menu(message, session)
+
+    @router.message(F.text.in_({"☰ Menu"}))
+    async def quick_menu_button(
+        message: Message,
+        session: AsyncSession,
+        state: FSMContext,
+    ) -> None:
+        await state.clear()
+        user = await get_or_create_user(message, session)
+        await message.answer(
+            home_text(user, settings),
+            reply_markup=main_menu(user.language, sms_enabled=rentsim_client is not None),
+            disable_web_page_preview=True,
+        )
+
+    @router.message(F.text.in_({"⚡ Mua nhanh", "⚡ Quick buy"}))
+    async def quick_buy_button(
+        message: Message,
+        session: AsyncSession,
+        state: FSMContext,
+    ) -> None:
+        await state.clear()
+        await send_quick_buy(message, session)
+
+    @router.message(F.text.in_({"💳 Nạp tiền", "💳 Deposit"}))
+    async def deposit_button(
+        message: Message,
+        session: AsyncSession,
+        state: FSMContext,
+    ) -> None:
+        await state.clear()
+        await send_deposit_menu(message, session)
 
     @router.message(Command("donmua"))
     async def orders_command(message: Message, session: AsyncSession) -> None:
@@ -349,7 +390,7 @@ def create_router(
         await bot.send_message(
             message.chat.id,
             home_text(user, settings),
-            reply_markup=main_menu(user.language, sms_enabled=rentsim_client is not None),
+            reply_markup=quick_access_keyboard(user.language),
             disable_web_page_preview=True,
         )
 

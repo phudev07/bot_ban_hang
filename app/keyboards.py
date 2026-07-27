@@ -1,10 +1,32 @@
-from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
+from aiogram.types import (
+    InlineKeyboardButton,
+    InlineKeyboardMarkup,
+    KeyboardButton,
+    ReplyKeyboardMarkup,
+)
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 from urllib.parse import quote
 
 from app.i18n import tr
 from app.models import Category, Order, Product
 from app.utils import format_vnd
+
+
+def quick_access_keyboard(language: str) -> ReplyKeyboardMarkup:
+    return ReplyKeyboardMarkup(
+        keyboard=[
+            [
+                KeyboardButton(text=tr(language, "menu")),
+                KeyboardButton(text=tr(language, "quick")),
+                KeyboardButton(text=tr(language, "deposit")),
+            ]
+        ],
+        resize_keyboard=True,
+        is_persistent=True,
+        input_field_placeholder=(
+            "Chọn thao tác nhanh…" if language == "vi" else "Choose a quick action…"
+        ),
+    )
 
 
 def main_menu(language: str, *, sms_enabled: bool = False) -> InlineKeyboardMarkup:

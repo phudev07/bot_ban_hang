@@ -1,5 +1,6 @@
 TEXT = {
     "vi": {
+        "menu": "☰ Menu",
         "products": "🛍 Mặt hàng",
         "quick": "⚡ Mua nhanh",
         "deposit": "💳 Nạp tiền",
@@ -17,6 +18,7 @@ TEXT = {
         "other_amount": "✍️ Số tiền khác",
     },
     "en": {
+        "menu": "☰ Menu",
         "products": "🛍 Products",
         "quick": "⚡ Quick buy",
         "deposit": "💳 Deposit",

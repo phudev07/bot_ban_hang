@@ -3,6 +3,7 @@ from app.keyboards import (
     order_history_menu,
     product_detail,
     purchase_payment_options,
+    quick_access_keyboard,
     quantity_menu,
     warehouse_api_menu,
 )
@@ -42,6 +43,16 @@ def test_main_menu_hides_sms_until_provider_is_configured() -> None:
     callbacks = [button.callback_data for row in keyboard.inline_keyboard for button in row]
 
     assert "menu:sms" not in callbacks
+
+
+def test_quick_access_keyboard_is_one_persistent_row() -> None:
+    keyboard = quick_access_keyboard("vi")
+
+    assert [[button.text for button in row] for row in keyboard.keyboard] == [
+        ["☰ Menu", "⚡ Mua nhanh", "💳 Nạp tiền"]
+    ]
+    assert keyboard.resize_keyboard is True
+    assert keyboard.is_persistent is True
 
 
 def test_warehouse_api_guide_opens_public_documentation() -> None:
