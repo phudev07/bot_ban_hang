@@ -184,6 +184,29 @@ async def edit_or_send_text(message: Message, text: str, **kwargs) -> Message:
     return await message.edit_text(text, **kwargs)
 
 
+async def send_home_with_navigation(
+    message: Message,
+    user: User,
+    settings: Settings,
+    *,
+    sms_enabled: bool,
+) -> None:
+    quick_access_text = (
+        "⌨️ Phím thao tác nhanh đã sẵn sàng."
+        if user.language == "vi"
+        else "⌨️ Quick actions are ready."
+    )
+    await message.answer(
+        quick_access_text,
+        reply_markup=quick_access_keyboard(user.language),
+    )
+    await message.answer(
+        home_text(user, settings),
+        reply_markup=main_menu(user.language, sms_enabled=sms_enabled),
+        disable_web_page_preview=True,
+    )
+
+
 def create_router(
     settings: Settings,
     cipher: SecretCipher,
@@ -298,10 +321,11 @@ def create_router(
         user = await get_or_create_user(message, session, referral_code)
         user.has_started = True
         await session.commit()
-        await message.answer(
-            home_text(user, settings),
-            reply_markup=quick_access_keyboard(user.language),
-            disable_web_page_preview=True,
+        await send_home_with_navigation(
+            message,
+            user,
+            settings,
+            sms_enabled=rentsim_client is not None,
         )
 
     @router.message(Command("muanhanh"))

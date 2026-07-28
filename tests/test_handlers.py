@@ -1,7 +1,14 @@
 import asyncio
+from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
-from app.handlers import coupon_error_message, edit_or_send_text
+from aiogram.types import InlineKeyboardMarkup, ReplyKeyboardMarkup
+
+from app.handlers import (
+    coupon_error_message,
+    edit_or_send_text,
+    send_home_with_navigation,
+)
 
 
 def test_coupon_errors_explain_the_exact_reason() -> None:
@@ -44,5 +51,43 @@ def test_edit_or_send_text_sends_new_message_for_media() -> None:
             reply_markup="keyboard",
         )
         message.edit_text.assert_not_awaited()
+
+    asyncio.run(scenario())
+
+
+def test_start_home_keeps_quick_actions_and_shows_main_menu() -> None:
+    async def scenario() -> None:
+        message = AsyncMock()
+        user = SimpleNamespace(
+            language="vi",
+            full_name="Test User",
+            username="tester",
+            telegram_id=123,
+            balance=50_000,
+        )
+        settings = SimpleNamespace(
+            support_username="support",
+            community_group_url="",
+        )
+
+        await send_home_with_navigation(
+            message,
+            user,  # type: ignore[arg-type]
+            settings,  # type: ignore[arg-type]
+            sms_enabled=True,
+        )
+
+        assert message.answer.await_count == 2
+        quick_call, menu_call = message.answer.await_args_list
+        assert isinstance(quick_call.kwargs["reply_markup"], ReplyKeyboardMarkup)
+        assert isinstance(menu_call.kwargs["reply_markup"], InlineKeyboardMarkup)
+        menu_callbacks = {
+            button.callback_data
+            for row in menu_call.kwargs["reply_markup"].inline_keyboard
+            for button in row
+        }
+        assert "menu:quick" in menu_callbacks
+        assert "menu:deposit" in menu_callbacks
+        assert "menu:sms" in menu_callbacks
 
     asyncio.run(scenario())
