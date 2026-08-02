@@ -25,12 +25,22 @@
       <div><dt>Mã rút</dt><dd><code>{{ withdrawal_code }}</code></dd></div>
       <div><dt>Sản phẩm</dt><dd>{{ product.name_vi }} <small>#{{ product.id }}</small></dd></div>
       <div><dt>Số lượng</dt><dd>{{ quantity }} tài khoản</dd></div>
+      <div><dt>Nguồn rút</dt><dd>{{ withdrawal_source_label }}</dd></div>
       <div><dt>Tổng giá vốn giữ lại</dt><dd>{{ total_cost|vnd }}</dd></div>
       <div><dt>Người thực hiện</dt><dd>{{ withdrawn_by or 'admin' }}</dd></div>
       <div><dt>Thời gian</dt><dd>{{ withdrawn_at|localtime }}</dd></div>
       <div><dt>Lý do</dt><dd>{{ withdrawal_reason or 'Bảo hành khách hàng' }}</dd></div>
       <div><dt>ID kho</dt><dd>#{{ item_ids|join(', #') }}</dd></div>
     </dl>
+    <div class="withdrawal-source-list">
+      <strong>Đối soát nguồn</strong>
+      {% for source in withdrawal_sources %}
+      <article>
+        <div><b>{{ source.label }}</b><small>{{ source.quantity }} tài khoản · {{ source.cost|vnd }}</small></div>
+        <code>{{ source.order_code or 'Kho nhập thủ công' }}</code>
+      </article>
+      {% endfor %}
+    </div>
   </aside>
 </div>
 

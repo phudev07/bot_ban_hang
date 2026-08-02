@@ -693,6 +693,15 @@ class SupplierRecoveryRequest(Base):
     quantity: Mapped[int]
     status: Mapped[str] = mapped_column(String(24), default="pending", index=True)
     error_code: Mapped[str] = mapped_column(String(64), default="")
+    inventory_withdrawal_code: Mapped[str | None] = mapped_column(
+        String(32), nullable=True, index=True
+    )
+    inventory_withdrawn_by: Mapped[str | None] = mapped_column(
+        String(255), nullable=True
+    )
+    inventory_withdrawal_reason: Mapped[str | None] = mapped_column(
+        Text, nullable=True
+    )
     supplier_order_code: Mapped[str | None] = mapped_column(
         String(64), nullable=True, unique=True, index=True
     )

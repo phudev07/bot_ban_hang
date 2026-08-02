@@ -29,11 +29,14 @@ from app.models import (
     ProductStockAlert,
     QuantityDiscount,
     SmsRental,
+    SupplierBalanceTransaction,
+    SupplierPurchaseAttempt,
+    SupplierRecoveryRequest,
     User,
     WalletTransaction,
 )
 from app.services import active_products, purchase_product
-from app.suppliers import SupplierSnapshot
+from app.suppliers import SupplierError, SupplierPurchase, SupplierSnapshot
 from app.utils import SecretCipher
 
 
@@ -63,6 +66,66 @@ class DashboardSupplier:
             source_stock=self.stock,
             owner_balance=self.balance,
         )
+
+
+class DashboardBuyingSupplier:
+    provider = "sumistore"
+
+    def __init__(self, *, price: int, stock: int, balance: int) -> None:
+        self.price = price
+        self.stock = stock
+        self.balance = balance
+        self.balance_lock = asyncio.Lock()
+        self.buy_calls: list[tuple[str, int]] = []
+        self.order_number = 0
+
+    async def fetch_snapshot(self, product_id: str) -> SupplierSnapshot:
+        return SupplierSnapshot(
+            product_id=product_id,
+            name="API warranty product",
+            description="",
+            unit_price=self.price,
+            source_stock=self.stock,
+            owner_balance=self.balance,
+        )
+
+    async def buy(self, product_id: str, quantity: int) -> SupplierPurchase:
+        if quantity > self.stock:
+            raise SupplierError("INSUFFICIENT_STOCK")
+        if quantity * self.price > self.balance:
+            raise SupplierError("INSUFFICIENT_BALANCE")
+        self.buy_calls.append((product_id, quantity))
+        self.order_number += 1
+        self.stock -= quantity
+        self.balance -= quantity * self.price
+        return SupplierPurchase(
+            order_code=f"API-WARRANTY-{self.order_number}",
+            unit_price=self.price,
+            accounts=tuple(
+                f"api-warranty-{self.order_number}-{index}@example.com|password-{index}"
+                for index in range(1, quantity + 1)
+            ),
+            product_id=product_id,
+            provider=self.provider,
+        )
+
+
+class AmbiguousDashboardSupplier(DashboardBuyingSupplier):
+    async def buy(self, product_id: str, quantity: int) -> SupplierPurchase:
+        self.buy_calls.append((product_id, quantity))
+        raise SupplierError("SUPPLIER_UNAVAILABLE")
+
+    async def recover_recent_purchase(
+        self,
+        _product_id: str,
+        _quantity: int,
+        *,
+        started_at: datetime,
+        known_order_codes: set[str],
+    ) -> None:
+        assert started_at.tzinfo is not None
+        assert isinstance(known_order_codes, set)
+        return None
 
 
 def test_archived_catalog_items_disappear_but_keep_financial_history(tmp_path) -> None:
@@ -2052,6 +2115,250 @@ def test_admin_withdraws_inventory_for_warranty_without_partial_or_resale(tmp_pa
         await engine.dispose()
 
     asyncio.run(verify_database_and_resale_guard())
+
+
+def test_admin_can_withdraw_warranty_accounts_directly_from_supplier_api(tmp_path) -> None:
+    encryption_key = Fernet.generate_key().decode()
+    cipher = SecretCipher(encryption_key)
+
+    async def setup_database():
+        database_path = (tmp_path / "dashboard-api-warranty-withdrawal.db").as_posix()
+        engine = create_async_engine(f"sqlite+aiosqlite:///{database_path}")
+        async with engine.begin() as connection:
+            await connection.run_sync(Base.metadata.create_all)
+        sessions = async_sessionmaker(engine, expire_on_commit=False)
+        async with sessions() as session:
+            category = Category(name_vi="ChatGPT", name_en="ChatGPT")
+            session.add(category)
+            await session.flush()
+            product = Product(
+                category_id=category.id,
+                name_vi="GPT Plus API warranty",
+                name_en="GPT Plus API warranty",
+                price=40_000,
+                fulfillment_source="sumistore",
+                supplier_product_id="SP-GEF55PBV",
+                supplier_price=30_000,
+                supplier_markup=10_000,
+                supplier_available_stock=8,
+                external_stock=8,
+                active=True,
+            )
+            session.add(product)
+            await session.commit()
+            return engine, sessions, product.id
+
+    engine, sessions, product_id = asyncio.run(setup_database())
+    supplier = DashboardBuyingSupplier(price=30_000, stock=8, balance=300_000)
+    settings = Settings(
+        _env_file=None,
+        bot_token="123456:ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghi",
+        inventory_encryption_key=encryption_key,
+        dashboard_enabled=True,
+        dashboard_username="admin",
+        dashboard_password_hash=hash_dashboard_password("dashboard-password"),
+        dashboard_session_secret="session-secret-long-enough-for-tests",
+    )
+    app = create_api(
+        settings,
+        sessions,
+        FakeBot(),  # type: ignore[arg-type]
+        cipher,
+        supplier_client=supplier,  # type: ignore[arg-type]
+    )
+
+    with TestClient(app, base_url="https://testserver") as client:
+        client.post(
+            "/admin/login",
+            data={"username": "admin", "password": "dashboard-password"},
+        )
+        inventory_page = client.get("/admin/inventory")
+        assert inventory_page.status_code == 200
+        assert "GPT Plus API warranty · kho nhập 0 · API 8" in inventory_page.text
+        assert 'name="source"' in inventory_page.text
+        assert "Chỉ API đang đấu" in inventory_page.text
+        csrf = re.search(r'name="csrf" value="([^"]+)"', inventory_page.text).group(1)
+
+        withdrawn = client.post(
+            "/admin/inventory/withdraw",
+            data={
+                "csrf": csrf,
+                "product_id": str(product_id),
+                "quantity": "2",
+                "source": "api",
+                "reason": "Đổi bảo hành từ nguồn API",
+            },
+            follow_redirects=False,
+        )
+        assert withdrawn.status_code == 303
+        assert re.fullmatch(
+            r"/admin/inventory/withdrawals/WD[A-F0-9]{16}",
+            withdrawn.headers["location"],
+        )
+        withdrawal_code = withdrawn.headers["location"].rsplit("/", 1)[-1]
+        detail = client.get(withdrawn.headers["location"])
+        assert detail.status_code == 200
+        assert "api-warranty-1-1@example.com|password-1" in detail.text
+        assert "api-warranty-1-2@example.com|password-2" in detail.text
+        assert "API-WARRANTY-1" in detail.text
+        assert "Đổi bảo hành từ nguồn API" in detail.text
+        assert "60.000đ" in detail.text
+
+        inventory_after = client.get("/admin/inventory")
+        assert f"{withdrawal_code}" in inventory_after.text
+        assert "API 6" in inventory_after.text
+        assert ">API</span>" in inventory_after.text
+
+        insufficient = client.post(
+            "/admin/inventory/withdraw",
+            data={
+                "csrf": csrf,
+                "product_id": str(product_id),
+                "quantity": "7",
+                "source": "api",
+            },
+            follow_redirects=False,
+        )
+        assert insufficient.status_code == 303
+        insufficient_page = client.get("/admin/inventory")
+        assert "Không có một nguồn API riêng lẻ nào đủ số lượng" in insufficient_page.text
+
+    async def verify_database() -> None:
+        async with sessions() as session:
+            items = list(
+                await session.scalars(
+                    select(InventoryItem).order_by(InventoryItem.id)
+                )
+            )
+            assert len(items) == 2
+            assert all(item.status == "withdrawn" for item in items)
+            assert all(item.withdrawal_code == withdrawal_code for item in items)
+            assert all(item.supplier_provider == "sumistore" for item in items)
+            assert all(item.supplier_order_code == "API-WARRANTY-1" for item in items)
+            assert all(item.cost_amount == 30_000 for item in items)
+
+            product = await session.get(Product, product_id)
+            assert product is not None
+            assert product.supplier_available_stock == 6
+            assert product.external_stock == 6
+
+            audit = await session.scalar(select(SupplierBalanceTransaction))
+            assert audit is not None
+            assert audit.kind == "purchase"
+            assert audit.amount == -60_000
+            assert audit.shop_order_code == withdrawal_code
+            assert audit.supplier_order_code == "API-WARRANTY-1"
+
+            attempt = await session.scalar(select(SupplierPurchaseAttempt))
+            assert attempt is not None
+            assert attempt.status == "succeeded"
+            assert attempt.supplier_order_code == "API-WARRANTY-1"
+            assert attempt.request_key == f"warranty-{withdrawal_code.lower()}"
+            assert int(await session.scalar(select(func.count(Order.id))) or 0) == 0
+        await engine.dispose()
+
+    asyncio.run(verify_database())
+    assert supplier.buy_calls == [("SP-GEF55PBV", 2)]
+
+
+def test_ambiguous_api_warranty_withdrawal_is_linked_to_recovery(tmp_path) -> None:
+    encryption_key = Fernet.generate_key().decode()
+    cipher = SecretCipher(encryption_key)
+
+    async def setup_database():
+        database_path = (tmp_path / "dashboard-api-warranty-recovery.db").as_posix()
+        engine = create_async_engine(f"sqlite+aiosqlite:///{database_path}")
+        async with engine.begin() as connection:
+            await connection.run_sync(Base.metadata.create_all)
+        sessions = async_sessionmaker(engine, expire_on_commit=False)
+        async with sessions() as session:
+            category = Category(name_vi="ChatGPT", name_en="ChatGPT")
+            session.add(category)
+            await session.flush()
+            product = Product(
+                category_id=category.id,
+                name_vi="GPT Plus API recovery",
+                name_en="GPT Plus API recovery",
+                price=40_000,
+                fulfillment_source="sumistore",
+                supplier_product_id="SP-AMBIGUOUS-WARRANTY",
+                supplier_price=30_000,
+                supplier_available_stock=3,
+                external_stock=3,
+                active=True,
+            )
+            session.add(product)
+            await session.commit()
+            return engine, sessions, product.id
+
+    engine, sessions, product_id = asyncio.run(setup_database())
+    supplier = AmbiguousDashboardSupplier(price=30_000, stock=3, balance=100_000)
+    settings = Settings(
+        _env_file=None,
+        bot_token="123456:ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghi",
+        inventory_encryption_key=encryption_key,
+        dashboard_enabled=True,
+        dashboard_username="admin",
+        dashboard_password_hash=hash_dashboard_password("dashboard-password"),
+        dashboard_session_secret="session-secret-long-enough-for-tests",
+    )
+    app = create_api(
+        settings,
+        sessions,
+        FakeBot(),  # type: ignore[arg-type]
+        cipher,
+        supplier_client=supplier,  # type: ignore[arg-type]
+    )
+
+    with TestClient(app, base_url="https://testserver") as client:
+        client.post(
+            "/admin/login",
+            data={"username": "admin", "password": "dashboard-password"},
+        )
+        inventory_page = client.get("/admin/inventory")
+        csrf = re.search(r'name="csrf" value="([^"]+)"', inventory_page.text).group(1)
+        response = client.post(
+            "/admin/inventory/withdraw",
+            data={
+                "csrf": csrf,
+                "product_id": str(product_id),
+                "quantity": "1",
+                "source": "api",
+                "reason": "Bảo hành cần thu hồi tự động",
+            },
+            follow_redirects=False,
+        )
+        assert response.status_code == 303
+        assert response.headers["location"] == "/admin/inventory"
+        result_page = client.get("/admin/inventory")
+        assert "đang chờ đối soát" in result_page.text
+        assert "không bấm lại" in result_page.text
+        assert "tự xuất hiện trong lịch sử rút bảo hành" in result_page.text
+        assert "Rút bảo hành đang chờ đối soát" in result_page.text
+        assert re.search(r"WD[A-F0-9]{16}", result_page.text)
+
+    async def verify_recovery_link() -> None:
+        async with sessions() as session:
+            recovery = await session.scalar(select(SupplierRecoveryRequest))
+            assert recovery is not None
+            assert recovery.status == "pending"
+            assert re.fullmatch(
+                r"WD[A-F0-9]{16}",
+                recovery.inventory_withdrawal_code or "",
+            )
+            assert recovery.inventory_withdrawn_by == "admin"
+            assert (
+                recovery.inventory_withdrawal_reason
+                == "Bảo hành cần thu hồi tự động"
+            )
+            assert recovery.request_key == (
+                f"warranty-{recovery.inventory_withdrawal_code.lower()}"
+            )
+            assert int(await session.scalar(select(func.count(InventoryItem.id))) or 0) == 0
+        await engine.dispose()
+
+    asyncio.run(verify_recovery_link())
+    assert supplier.buy_calls == [("SP-AMBIGUOUS-WARRANTY", 1)]
 
 
 def test_dashboard_groups_multi_item_purchase_as_one_order(tmp_path) -> None:

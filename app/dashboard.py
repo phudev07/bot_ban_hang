@@ -4,7 +4,7 @@ import logging
 import re
 import secrets
 import time
-from contextlib import suppress
+from contextlib import AsyncExitStack, suppress
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from html import escape
@@ -49,6 +49,7 @@ from app.models import (
     SupplierBalanceState,
     SupplierBalanceTransaction,
     SupplierPurchaseAttempt,
+    SupplierRecoveryRequest,
     User,
     WalletTransaction,
 )
@@ -56,13 +57,17 @@ from app.partner_services import normalize_allowed_ips
 from app.rentsim import RentSimClient
 from app.services import (
     approve_wallet_deposit,
+    buy_supplier_product,
     cancel_wallet_deposit,
+    preserve_supplier_purchase_parts,
     refresh_product_from_supplier,
+    supplier_balance_clients_for_product,
+    supplier_client_for_product,
 )
 from app.price_alerts import release_price_lock_if_inventory_empty
 from app.sms_rentals import sms_availability
 from app.stock_alerts import queue_inventory_stock_alert, stock_alert_mode
-from app.supplier_audit import PROVIDER, reconcile_supplier_balance
+from app.supplier_audit import PROVIDER, reconcile_supplier_balance, record_supplier_purchase
 from app.suppliers import (
     EXTERNAL_FULFILLMENT_SOURCES,
     SELLABLE_FULFILLMENT_SOURCES,
@@ -72,8 +77,11 @@ from app.suppliers import (
     configured_supplier_providers,
     enabled_supplier_providers,
     fetch_sumistore_supplier_routes,
+    is_multi_supplier_product,
     plan_supplier_routes,
     product_supplier_api_enabled,
+    supplier_balance_guard,
+    supplier_route_sort_key,
 )
 from app.utils import SecretCipher, format_vnd, parse_vnd
 from app.wallet_ledger import apply_wallet_change
@@ -1364,6 +1372,11 @@ def create_dashboard_router(
                 "product": product,
                 "category": category,
                 "local_stock": int(stock),
+                "api_stock": (
+                    max(0, int(product.external_stock) - int(stock))
+                    if product.fulfillment_source in EXTERNAL_FULFILLMENT_SOURCES
+                    else 0
+                ),
                 "source_stock": (
                     max(0, product.external_stock)
                     if product.fulfillment_source in EXTERNAL_FULFILLMENT_SOURCES
@@ -2737,6 +2750,7 @@ def create_dashboard_router(
                     func.max(InventoryItem.withdrawn_at),
                     func.max(InventoryItem.withdrawn_by),
                     func.max(InventoryItem.withdrawal_reason),
+                    func.count(InventoryItem.supplier_provider),
                 )
                 .join(Product, Product.id == InventoryItem.product_id)
                 .where(
@@ -2760,6 +2774,7 @@ def create_dashboard_router(
                     "withdrawn_at": withdrawn_at,
                     "withdrawn_by": withdrawn_by,
                     "reason": reason,
+                    "source": "API" if int(api_item_count) > 0 else "Kho nhập",
                 }
                 for (
                     code,
@@ -2769,7 +2784,22 @@ def create_dashboard_router(
                     withdrawn_at,
                     withdrawn_by,
                     reason,
+                    api_item_count,
                 ) in withdrawal_results
+            ]
+            pending_withdrawal_results = await session.execute(
+                select(SupplierRecoveryRequest, Product)
+                .join(Product, Product.id == SupplierRecoveryRequest.product_id)
+                .where(
+                    SupplierRecoveryRequest.inventory_withdrawal_code.is_not(None),
+                    SupplierRecoveryRequest.status != "recovered",
+                )
+                .order_by(SupplierRecoveryRequest.id.desc())
+                .limit(ADMIN_PAGE_SIZE)
+            )
+            pending_withdrawals = [
+                {"recovery": recovery, "product": product}
+                for recovery, product in pending_withdrawal_results
             ]
         return templates.TemplateResponse(
             request,
@@ -2781,10 +2811,18 @@ def create_dashboard_router(
                 products=products,
                 import_products=products,
                 withdrawal_products=[
-                    row for row in products if int(row["local_stock"]) > 0
+                    row
+                    for row in products
+                    if int(row["local_stock"]) > 0
+                    or (
+                        row["product"].fulfillment_source
+                        in EXTERNAL_FULFILLMENT_SOURCES
+                        and bool(row["api_routes_enabled"])
+                    )
                 ],
                 recent_items=recent_items,
                 recent_withdrawals=recent_withdrawals,
+                pending_withdrawals=pending_withdrawals,
                 duplicate_rows=duplicate_rows,
                 duplicate_alert_count=duplicate_alert_count,
                 pager=pager,
@@ -2932,6 +2970,7 @@ def create_dashboard_router(
         csrf: str = Form(...),
         product_id: int = Form(...),
         quantity: int = Form(...),
+        source: str = Form("auto"),
         reason: str = Form("Bảo hành khách hàng"),
     ) -> RedirectResponse:
         if not is_admin(request):
@@ -2945,81 +2984,346 @@ def create_dashboard_router(
                 "error",
             )
             return RedirectResponse("/admin/inventory", status_code=303)
+        normalized_source = source.strip().lower()
+        if normalized_source not in {"auto", "local", "api"}:
+            flash(request, "Nguồn rút hàng không hợp lệ.", "error")
+            return RedirectResponse("/admin/inventory", status_code=303)
 
         normalized_reason = reason.strip()[:500] or "Bảo hành khách hàng"
         withdrawn_by = str(request.session.get("dashboard_admin") or "admin")[:255]
         withdrawal_code = f"WD{secrets.token_hex(8).upper()}"
-        async with session_factory() as session:
-            product = await session.scalar(
-                select(Product).where(Product.id == product_id).with_for_update()
-            )
-            if (
-                product is None
-                or product.archived_at is not None
-                or product.fulfillment_source not in SELLABLE_FULFILLMENT_SOURCES
-                or product.product_type != "account"
-            ):
-                flash(request, "Sản phẩm rút kho không hợp lệ.", "error")
-                return RedirectResponse("/admin/inventory", status_code=303)
+        async with session_factory() as lookup_session:
+            product_snapshot = await lookup_session.get(Product, product_id)
+        if product_snapshot is None:
+            flash(request, "Sản phẩm rút kho không hợp lệ.", "error")
+            return RedirectResponse("/admin/inventory", status_code=303)
 
-            available_count = int(
-                await session.scalar(
-                    select(func.count(InventoryItem.id)).where(
-                        InventoryItem.product_id == product.id,
-                        InventoryItem.status == "available",
+        balance_clients = (
+            supplier_balance_clients_for_product(
+                product_snapshot,
+                supplier_client,
+                lehai_client,
+            )
+            if normalized_source != "local"
+            else ()
+        )
+        async with AsyncExitStack() as supplier_locks:
+            for client in balance_clients:
+                await supplier_locks.enter_async_context(supplier_balance_guard(client))
+
+            async with session_factory() as session:
+                product = await session.scalar(
+                    select(Product).where(Product.id == product_id).with_for_update()
+                )
+                if (
+                    product is None
+                    or product.archived_at is not None
+                    or product.fulfillment_source not in SELLABLE_FULFILLMENT_SOURCES
+                    or product.product_type != "account"
+                ):
+                    flash(request, "Sản phẩm rút kho không hợp lệ.", "error")
+                    return RedirectResponse("/admin/inventory", status_code=303)
+
+                available_count = int(
+                    await session.scalar(
+                        select(func.count(InventoryItem.id)).where(
+                            InventoryItem.product_id == product.id,
+                            InventoryItem.status == "available",
+                        )
                     )
+                    or 0
                 )
-                or 0
-            )
-            if available_count < quantity:
-                await session.rollback()
-                flash(
-                    request,
-                    f"Kho nhập chỉ còn {available_count} tài khoản; không rút một phần. "
-                    "Hãy giảm số lượng rồi thử lại.",
-                    "error",
+                use_api = normalized_source == "api" or (
+                    normalized_source == "auto"
+                    and available_count < quantity
+                    and product.fulfillment_source in EXTERNAL_FULFILLMENT_SOURCES
                 )
-                return RedirectResponse("/admin/inventory", status_code=303)
 
-            items = list(
-                await session.scalars(
-                    select(InventoryItem)
-                    .where(
-                        InventoryItem.product_id == product.id,
-                        InventoryItem.status == "available",
+                if not use_api:
+                    if available_count < quantity:
+                        await session.rollback()
+                        flash(
+                            request,
+                            f"Kho nhập chỉ còn {available_count} tài khoản; không rút một "
+                            "phần. Hãy giảm số lượng hoặc chọn nguồn API.",
+                            "error",
+                        )
+                        return RedirectResponse("/admin/inventory", status_code=303)
+
+                    items = list(
+                        await session.scalars(
+                            select(InventoryItem)
+                            .where(
+                                InventoryItem.product_id == product.id,
+                                InventoryItem.status == "available",
+                            )
+                            .order_by(InventoryItem.id)
+                            .with_for_update(skip_locked=True)
+                            .limit(quantity)
+                        )
                     )
-                    .order_by(InventoryItem.id)
-                    .with_for_update(skip_locked=True)
-                    .limit(quantity)
-                )
-            )
-            if len(items) != quantity:
-                await session.rollback()
-                flash(
-                    request,
-                    "Một phần kho đang được giao cho đơn khác. Chưa rút tài khoản nào; "
-                    "hãy thử lại sau vài giây.",
-                    "error",
-                )
-                return RedirectResponse("/admin/inventory", status_code=303)
+                    if len(items) != quantity:
+                        await session.rollback()
+                        flash(
+                            request,
+                            "Một phần kho đang được giao cho đơn khác. Chưa rút tài khoản "
+                            "nào; hãy thử lại sau vài giây.",
+                            "error",
+                        )
+                        return RedirectResponse("/admin/inventory", status_code=303)
 
-            withdrawn_at = datetime.now(UTC)
-            for item in items:
-                item.status = "withdrawn"
-                item.withdrawal_code = withdrawal_code
-                item.withdrawn_at = withdrawn_at
-                item.withdrawn_by = withdrawn_by
-                item.withdrawal_reason = normalized_reason
-            await session.flush()
+                    withdrawn_at = datetime.now(UTC)
+                    for item in items:
+                        item.status = "withdrawn"
+                        item.withdrawal_code = withdrawal_code
+                        item.withdrawn_at = withdrawn_at
+                        item.withdrawn_by = withdrawn_by
+                        item.withdrawal_reason = normalized_reason
+                    await session.flush()
 
-            local_stock = available_count - quantity
-            if product.fulfillment_source in EXTERNAL_FULFILLMENT_SOURCES:
-                product.external_stock = local_stock + max(
-                    0, int(product.supplier_available_stock)
-                )
-                if product.price_lock_enabled and local_stock == 0:
-                    await release_price_lock_if_inventory_empty(session, product)
-            await session.commit()
+                    local_stock = available_count - quantity
+                    if product.fulfillment_source in EXTERNAL_FULFILLMENT_SOURCES:
+                        product.external_stock = local_stock + max(
+                            0, int(product.supplier_available_stock)
+                        )
+                        if product.price_lock_enabled and local_stock == 0:
+                            await release_price_lock_if_inventory_empty(session, product)
+                    await session.commit()
+                else:
+                    if (
+                        product.fulfillment_source not in EXTERNAL_FULFILLMENT_SOURCES
+                        or not product.supplier_product_id
+                        or not enabled_supplier_providers(product)
+                    ):
+                        await session.rollback()
+                        flash(
+                            request,
+                            "Sản phẩm này chưa bật nguồn API để rút bảo hành.",
+                            "error",
+                        )
+                        return RedirectResponse("/admin/inventory", status_code=303)
+
+                    request_key = f"warranty-{withdrawal_code.lower()}"
+                    try:
+                        if is_multi_supplier_product(
+                            product.fulfillment_source,
+                            product.supplier_product_id,
+                        ):
+                            route_fetch = await fetch_sumistore_supplier_routes(
+                                product.supplier_product_id,
+                                supplier_client,
+                                lehai_client,
+                                enabled_providers=enabled_supplier_providers(product),
+                            )
+                            selected_route = next(
+                                (
+                                    route
+                                    for route in sorted(
+                                        route_fetch.routes,
+                                        key=supplier_route_sort_key,
+                                    )
+                                    if route.snapshot.effective_stock >= quantity
+                                ),
+                                None,
+                            )
+                            if selected_route is None:
+                                await session.rollback()
+                                flash(
+                                    request,
+                                    "Không có một nguồn API riêng lẻ nào đủ số lượng để "
+                                    "rút an toàn.",
+                                    "error",
+                                )
+                                return RedirectResponse(
+                                    "/admin/inventory", status_code=303
+                                )
+                            purchase = await buy_supplier_product(
+                                session,
+                                selected_route.client,
+                                selected_route.product_id,
+                                quantity,
+                                idempotency_key=request_key,
+                                shop_product_id=product.id,
+                            )
+                            supplier_purchases = (
+                                (
+                                    purchase,
+                                    max(
+                                        0,
+                                        int(
+                                            purchase.unit_price
+                                            or selected_route.snapshot.unit_price
+                                            or 0
+                                        ),
+                                    ),
+                                ),
+                            )
+                            api_stock_before = sum(
+                                route.snapshot.effective_stock
+                                for route in route_fetch.routes
+                            )
+                        else:
+                            external_client = supplier_client_for_product(
+                                product,
+                                supplier_client,
+                                lehai_client,
+                            )
+                            if external_client is None:
+                                await session.rollback()
+                                flash(
+                                    request,
+                                    "Nguồn API của sản phẩm đang tắt hoặc chưa cấu hình.",
+                                    "error",
+                                )
+                                return RedirectResponse(
+                                    "/admin/inventory", status_code=303
+                                )
+                            api_snapshot = await external_client.fetch_snapshot(
+                                product.supplier_product_id
+                            )
+                            if api_snapshot.effective_stock < quantity:
+                                await session.rollback()
+                                flash(
+                                    request,
+                                    "Nguồn API hiện không đủ số lượng để rút.",
+                                    "error",
+                                )
+                                return RedirectResponse(
+                                    "/admin/inventory", status_code=303
+                                )
+                            purchase = await buy_supplier_product(
+                                session,
+                                external_client,
+                                product.supplier_product_id,
+                                quantity,
+                                idempotency_key=request_key,
+                                shop_product_id=product.id,
+                            )
+                            supplier_purchases = (
+                                (
+                                    purchase,
+                                    max(
+                                        0,
+                                        int(
+                                            purchase.unit_price
+                                            or api_snapshot.unit_price
+                                            or product.supplier_price
+                                            or 0
+                                        ),
+                                    ),
+                                ),
+                            )
+                            api_stock_before = api_snapshot.effective_stock
+                    except SupplierError as exc:
+                        pending_recoveries = list(
+                            await session.scalars(
+                                select(SupplierRecoveryRequest)
+                                .where(
+                                    SupplierRecoveryRequest.product_id == product.id,
+                                    SupplierRecoveryRequest.status == "pending",
+                                    SupplierRecoveryRequest.request_key.startswith(
+                                        request_key
+                                    ),
+                                )
+                                .with_for_update()
+                            )
+                        )
+                        for recovery in pending_recoveries:
+                            recovery.inventory_withdrawal_code = withdrawal_code
+                            recovery.inventory_withdrawn_by = withdrawn_by
+                            recovery.inventory_withdrawal_reason = normalized_reason
+                        await session.commit()
+                        logger.warning(
+                            "Admin API warranty withdrawal failed: product=%s quantity=%s "
+                            "code=%s",
+                            product.id,
+                            quantity,
+                            exc.code,
+                        )
+                        messages = {
+                            "INSUFFICIENT_STOCK": "Nguồn API hiện không đủ hàng để rút.",
+                            "INSUFFICIENT_BALANCE": "Số dư nguồn API không đủ để rút hàng.",
+                            "SUPPLIER_RECOVERY_PENDING": (
+                                "Kết quả rút từ API đang chờ đối soát; không bấm lại để "
+                                "tránh mua trùng."
+                            ),
+                        }
+                        recovery_message = (
+                            "Kết quả rút từ API đang chờ đối soát; không bấm lại để "
+                            "tránh mua trùng. Nếu nguồn xác nhận đơn, tài khoản sẽ tự "
+                            "xuất hiện trong lịch sử rút bảo hành."
+                            if pending_recoveries
+                            else None
+                        )
+                        flash(
+                            request,
+                            recovery_message
+                            or messages.get(
+                                exc.code,
+                                "Nguồn API đang lỗi hoặc phản hồi chưa xác định. Hãy "
+                                "kiểm tra đối soát trước khi thử lại.",
+                            ),
+                            "error",
+                        )
+                        return RedirectResponse("/admin/inventory", status_code=303)
+
+                    delivered_count = sum(
+                        len(purchase.accounts) for purchase, _unit_cost in supplier_purchases
+                    )
+                    if delivered_count != quantity:
+                        await preserve_supplier_purchase_parts(
+                            session,
+                            product,
+                            supplier_purchases,
+                            cipher,
+                        )
+                        await session.commit()
+                        flash(
+                            request,
+                            "API trả thiếu hàng. Phần đã nhận được giữ an toàn trong kho; "
+                            "chưa tạo lần rút bảo hành.",
+                            "error",
+                        )
+                        return RedirectResponse("/admin/inventory", status_code=303)
+
+                    withdrawn_at = datetime.now(UTC)
+                    for purchase, unit_cost in supplier_purchases:
+                        for item_index, secret_value in enumerate(purchase.accounts):
+                            session.add(
+                                InventoryItem(
+                                    product_id=product.id,
+                                    encrypted_secret=cipher.encrypt(secret_value),
+                                    account_fingerprint=cipher.inventory_fingerprint(
+                                        secret_value
+                                    ),
+                                    cost_amount=unit_cost,
+                                    supplier_order_code=purchase.order_code or None,
+                                    supplier_provider=purchase.provider,
+                                    supplier_item_index=item_index,
+                                    status="withdrawn",
+                                    withdrawal_code=withdrawal_code,
+                                    withdrawn_at=withdrawn_at,
+                                    withdrawn_by=withdrawn_by,
+                                    withdrawal_reason=normalized_reason,
+                                )
+                            )
+                        record_supplier_purchase(
+                            session,
+                            amount=unit_cost * len(purchase.accounts),
+                            supplier_order_code=purchase.order_code or None,
+                            shop_order_code=withdrawal_code,
+                            product_id=product.id,
+                            quantity=len(purchase.accounts),
+                            provider=purchase.provider,
+                        )
+
+                    supplier_stock_after = max(0, api_stock_before - quantity)
+                    product.supplier_available_stock = supplier_stock_after
+                    product.external_stock = available_count + supplier_stock_after
+                    product.supplier_synced_at = datetime.now(UTC)
+                    if product.price_lock_enabled and available_count == 0:
+                        await release_price_lock_if_inventory_empty(session, product)
+                    await session.commit()
 
         return RedirectResponse(
             f"/admin/inventory/withdrawals/{withdrawal_code}",
@@ -3055,9 +3359,23 @@ def create_dashboard_router(
         secrets_for_copy: list[str] = []
         item_ids: list[int] = []
         total_cost = 0
+        source_summary: dict[tuple[str, str | None], dict[str, object]] = {}
         for item, _product in rows:
             item_ids.append(item.id)
             total_cost += int(item.cost_amount)
+            provider = item.supplier_provider or "local"
+            source_key = (provider, item.supplier_order_code)
+            source_row = source_summary.setdefault(
+                source_key,
+                {
+                    "label": SUPPLIER_PROVIDER_LABELS.get(provider, "Kho nhập"),
+                    "order_code": item.supplier_order_code,
+                    "quantity": 0,
+                    "cost": 0,
+                },
+            )
+            source_row["quantity"] = int(source_row["quantity"]) + 1
+            source_row["cost"] = int(source_row["cost"]) + int(item.cost_amount)
             try:
                 secrets_for_copy.append(cipher.decrypt(item.encrypted_secret))
             except Exception:
@@ -3080,6 +3398,10 @@ def create_dashboard_router(
                 withdrawal_secrets=secrets_for_copy,
                 item_ids=item_ids,
                 total_cost=total_cost,
+                withdrawal_sources=list(source_summary.values()),
+                withdrawal_source_label=(
+                    "API" if first_item.supplier_provider else "Kho nhập"
+                ),
             ),
         )
         response.headers["Cache-Control"] = "no-store, private"

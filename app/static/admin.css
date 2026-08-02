@@ -897,6 +897,9 @@ tbody tr:hover { background: rgba(215, 241, 113, .12); }
 .button.withdrawal-action:hover { background: #88490f; }
 .stock-level-panel .stack-list { max-height: 520px; overflow-y: auto; }
 .withdrawal-history-table { min-width: 920px; }
+.pending-withdrawal-panel { border-color: #e8c77d; }
+.pending-withdrawal-panel .panel-head { background: #fff8e7; }
+.pending-withdrawal-panel table { min-width: 980px; }
 .withdrawal-result-hero { margin-bottom: 18px; padding: clamp(22px, 3vw, 36px); display: flex; align-items: flex-end; justify-content: space-between; gap: 24px; border-radius: 17px; color: white; background: radial-gradient(circle at 82% 18%, rgba(217,244,124,.23), transparent 18rem), linear-gradient(120deg, #18352b, #1f7556); box-shadow: 0 20px 48px rgba(31,117,86,.17); }
 .withdrawal-result-hero > div { max-width: 760px; }
 .withdrawal-result-hero span { color: var(--lime); font-size: 9px; font-weight: 900; letter-spacing: .18em; }
@@ -915,6 +918,13 @@ tbody tr:hover { background: rgba(215, 241, 113, .12); }
 .withdrawal-audit-list dt { margin-bottom: 5px; color: var(--muted); font-size: 9px; font-weight: 800; letter-spacing: .09em; text-transform: uppercase; }
 .withdrawal-audit-list dd { margin: 0; overflow-wrap: anywhere; font-size: 13px; font-weight: 700; }
 .withdrawal-audit-list dd small { color: var(--muted); font-weight: 500; }
+.withdrawal-source-list { margin: 0 20px 20px; padding: 14px; border: 1px solid #dfe4dc; border-radius: 11px; background: #f5f7f2; }
+.withdrawal-source-list > strong { display: block; margin-bottom: 8px; color: var(--muted); font-size: 9px; letter-spacing: .1em; text-transform: uppercase; }
+.withdrawal-source-list article { padding: 10px 0; display: flex; align-items: center; justify-content: space-between; gap: 12px; border-top: 1px solid #e0e5dc; }
+.withdrawal-source-list article:first-of-type { border-top: 0; }
+.withdrawal-source-list b, .withdrawal-source-list small { display: block; }
+.withdrawal-source-list small { margin-top: 3px; color: var(--muted); font-size: 9px; }
+.withdrawal-source-list code { max-width: 180px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
 /* Final mobile rules stay last so page-specific desktop layouts cannot override them. */
 @media (max-width: 1050px) {

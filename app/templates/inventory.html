@@ -44,12 +44,20 @@
         <input type="hidden" name="csrf" value="{{ csrf_token }}">
         <label>Sản phẩm cần rút
           <select name="product_id" required {{ 'disabled' if not withdrawal_products else '' }}>
-            {% for row in withdrawal_products %}<option value="{{ row.product.id }}">#{{ row.product.id }} · {{ row.product.name_vi }} · kho nhập {{ row.local_stock }}</option>{% endfor %}
+            {% for row in withdrawal_products %}<option value="{{ row.product.id }}">#{{ row.product.id }} · {{ row.product.name_vi }} · kho nhập {{ row.local_stock }}{% if row.product.fulfillment_source != 'local' %} · API {{ row.api_stock }}{% endif %}</option>{% endfor %}
           </select>
+        </label>
+        <label>Nguồn rút hàng
+          <select name="source" required {{ 'disabled' if not withdrawal_products else '' }}>
+            <option value="auto">Tự động: ưu tiên kho nhập, thiếu thì lấy toàn bộ từ API</option>
+            <option value="local">Chỉ kho nhập</option>
+            <option value="api">Chỉ API đang đấu</option>
+          </select>
+          <small>Chế độ tự động không trộn hai nguồn trong cùng lần rút: kho nhập đủ thì lấy kho; không đủ sẽ mua toàn bộ số lượng từ API.</small>
         </label>
         <label>Số lượng
           <input type="number" name="quantity" min="1" max="1000" value="1" required {{ 'disabled' if not withdrawal_products else '' }}>
-          <small>Chỉ lấy từ kho bạn đã nhập, không rút hàng trực tiếp từ API.</small>
+          <small>Rút API sẽ trừ số dư nguồn, lưu giá vốn và mã đơn nguồn nhưng không tạo đơn khách.</small>
         </label>
         <label>Lý do / ghi chú
           <input name="reason" maxlength="500" value="Bảo hành khách hàng" placeholder="Ví dụ: đổi bảo hành đơn B123...">
@@ -67,22 +75,44 @@
     </section>
   </div>
 </div>
+{% if pending_withdrawals %}
+<section class="panel pending-withdrawal-panel">
+  <div class="panel-head"><div><span>API RECONCILIATION</span><h2>Rút bảo hành đang chờ đối soát</h2></div><small>Không bấm rút lại khi còn trạng thái chờ</small></div>
+  <div class="table-wrap"><table>
+    <thead><tr><th>Mã rút</th><th>Sản phẩm</th><th>Số lượng</th><th>Trạng thái</th><th>Lý do</th><th>Bắt đầu</th><th>Hạn đối soát</th></tr></thead>
+    <tbody>
+      {% for row in pending_withdrawals %}
+      <tr>
+        <td><code>{{ row.recovery.inventory_withdrawal_code }}</code></td>
+        <td>{{ row.product.name_vi }}<small>#{{ row.product.id }}</small></td>
+        <td><strong>{{ row.recovery.quantity }} tài khoản</strong></td>
+        <td><span class="status {{ 'wait' if row.recovery.status == 'pending' else 'off' }}">{{ 'Đang đối soát' if row.recovery.status == 'pending' else ('Hết hạn · cần kiểm tra' if row.recovery.status == 'expired' else 'Cần kiểm tra') }}</span><small>{{ row.recovery.error_code }}</small></td>
+        <td>{{ row.recovery.inventory_withdrawal_reason or 'Bảo hành khách hàng' }}<small>{{ row.recovery.inventory_withdrawn_by or 'admin' }}</small></td>
+        <td>{{ row.recovery.started_at|localtime }}</td>
+        <td>{{ row.recovery.expires_at|localtime }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table></div>
+</section>
+{% endif %}
 <section class="panel">
   <div class="panel-head"><div><span>WITHDRAWAL HISTORY</span><h2>Lịch sử rút hàng bảo hành</h2></div><small>Không tính là đơn bán hoặc lợi nhuận</small></div>
   <div class="table-wrap"><table class="withdrawal-history-table">
-    <thead><tr><th>Mã rút</th><th>Sản phẩm</th><th>Số lượng</th><th>Người rút</th><th>Lý do</th><th>Thời gian</th><th></th></tr></thead>
+    <thead><tr><th>Mã rút</th><th>Sản phẩm</th><th>Nguồn</th><th>Số lượng</th><th>Người rút</th><th>Lý do</th><th>Thời gian</th><th></th></tr></thead>
     <tbody>
       {% for row in recent_withdrawals %}
       <tr>
         <td><code>{{ row.code }}</code></td>
         <td>{{ row.product_name }}<small>#{{ row.product_id }}</small></td>
+        <td><span class="status {{ 'wait' if row.source == 'API' else 'on' }}">{{ row.source }}</span></td>
         <td><strong>{{ row.quantity }} tài khoản</strong></td>
         <td>{{ row.withdrawn_by or 'admin' }}</td>
         <td>{{ row.reason or 'Bảo hành khách hàng' }}</td>
         <td>{{ row.withdrawn_at|localtime }}</td>
         <td><a class="button compact quiet" href="/admin/inventory/withdrawals/{{ row.code }}">Xem &amp; copy</a></td>
       </tr>
-      {% else %}<tr><td colspan="7" class="empty">Chưa có lần rút hàng bảo hành nào.</td></tr>{% endfor %}
+      {% else %}<tr><td colspan="8" class="empty">Chưa có lần rút hàng bảo hành nào.</td></tr>{% endfor %}
     </tbody>
   </table></div>
 </section>

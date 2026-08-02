@@ -179,6 +179,82 @@ def test_delayed_sumistore_order_is_imported_and_links_suspicious_audit() -> Non
     asyncio.run(scenario())
 
 
+def test_delayed_warranty_withdrawal_is_recovered_as_withdrawn_inventory() -> None:
+    async def scenario() -> None:
+        engine, sessions = await make_database()
+        cipher = SecretCipher(Fernet.generate_key().decode())
+        started_at = datetime.now(UTC)
+        source_created_at = started_at + timedelta(minutes=2)
+        withdrawal_code = "WD1234567890ABCDEF"
+        async with sessions() as session:
+            category = Category(name_vi="ChatGPT", name_en="ChatGPT")
+            session.add(category)
+            await session.flush()
+            product = Product(
+                category_id=category.id,
+                name_vi="GPT Plus",
+                name_en="GPT Plus",
+                price=15_000,
+                fulfillment_source="sumistore",
+                supplier_product_id="SP-GEF55PBV",
+            )
+            session.add(product)
+            await session.flush()
+            recovery = await queue_supplier_recovery(
+                session,
+                provider="sumistore",
+                supplier_product_id="SP-GEF55PBV",
+                quantity=2,
+                request_key=f"warranty-{withdrawal_code.lower()}",
+                started_at=started_at,
+                error_code="SUPPLIER_UNAVAILABLE",
+            )
+            assert recovery is not None
+            recovery.inventory_withdrawal_code = withdrawal_code
+            recovery.inventory_withdrawn_by = "admin"
+            recovery.inventory_withdrawal_reason = "Đổi bảo hành API bị timeout"
+            session.add(
+                SupplierBalanceTransaction(
+                    provider="sumistore",
+                    kind="suspicious",
+                    amount=-20_000,
+                    balance_before=100_000,
+                    balance_after=80_000,
+                    period_started_at=started_at - timedelta(seconds=1),
+                    created_at=source_created_at + timedelta(seconds=1),
+                )
+            )
+            await session.commit()
+
+        result = await recover_pending_sumistore_orders(
+            sessions,
+            DelayedSupplier(source_created_at),  # type: ignore[arg-type]
+            cipher,
+        )
+
+        assert result.matched_orders == 1
+        assert result.inserted_accounts == 2
+        async with sessions() as session:
+            items = list(
+                await session.scalars(select(InventoryItem).order_by(InventoryItem.id))
+            )
+            audit = await session.scalar(select(SupplierBalanceTransaction))
+            assert len(items) == 2
+            assert all(item.status == "withdrawn" for item in items)
+            assert all(item.withdrawal_code == withdrawal_code for item in items)
+            assert all(item.withdrawn_by == "admin" for item in items)
+            assert all(
+                item.withdrawal_reason == "Đổi bảo hành API bị timeout"
+                for item in items
+            )
+            assert all(item.withdrawn_at is not None for item in items)
+            assert audit is not None and audit.kind == "recovered"
+            assert "lịch sử rút bảo hành" in audit.note
+        await engine.dispose()
+
+    asyncio.run(scenario())
+
+
 def test_orphaned_sumistore_order_without_pending_request_is_recovered() -> None:
     async def scenario() -> None:
         engine, sessions = await make_database()

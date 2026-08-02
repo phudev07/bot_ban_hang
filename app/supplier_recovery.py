@@ -146,6 +146,8 @@ async def _store_recovered_order(
             if product is None or product.fulfillment_source != "sumistore":
                 recovery.status = "invalid_product"
                 return 0
+            withdrawal_code = recovery.inventory_withdrawal_code
+            recovered_at = datetime.now(UTC)
             inserted_count = 0
             for item_index, account in enumerate(accounts):
                 existing = await session.scalar(
@@ -165,7 +167,17 @@ async def _store_recovered_order(
                         supplier_order_code=supplier_order_code,
                         supplier_provider="sumistore",
                         supplier_item_index=item_index,
-                        status="available",
+                        status="withdrawn" if withdrawal_code else "available",
+                        withdrawal_code=withdrawal_code,
+                        withdrawn_at=recovered_at if withdrawal_code else None,
+                        withdrawn_by=(
+                            recovery.inventory_withdrawn_by if withdrawal_code else None
+                        ),
+                        withdrawal_reason=(
+                            recovery.inventory_withdrawal_reason
+                            if withdrawal_code
+                            else None
+                        ),
                     )
                 )
                 inserted_count += 1
@@ -175,7 +187,7 @@ async def _store_recovered_order(
             recovery.total_cost = unit_price * len(accounts)
             recovery.inserted_count = inserted_count
             recovery.supplier_created_at = supplier_created_at
-            recovery.recovered_at = datetime.now(UTC)
+            recovery.recovered_at = recovered_at
             return inserted_count
 
 
@@ -234,11 +246,24 @@ async def _link_recovered_audits(
                 audit.supplier_order_code = order_codes[0] if len(order_codes) == 1 else None
                 audit.product_id = next(iter(product_ids)) if len(product_ids) == 1 else None
                 audit.quantity = sum(recovery.quantity for recovery in candidates)
-                audit.note = (
-                    f"Đã tự động thu hồi {audit.quantity} tài khoản từ "
-                    f"{len(order_codes)} đơn Sumi hoàn tất muộn sau timeout. "
-                    "Hàng đã được mã hóa và nhập lại kho."
+                warranty_quantity = sum(
+                    recovery.quantity
+                    for recovery in candidates
+                    if recovery.inventory_withdrawal_code
                 )
+                if warranty_quantity:
+                    audit.note = (
+                        f"Đã tự động thu hồi {audit.quantity} tài khoản từ "
+                        f"{len(order_codes)} đơn hoàn tất muộn sau timeout; "
+                        f"{warranty_quantity} tài khoản đã chuyển thẳng sang lịch sử "
+                        "rút bảo hành."
+                    )
+                else:
+                    audit.note = (
+                        f"Đã tự động thu hồi {audit.quantity} tài khoản từ "
+                        f"{len(order_codes)} đơn Sumi hoàn tất muộn sau timeout. "
+                        "Hàng đã được mã hóa và nhập lại kho."
+                    )
                 for recovery in candidates:
                     recovery.audit_transaction_id = audit.id
                     recoveries.remove(recovery)
