@@ -2899,7 +2899,10 @@ def create_dashboard_router(
             )
             await session.delete(item)
             await session.flush()
-            if product is not None and product.price_lock_enabled:
+            if (
+                product is not None
+                and product.fulfillment_source in EXTERNAL_FULFILLMENT_SOURCES
+            ):
                 local_stock = int(
                     await session.scalar(
                         select(func.count(InventoryItem.id)).where(
@@ -2912,7 +2915,8 @@ def create_dashboard_router(
                 product.external_stock = (
                     local_stock + max(0, int(product.supplier_available_stock))
                 )
-                await release_price_lock_if_inventory_empty(session, product)
+                if product.price_lock_enabled:
+                    await release_price_lock_if_inventory_empty(session, product)
             await session.commit()
         flash(request, f"Đã xóa mục kho #{item_id}.")
         return RedirectResponse("/admin/inventory", status_code=303)
