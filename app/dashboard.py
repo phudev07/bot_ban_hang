@@ -2,6 +2,7 @@ import asyncio
 import hmac
 import logging
 import re
+import secrets
 import time
 from contextlib import suppress
 from dataclasses import dataclass
@@ -14,7 +15,7 @@ from zoneinfo import ZoneInfo
 from aiogram import Bot
 from aiogram.exceptions import TelegramBadRequest
 from aiogram.types import BufferedInputFile
-from fastapi import APIRouter, File, Form, Request, UploadFile
+from fastapi import APIRouter, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Response
 from fastapi.templating import Jinja2Templates
 from sqlalchemy import String, case, cast, delete, func, literal, or_, select, update
@@ -86,6 +87,7 @@ templates.env.filters["vnd"] = format_vnd
 LOCAL_TIMEZONE = ZoneInfo("Asia/Bangkok")
 ADMIN_PAGE_SIZE = 100
 MAX_FLASH_SALE_IMAGE_BYTES = 8 * 1024 * 1024
+MAX_INVENTORY_WITHDRAWAL_QUANTITY = 1000
 logger = logging.getLogger(__name__)
 SUPPLIER_PROVIDER_LABELS = {
     "sumistore": "Sumi",
@@ -2726,6 +2728,49 @@ def create_dashboard_router(
                         ),
                     }
                 )
+            withdrawal_results = await session.execute(
+                select(
+                    InventoryItem.withdrawal_code,
+                    InventoryItem.product_id,
+                    Product.name_vi,
+                    func.count(InventoryItem.id),
+                    func.max(InventoryItem.withdrawn_at),
+                    func.max(InventoryItem.withdrawn_by),
+                    func.max(InventoryItem.withdrawal_reason),
+                )
+                .join(Product, Product.id == InventoryItem.product_id)
+                .where(
+                    InventoryItem.status == "withdrawn",
+                    InventoryItem.withdrawal_code.is_not(None),
+                )
+                .group_by(
+                    InventoryItem.withdrawal_code,
+                    InventoryItem.product_id,
+                    Product.name_vi,
+                )
+                .order_by(func.max(InventoryItem.withdrawn_at).desc())
+                .limit(ADMIN_PAGE_SIZE)
+            )
+            recent_withdrawals = [
+                {
+                    "code": code,
+                    "product_id": product_id,
+                    "product_name": product_name,
+                    "quantity": int(quantity),
+                    "withdrawn_at": withdrawn_at,
+                    "withdrawn_by": withdrawn_by,
+                    "reason": reason,
+                }
+                for (
+                    code,
+                    product_id,
+                    product_name,
+                    quantity,
+                    withdrawn_at,
+                    withdrawn_by,
+                    reason,
+                ) in withdrawal_results
+            ]
         return templates.TemplateResponse(
             request,
             "inventory.html",
@@ -2735,7 +2780,11 @@ def create_dashboard_router(
                 "inventory",
                 products=products,
                 import_products=products,
+                withdrawal_products=[
+                    row for row in products if int(row["local_stock"]) > 0
+                ],
                 recent_items=recent_items,
+                recent_withdrawals=recent_withdrawals,
                 duplicate_rows=duplicate_rows,
                 duplicate_alert_count=duplicate_alert_count,
                 pager=pager,
@@ -2877,6 +2926,166 @@ def create_dashboard_router(
         )
         return RedirectResponse("/admin/inventory", status_code=303)
 
+    @router.post("/admin/inventory/withdraw")
+    async def withdraw_inventory(
+        request: Request,
+        csrf: str = Form(...),
+        product_id: int = Form(...),
+        quantity: int = Form(...),
+        reason: str = Form("Bảo hành khách hàng"),
+    ) -> RedirectResponse:
+        if not is_admin(request):
+            return redirect_to_login()
+        if not valid_csrf(request, csrf):
+            return RedirectResponse("/admin/inventory", status_code=303)
+        if quantity < 1 or quantity > MAX_INVENTORY_WITHDRAWAL_QUANTITY:
+            flash(
+                request,
+                f"Số lượng rút phải từ 1 đến {MAX_INVENTORY_WITHDRAWAL_QUANTITY}.",
+                "error",
+            )
+            return RedirectResponse("/admin/inventory", status_code=303)
+
+        normalized_reason = reason.strip()[:500] or "Bảo hành khách hàng"
+        withdrawn_by = str(request.session.get("dashboard_admin") or "admin")[:255]
+        withdrawal_code = f"WD{secrets.token_hex(8).upper()}"
+        async with session_factory() as session:
+            product = await session.scalar(
+                select(Product).where(Product.id == product_id).with_for_update()
+            )
+            if (
+                product is None
+                or product.archived_at is not None
+                or product.fulfillment_source not in SELLABLE_FULFILLMENT_SOURCES
+                or product.product_type != "account"
+            ):
+                flash(request, "Sản phẩm rút kho không hợp lệ.", "error")
+                return RedirectResponse("/admin/inventory", status_code=303)
+
+            available_count = int(
+                await session.scalar(
+                    select(func.count(InventoryItem.id)).where(
+                        InventoryItem.product_id == product.id,
+                        InventoryItem.status == "available",
+                    )
+                )
+                or 0
+            )
+            if available_count < quantity:
+                await session.rollback()
+                flash(
+                    request,
+                    f"Kho nhập chỉ còn {available_count} tài khoản; không rút một phần. "
+                    "Hãy giảm số lượng rồi thử lại.",
+                    "error",
+                )
+                return RedirectResponse("/admin/inventory", status_code=303)
+
+            items = list(
+                await session.scalars(
+                    select(InventoryItem)
+                    .where(
+                        InventoryItem.product_id == product.id,
+                        InventoryItem.status == "available",
+                    )
+                    .order_by(InventoryItem.id)
+                    .with_for_update(skip_locked=True)
+                    .limit(quantity)
+                )
+            )
+            if len(items) != quantity:
+                await session.rollback()
+                flash(
+                    request,
+                    "Một phần kho đang được giao cho đơn khác. Chưa rút tài khoản nào; "
+                    "hãy thử lại sau vài giây.",
+                    "error",
+                )
+                return RedirectResponse("/admin/inventory", status_code=303)
+
+            withdrawn_at = datetime.now(UTC)
+            for item in items:
+                item.status = "withdrawn"
+                item.withdrawal_code = withdrawal_code
+                item.withdrawn_at = withdrawn_at
+                item.withdrawn_by = withdrawn_by
+                item.withdrawal_reason = normalized_reason
+            await session.flush()
+
+            local_stock = available_count - quantity
+            if product.fulfillment_source in EXTERNAL_FULFILLMENT_SOURCES:
+                product.external_stock = local_stock + max(
+                    0, int(product.supplier_available_stock)
+                )
+                if product.price_lock_enabled and local_stock == 0:
+                    await release_price_lock_if_inventory_empty(session, product)
+            await session.commit()
+
+        return RedirectResponse(
+            f"/admin/inventory/withdrawals/{withdrawal_code}",
+            status_code=303,
+        )
+
+    @router.get("/admin/inventory/withdrawals/{withdrawal_code}", response_class=HTMLResponse)
+    async def inventory_withdrawal_detail(
+        withdrawal_code: str,
+        request: Request,
+    ) -> Response:
+        if not is_admin(request):
+            return redirect_to_login()
+        if not re.fullmatch(r"WD[A-F0-9]{16}", withdrawal_code):
+            raise HTTPException(status_code=404, detail="Withdrawal not found")
+        async with session_factory() as session:
+            rows = list(
+                (
+                    await session.execute(
+                        select(InventoryItem, Product)
+                        .join(Product, Product.id == InventoryItem.product_id)
+                        .where(
+                            InventoryItem.withdrawal_code == withdrawal_code,
+                            InventoryItem.status == "withdrawn",
+                        )
+                        .order_by(InventoryItem.id)
+                    )
+                ).all()
+            )
+        if not rows:
+            raise HTTPException(status_code=404, detail="Withdrawal not found")
+
+        secrets_for_copy: list[str] = []
+        item_ids: list[int] = []
+        total_cost = 0
+        for item, _product in rows:
+            item_ids.append(item.id)
+            total_cost += int(item.cost_amount)
+            try:
+                secrets_for_copy.append(cipher.decrypt(item.encrypted_secret))
+            except Exception:
+                secrets_for_copy.append(f"[Không thể giải mã mục kho #{item.id}]")
+
+        first_item, product = rows[0]
+        response = templates.TemplateResponse(
+            request,
+            "inventory_withdrawal_detail.html",
+            page_context(
+                request,
+                f"Rút kho {withdrawal_code}",
+                "inventory",
+                withdrawal_code=withdrawal_code,
+                product=product,
+                quantity=len(rows),
+                withdrawn_at=first_item.withdrawn_at,
+                withdrawn_by=first_item.withdrawn_by,
+                withdrawal_reason=first_item.withdrawal_reason,
+                withdrawal_secrets=secrets_for_copy,
+                item_ids=item_ids,
+                total_cost=total_cost,
+            ),
+        )
+        response.headers["Cache-Control"] = "no-store, private"
+        response.headers["Pragma"] = "no-cache"
+        return response
+
     @router.post("/admin/inventory/{item_id}/delete")
     async def delete_inventory_item(
         item_id: int,
@@ -2888,15 +3097,25 @@ def create_dashboard_router(
         if not valid_csrf(request, csrf):
             return RedirectResponse("/admin/inventory", status_code=303)
         async with session_factory() as session:
-            item = await session.scalar(
-                select(InventoryItem).where(InventoryItem.id == item_id).with_for_update()
+            product_id = await session.scalar(
+                select(InventoryItem.product_id).where(InventoryItem.id == item_id)
             )
-            if item is None or item.status != "available":
+            if product_id is None:
                 flash(request, "Chỉ có thể xóa mục kho chưa bán.", "error")
                 return RedirectResponse("/admin/inventory", status_code=303)
             product = await session.scalar(
-                select(Product).where(Product.id == item.product_id).with_for_update()
+                select(Product).where(Product.id == product_id).with_for_update()
             )
+            item = await session.scalar(
+                select(InventoryItem).where(InventoryItem.id == item_id).with_for_update()
+            )
+            if (
+                item is None
+                or item.product_id != product_id
+                or item.status != "available"
+            ):
+                flash(request, "Chỉ có thể xóa mục kho chưa bán.", "error")
+                return RedirectResponse("/admin/inventory", status_code=303)
             await session.delete(item)
             await session.flush()
             if (

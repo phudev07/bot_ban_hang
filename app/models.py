@@ -317,6 +317,11 @@ class InventoryItem(Base):
             "supplier_item_index",
             name="uq_inventory_supplier_source",
         ),
+        Index(
+            "ix_inventory_items_status_withdrawn_at",
+            "status",
+            "withdrawn_at",
+        ),
     )
 
     id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
@@ -336,6 +341,14 @@ class InventoryItem(Base):
     status: Mapped[str] = mapped_column(String(20), default="available", index=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     sold_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    withdrawal_code: Mapped[str | None] = mapped_column(
+        String(32), nullable=True, index=True
+    )
+    withdrawn_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    withdrawn_by: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    withdrawal_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
 
     product: Mapped[Product] = relationship(back_populates="inventory")
 

@@ -885,6 +885,37 @@ tbody tr:hover { background: rgba(215, 241, 113, .12); }
   .flash-sale-form-panel .button.primary { width: 100%; }
 }
 
+/* Inventory warranty withdrawal */
+.inventory-side-stack { min-width: 0; display: grid; gap: 18px; }
+.inventory-side-stack .panel { margin-bottom: 0; }
+.withdrawal-panel { border-color: #e5cda6; background: #fffaf0; }
+.withdrawal-panel .panel-head { background: linear-gradient(110deg, #fff5df, #fffaf0); }
+.withdrawal-panel .panel-head span { color: #9a5c0c; }
+.withdrawal-panel .form-grid { gap: 13px; }
+.withdrawal-warning { margin: 0; padding: 11px 12px; border: 1px solid #e6c991; border-radius: 9px; color: #765216; background: #fff4d9; font-size: 11px; line-height: 1.55; }
+.button.withdrawal-action { width: 100%; color: white; background: #a65d18; }
+.button.withdrawal-action:hover { background: #88490f; }
+.stock-level-panel .stack-list { max-height: 520px; overflow-y: auto; }
+.withdrawal-history-table { min-width: 920px; }
+.withdrawal-result-hero { margin-bottom: 18px; padding: clamp(22px, 3vw, 36px); display: flex; align-items: flex-end; justify-content: space-between; gap: 24px; border-radius: 17px; color: white; background: radial-gradient(circle at 82% 18%, rgba(217,244,124,.23), transparent 18rem), linear-gradient(120deg, #18352b, #1f7556); box-shadow: 0 20px 48px rgba(31,117,86,.17); }
+.withdrawal-result-hero > div { max-width: 760px; }
+.withdrawal-result-hero span { color: var(--lime); font-size: 9px; font-weight: 900; letter-spacing: .18em; }
+.withdrawal-result-hero h2 { margin: 8px 0 10px; font-size: clamp(29px, 4vw, 45px); line-height: 1; }
+.withdrawal-result-hero p { margin: 0; color: #d9e8e1; font-size: 13px; line-height: 1.65; }
+.withdrawal-result-hero code { color: #18352b; background: var(--lime); }
+.withdrawal-result-hero .button { flex: 0 0 auto; }
+.withdrawal-result-layout { display: grid; grid-template-columns: minmax(0, 1.4fr) minmax(300px, .6fr); gap: 18px; align-items: start; }
+.withdrawal-secret-body { padding: 20px; }
+.withdrawal-secret-body textarea { min-height: 360px; color: #eaf2ed; border-color: #30443b; background: #18201d; font: 12px/1.65 "SFMono-Regular", Consolas, monospace; white-space: pre; }
+.withdrawal-secret-body .button { margin-top: 12px; }
+.withdrawal-secret-body .hint { margin-top: 12px; }
+.withdrawal-audit-list { margin: 0; padding: 8px 20px 20px; }
+.withdrawal-audit-list div { padding: 13px 2px; border-bottom: 1px solid #e8e4da; }
+.withdrawal-audit-list div:last-child { border-bottom: 0; }
+.withdrawal-audit-list dt { margin-bottom: 5px; color: var(--muted); font-size: 9px; font-weight: 800; letter-spacing: .09em; text-transform: uppercase; }
+.withdrawal-audit-list dd { margin: 0; overflow-wrap: anywhere; font-size: 13px; font-weight: 700; }
+.withdrawal-audit-list dd small { color: var(--muted); font-weight: 500; }
+
 /* Final mobile rules stay last so page-specific desktop layouts cannot override them. */
 @media (max-width: 1050px) {
   .dashboard-grid, .chart-layout, .lower-grid, .detail-grid, .referral-layout { grid-template-columns: minmax(0, 1fr); }
@@ -905,6 +936,7 @@ tbody tr:hover { background: rgba(215, 241, 113, .12); }
   .chart-touch-detail small { color: var(--muted); font-size: 9px; text-transform: uppercase; letter-spacing: .06em; }
   .chart-touch-detail strong { margin-top: 4px; overflow: hidden; font-size: 15px; white-space: nowrap; text-overflow: ellipsis; }
   .chart-touch-detail div:last-child strong { color: var(--green); }
+  .withdrawal-result-layout { grid-template-columns: minmax(0, 1fr); }
 }
 
 @media (max-width: 780px) {
@@ -934,6 +966,10 @@ tbody tr:hover { background: rgba(215, 241, 113, .12); }
   .table-wrap { position: relative; max-width: 100%; overscroll-behavior-inline: contain; -webkit-overflow-scrolling: touch; }
   .stack-list { padding-inline: 15px; }
   .notification-preview pre { width: min(440px, 82vw); }
+  .inventory-layout { grid-template-columns: minmax(0, 1fr); }
+  .withdrawal-result-hero { align-items: stretch; flex-direction: column; }
+  .withdrawal-result-hero .button { width: 100%; }
+  .withdrawal-secret-body textarea { min-height: 300px; }
 }
 
 @media (max-width: 520px) {

@@ -32,7 +32,7 @@ from app.models import (
     User,
     WalletTransaction,
 )
-from app.services import active_products
+from app.services import active_products, purchase_product
 from app.suppliers import SupplierSnapshot
 from app.utils import SecretCipher
 
@@ -1787,6 +1787,271 @@ def test_deleting_unlocked_external_inventory_recalculates_stock(tmp_path) -> No
         await engine.dispose()
 
     asyncio.run(verify_database())
+
+
+def test_admin_withdraws_inventory_for_warranty_without_partial_or_resale(tmp_path) -> None:
+    encryption_key = Fernet.generate_key().decode()
+    cipher = SecretCipher(encryption_key)
+
+    async def setup_database():
+        database_path = (tmp_path / "dashboard-withdraw-inventory.db").as_posix()
+        engine = create_async_engine(f"sqlite+aiosqlite:///{database_path}")
+        async with engine.begin() as connection:
+            await connection.run_sync(Base.metadata.create_all)
+        sessions = async_sessionmaker(engine, expire_on_commit=False)
+        async with sessions() as session:
+            category = Category(name_vi="ChatGPT", name_en="ChatGPT")
+            user = User(
+                telegram_id=68123,
+                full_name="Warranty inventory buyer",
+                balance=200_000,
+            )
+            session.add_all([category, user])
+            await session.flush()
+            local_product = Product(
+                category_id=category.id,
+                name_vi="GPT Plus kho nhập",
+                name_en="GPT Plus local stock",
+                price=40_000,
+                fulfillment_source="local",
+                allow_quantity=True,
+                max_quantity=10,
+                active=True,
+            )
+            external_product = Product(
+                category_id=category.id,
+                name_vi="GPT Plus kết hợp API",
+                name_en="GPT Plus mixed stock",
+                price=45_000,
+                fulfillment_source="sumistore",
+                supplier_product_id="SP-GEF55PBV",
+                supplier_price=40_000,
+                supplier_markup=5_000,
+                supplier_available_stock=4,
+                external_stock=6,
+                price_lock_enabled=True,
+                active=True,
+            )
+            session.add_all([local_product, external_product])
+            await session.flush()
+            local_secrets = [
+                "local-one@example.com|pass-one",
+                "local-two@example.com|pass-two",
+                "local-three@example.com|pass-three",
+            ]
+            external_secrets = [
+                "external-one@example.com|pass-one",
+                "external-two@example.com|pass-two",
+            ]
+            session.add_all(
+                [
+                    InventoryItem(
+                        product_id=local_product.id,
+                        encrypted_secret=cipher.encrypt(secret),
+                        cost_amount=35_000,
+                    )
+                    for secret in local_secrets
+                ]
+                + [
+                    InventoryItem(
+                        product_id=external_product.id,
+                        encrypted_secret=cipher.encrypt(secret),
+                        cost_amount=38_000,
+                    )
+                    for secret in external_secrets
+                ]
+            )
+            await session.commit()
+            return (
+                engine,
+                sessions,
+                local_product.id,
+                external_product.id,
+                local_secrets,
+                external_secrets,
+            )
+
+    (
+        engine,
+        sessions,
+        local_product_id,
+        external_product_id,
+        local_secrets,
+        external_secrets,
+    ) = asyncio.run(setup_database())
+    settings = Settings(
+        _env_file=None,
+        bot_token="123456:ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghi",
+        inventory_encryption_key=encryption_key,
+        dashboard_enabled=True,
+        dashboard_username="admin",
+        dashboard_password_hash=hash_dashboard_password("dashboard-password"),
+        dashboard_session_secret="session-secret-long-enough-for-tests",
+    )
+    app = create_api(settings, sessions, FakeBot(), cipher)  # type: ignore[arg-type]
+
+    with TestClient(app, base_url="https://testserver") as anonymous_client:
+        protected = anonymous_client.post(
+            "/admin/inventory/withdraw",
+            data={"csrf": "invalid", "product_id": local_product_id, "quantity": 1},
+            follow_redirects=False,
+        )
+        assert protected.status_code == 303
+        assert protected.headers["location"] == "/admin/login"
+
+    withdrawal_locations: list[str] = []
+    with TestClient(app, base_url="https://testserver") as client:
+        client.post(
+            "/admin/login",
+            data={"username": "admin", "password": "dashboard-password"},
+        )
+        inventory_page = client.get("/admin/inventory")
+        assert inventory_page.status_code == 200
+        assert "Rút hàng bảo hành" in inventory_page.text
+        assert "GPT Plus kho nhập · kho nhập 3" in inventory_page.text
+        assert all(secret not in inventory_page.text for secret in local_secrets)
+        csrf = re.search(r'name="csrf" value="([^"]+)"', inventory_page.text).group(1)
+
+        invalid_csrf = client.post(
+            "/admin/inventory/withdraw",
+            data={
+                "csrf": "invalid",
+                "product_id": str(local_product_id),
+                "quantity": "1",
+            },
+            follow_redirects=False,
+        )
+        assert invalid_csrf.status_code == 303
+
+        local_withdrawal = client.post(
+            "/admin/inventory/withdraw",
+            data={
+                "csrf": csrf,
+                "product_id": str(local_product_id),
+                "quantity": "2",
+                "reason": "Bảo hành đơn BTEST123",
+            },
+            follow_redirects=False,
+        )
+        assert local_withdrawal.status_code == 303
+        assert re.fullmatch(
+            r"/admin/inventory/withdrawals/WD[A-F0-9]{16}",
+            local_withdrawal.headers["location"],
+        )
+        withdrawal_locations.append(local_withdrawal.headers["location"])
+        local_detail = client.get(local_withdrawal.headers["location"])
+        assert local_detail.status_code == 200
+        assert local_detail.headers["cache-control"] == "no-store, private"
+        assert "Sao chép tất cả" in local_detail.text
+        assert "Bảo hành đơn BTEST123" in local_detail.text
+        assert local_secrets[0] in local_detail.text
+        assert local_secrets[1] in local_detail.text
+        assert local_secrets[2] not in local_detail.text
+
+        partial_attempt = client.post(
+            "/admin/inventory/withdraw",
+            data={
+                "csrf": csrf,
+                "product_id": str(local_product_id),
+                "quantity": "2",
+            },
+            follow_redirects=False,
+        )
+        assert partial_attempt.status_code == 303
+        assert partial_attempt.headers["location"] == "/admin/inventory"
+        partial_page = client.get("/admin/inventory")
+        assert "không rút một phần" in partial_page.text
+        assert local_secrets[0] not in partial_page.text
+        assert withdrawal_locations[0].rsplit("/", 1)[-1] in partial_page.text
+        assert "Đã rút bảo hành" in partial_page.text
+
+        external_withdrawal = client.post(
+            "/admin/inventory/withdraw",
+            data={
+                "csrf": csrf,
+                "product_id": str(external_product_id),
+                "quantity": "2",
+                "reason": "Giữ hàng đổi bảo hành",
+            },
+            follow_redirects=False,
+        )
+        assert external_withdrawal.status_code == 303
+        withdrawal_locations.append(external_withdrawal.headers["location"])
+        external_detail = client.get(external_withdrawal.headers["location"])
+        assert all(secret in external_detail.text for secret in external_secrets)
+
+    with TestClient(app, base_url="https://testserver") as anonymous_client:
+        protected_detail = anonymous_client.get(
+            withdrawal_locations[0], follow_redirects=False
+        )
+        assert protected_detail.status_code == 303
+        assert protected_detail.headers["location"] == "/admin/login"
+
+    async def verify_database_and_resale_guard() -> None:
+        async with sessions() as session:
+            local_items = list(
+                await session.scalars(
+                    select(InventoryItem)
+                    .where(InventoryItem.product_id == local_product_id)
+                    .order_by(InventoryItem.id)
+                )
+            )
+            assert [item.status for item in local_items] == [
+                "withdrawn",
+                "withdrawn",
+                "available",
+            ]
+            assert local_items[0].withdrawal_code == local_items[1].withdrawal_code
+            assert local_items[0].withdrawn_by == "admin"
+            assert local_items[0].withdrawal_reason == "Bảo hành đơn BTEST123"
+            assert local_items[0].withdrawn_at is not None
+
+            external_items = list(
+                await session.scalars(
+                    select(InventoryItem)
+                    .where(InventoryItem.product_id == external_product_id)
+                    .order_by(InventoryItem.id)
+                )
+            )
+            assert [item.status for item in external_items] == ["withdrawn", "withdrawn"]
+            external_product = await session.get(Product, external_product_id)
+            assert external_product is not None
+            assert external_product.supplier_available_stock == 4
+            assert external_product.external_stock == 4
+            assert external_product.price_lock_enabled is False
+            assert int(await session.scalar(select(func.count(Order.id))) or 0) == 0
+
+        first_purchase = await purchase_product(
+            sessions,
+            68123,
+            local_product_id,
+            cipher,
+        )
+        assert first_purchase.ok is True
+        assert first_purchase.secrets == [local_secrets[2]]
+        second_purchase = await purchase_product(
+            sessions,
+            68123,
+            local_product_id,
+            cipher,
+        )
+        assert second_purchase.ok is False
+        assert second_purchase.message == "out_of_stock"
+
+        async with sessions() as session:
+            withdrawn_items = list(
+                await session.scalars(
+                    select(InventoryItem).where(
+                        InventoryItem.product_id == local_product_id,
+                        InventoryItem.status == "withdrawn",
+                    )
+                )
+            )
+            assert len(withdrawn_items) == 2
+            assert int(await session.scalar(select(func.count(Order.id))) or 0) == 1
+        await engine.dispose()
+
+    asyncio.run(verify_database_and_resale_guard())
 
 
 def test_dashboard_groups_multi_item_purchase_as_one_order(tmp_path) -> None:

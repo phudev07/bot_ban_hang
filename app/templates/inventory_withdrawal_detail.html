@@ -1,0 +1,56 @@
+{% extends "base.html" %}
+{% block content %}
+<section class="withdrawal-result-hero">
+  <div>
+    <span>WITHDRAWAL COMPLETE</span>
+    <h2>Đã rút {{ quantity }} tài khoản khỏi kho bán</h2>
+    <p>Các tài khoản bên dưới mang mã <code>{{ withdrawal_code }}</code>, đã chuyển sang trạng thái rút bảo hành và không thể được giao cho khách khác.</p>
+  </div>
+  <a class="button quiet" href="/admin/inventory">← Về quản lý kho</a>
+</section>
+
+<div class="withdrawal-result-layout">
+  <section class="panel withdrawal-secret-panel">
+    <div class="panel-head"><div><span>WITHDRAWN ACCOUNTS</span><h2>Tài khoản đã rút</h2></div><strong>{{ quantity }} dòng</strong></div>
+    <div class="withdrawal-secret-body">
+      <textarea id="withdrawal-accounts" rows="{{ [quantity + 1, 18]|min }}" readonly spellcheck="false">{{ withdrawal_secrets|join('\n') }}</textarea>
+      <button class="button primary full" type="button" data-copy-withdrawal>Sao chép tất cả</button>
+      <p class="hint">Mỗi tài khoản một dòng. Trang này chỉ mở được sau khi đăng nhập Admin và không được trình duyệt lưu cache.</p>
+    </div>
+  </section>
+
+  <aside class="panel withdrawal-audit-panel">
+    <div class="panel-head"><div><span>AUDIT DETAILS</span><h2>Thông tin đối soát</h2></div></div>
+    <dl class="withdrawal-audit-list">
+      <div><dt>Mã rút</dt><dd><code>{{ withdrawal_code }}</code></dd></div>
+      <div><dt>Sản phẩm</dt><dd>{{ product.name_vi }} <small>#{{ product.id }}</small></dd></div>
+      <div><dt>Số lượng</dt><dd>{{ quantity }} tài khoản</dd></div>
+      <div><dt>Tổng giá vốn giữ lại</dt><dd>{{ total_cost|vnd }}</dd></div>
+      <div><dt>Người thực hiện</dt><dd>{{ withdrawn_by or 'admin' }}</dd></div>
+      <div><dt>Thời gian</dt><dd>{{ withdrawn_at|localtime }}</dd></div>
+      <div><dt>Lý do</dt><dd>{{ withdrawal_reason or 'Bảo hành khách hàng' }}</dd></div>
+      <div><dt>ID kho</dt><dd>#{{ item_ids|join(', #') }}</dd></div>
+    </dl>
+  </aside>
+</div>
+
+<script>
+  (() => {
+    const button = document.querySelector('[data-copy-withdrawal]');
+    const textarea = document.getElementById('withdrawal-accounts');
+    if (!button || !textarea) return;
+    button.addEventListener('click', async () => {
+      const original = button.textContent;
+      try {
+        await navigator.clipboard.writeText(textarea.value);
+        button.textContent = 'Đã sao chép tất cả';
+      } catch (_) {
+        textarea.select();
+        const copied = document.execCommand('copy');
+        button.textContent = copied ? 'Đã sao chép tất cả' : 'Không thể sao chép';
+      }
+      window.setTimeout(() => { button.textContent = original; }, 1600);
+    });
+  })();
+</script>
+{% endblock %}

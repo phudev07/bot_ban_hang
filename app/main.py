@@ -535,6 +535,42 @@ async def initialize_database(engine, session_factory, seed_demo_data: bool) -> 
         )
         await connection.execute(
             text(
+                "ALTER TABLE inventory_items ADD COLUMN IF NOT EXISTS "
+                "withdrawal_code VARCHAR(32) NULL"
+            )
+        )
+        await connection.execute(
+            text(
+                "ALTER TABLE inventory_items ADD COLUMN IF NOT EXISTS "
+                "withdrawn_at TIMESTAMPTZ NULL"
+            )
+        )
+        await connection.execute(
+            text(
+                "ALTER TABLE inventory_items ADD COLUMN IF NOT EXISTS "
+                "withdrawn_by VARCHAR(255) NULL"
+            )
+        )
+        await connection.execute(
+            text(
+                "ALTER TABLE inventory_items ADD COLUMN IF NOT EXISTS "
+                "withdrawal_reason TEXT NULL"
+            )
+        )
+        await connection.execute(
+            text(
+                "CREATE INDEX IF NOT EXISTS ix_inventory_items_withdrawal_code "
+                "ON inventory_items (withdrawal_code)"
+            )
+        )
+        await connection.execute(
+            text(
+                "CREATE INDEX IF NOT EXISTS ix_inventory_items_status_withdrawn_at "
+                "ON inventory_items (status, withdrawn_at)"
+            )
+        )
+        await connection.execute(
+            text(
                 "CREATE UNIQUE INDEX IF NOT EXISTS uq_inventory_supplier_source "
                 "ON inventory_items (supplier_order_code, supplier_item_index)"
             )

@@ -37,13 +37,55 @@
       <button class="button primary" type="submit" {{ 'disabled' if not import_products else '' }}>Mã hóa và nhập kho</button>
     </form>
   </section>
-  <section class="panel">
-    <div class="panel-head"><div><span>STOCK LEVELS</span><h2>Tồn kho hiện tại</h2></div></div>
-    <div class="stack-list">
-      {% for row in products %}<article><div><strong>{{ row.product.name_vi }}</strong><small>#{{ row.product.id }} · {{ row.product.product_type }} · {{ 'Kho bot' if row.product.fulfillment_source == 'local' else ('Sumi / Lê Hải' if row.product.supplier_product_id == 'SP-GEF55PBV' else ('Sumistore' if row.product.fulfillment_source == 'sumistore' else 'Lê Hải')) }}{% if row.product.price_lock_enabled %} · Đang khóa giá theo kho nhập{% endif %}</small></div><span class="big-number">{{ row.stock }}</span></article>{% else %}<p class="empty">Hãy tạo sản phẩm trước khi nhập kho.</p>{% endfor %}
-    </div>
-  </section>
+  <div class="inventory-side-stack">
+    <section class="panel form-panel withdrawal-panel">
+      <div class="panel-head"><div><span>WARRANTY WITHDRAWAL</span><h2>Rút hàng bảo hành</h2></div></div>
+      <form method="post" action="/admin/inventory/withdraw" class="form-grid" onsubmit="return confirm('Rút tài khoản khỏi kho bán? Các tài khoản này sẽ không thể bán lại.');">
+        <input type="hidden" name="csrf" value="{{ csrf_token }}">
+        <label>Sản phẩm cần rút
+          <select name="product_id" required {{ 'disabled' if not withdrawal_products else '' }}>
+            {% for row in withdrawal_products %}<option value="{{ row.product.id }}">#{{ row.product.id }} · {{ row.product.name_vi }} · kho nhập {{ row.local_stock }}</option>{% endfor %}
+          </select>
+        </label>
+        <label>Số lượng
+          <input type="number" name="quantity" min="1" max="1000" value="1" required {{ 'disabled' if not withdrawal_products else '' }}>
+          <small>Chỉ lấy từ kho bạn đã nhập, không rút hàng trực tiếp từ API.</small>
+        </label>
+        <label>Lý do / ghi chú
+          <input name="reason" maxlength="500" value="Bảo hành khách hàng" placeholder="Ví dụ: đổi bảo hành đơn B123...">
+        </label>
+        <p class="withdrawal-warning">Hệ thống chỉ rút khi đủ số lượng, giảm kho ngay trong cùng giao dịch và lưu nguyên lịch sử để đối soát.</p>
+        <button class="button withdrawal-action" type="submit" {{ 'disabled' if not withdrawal_products else '' }}>Rút tài khoản khỏi kho</button>
+        {% if not withdrawal_products %}<p class="hint">Hiện không có tài khoản kho nhập nào có thể rút.</p>{% endif %}
+      </form>
+    </section>
+    <section class="panel stock-level-panel">
+      <div class="panel-head"><div><span>STOCK LEVELS</span><h2>Tồn kho hiện tại</h2></div></div>
+      <div class="stack-list">
+        {% for row in products %}<article><div><strong>{{ row.product.name_vi }}</strong><small>#{{ row.product.id }} · kho nhập {{ row.local_stock }} · tổng bán {{ row.stock }}{% if row.product.price_lock_enabled %} · Đang khóa giá theo kho nhập{% endif %}</small></div><span class="big-number">{{ row.stock }}</span></article>{% else %}<p class="empty">Hãy tạo sản phẩm trước khi nhập kho.</p>{% endfor %}
+      </div>
+    </section>
+  </div>
 </div>
+<section class="panel">
+  <div class="panel-head"><div><span>WITHDRAWAL HISTORY</span><h2>Lịch sử rút hàng bảo hành</h2></div><small>Không tính là đơn bán hoặc lợi nhuận</small></div>
+  <div class="table-wrap"><table class="withdrawal-history-table">
+    <thead><tr><th>Mã rút</th><th>Sản phẩm</th><th>Số lượng</th><th>Người rút</th><th>Lý do</th><th>Thời gian</th><th></th></tr></thead>
+    <tbody>
+      {% for row in recent_withdrawals %}
+      <tr>
+        <td><code>{{ row.code }}</code></td>
+        <td>{{ row.product_name }}<small>#{{ row.product_id }}</small></td>
+        <td><strong>{{ row.quantity }} tài khoản</strong></td>
+        <td>{{ row.withdrawn_by or 'admin' }}</td>
+        <td>{{ row.reason or 'Bảo hành khách hàng' }}</td>
+        <td>{{ row.withdrawn_at|localtime }}</td>
+        <td><a class="button compact quiet" href="/admin/inventory/withdrawals/{{ row.code }}">Xem &amp; copy</a></td>
+      </tr>
+      {% else %}<tr><td colspan="7" class="empty">Chưa có lần rút hàng bảo hành nào.</td></tr>{% endfor %}
+    </tbody>
+  </table></div>
+</section>
 <section class="panel">
   <div class="panel-head"><div><span>DUPLICATE CHECK</span><h2>Tài khoản nghi ngờ / trùng</h2></div><small>{{ duplicate_alert_count }} cảnh báo · hiện 100 cảnh báo mới nhất</small></div>
   <p class="hint">Các tài khoản trong bảng này đã bị bỏ qua, không được cộng vào kho. Định danh được mã hóa trong database và chỉ giải mã khi Admin mở trang này.</p>
@@ -56,7 +98,7 @@
         <td><code>{{ row.identifier }}</code></td>
         <td><span class="status off">{% if row.alert.reason == 'duplicate_in_import' %}Trùng trong chính lần nhập này{% elif row.alert.reason == 'historical_duplicate' %}Phát hiện khi rà lại kho cũ{% else %}Đã tồn tại trong kho/lịch sử bán{% endif %}</span></td>
         <td>{{ row.product.name_vi if row.product else 'Sản phẩm đã xóa' }}<small>#{{ row.alert.product_id }}</small></td>
-        <td>{% if row.existing_item %}Kho #{{ row.existing_item.id }} · {{ row.existing_product.name_vi if row.existing_product else 'Sản phẩm đã xóa' }}<small>{{ 'Còn kho' if row.existing_item.status == 'available' else 'Đã bán' }}</small>{% else %}Dòng trước trong cùng lần nhập{% endif %}</td>
+        <td>{% if row.existing_item %}Kho #{{ row.existing_item.id }} · {{ row.existing_product.name_vi if row.existing_product else 'Sản phẩm đã xóa' }}<small>{{ 'Còn kho' if row.existing_item.status == 'available' else ('Đã rút bảo hành' if row.existing_item.status == 'withdrawn' else 'Đã bán') }}</small>{% else %}Dòng trước trong cùng lần nhập{% endif %}</td>
       </tr>
       {% else %}<tr><td colspan="5" class="empty">Chưa phát hiện tài khoản trùng.</td></tr>{% endfor %}
     </tbody>
@@ -65,22 +107,24 @@
 <section class="panel">
   <div class="panel-head"><div><span>INVENTORY LOG</span><h2>Toàn bộ lịch sử kho</h2></div><small>100 mục mỗi trang</small></div>
   <div class="table-wrap"><table>
-    <thead><tr><th>ID kho</th><th>Sản phẩm</th><th>Giá vốn</th><th>Trạng thái</th><th>Ngày nhập</th><th>Ngày bán</th><th></th></tr></thead>
+    <thead><tr><th>ID kho</th><th>Sản phẩm</th><th>Giá vốn</th><th>Trạng thái</th><th>Ngày nhập</th><th>Ngày bán / rút</th><th></th></tr></thead>
     <tbody>
       {% for row in recent_items %}
       <tr>
         <td><code>#{{ row.item.id }}</code></td>
         <td>{{ row.product.name_vi }}<small>#{{ row.product.id }}</small></td>
         <td><strong>{{ row.item.cost_amount|vnd }}</strong></td>
-        <td><span class="status {{ 'on' if row.item.status == 'available' else 'off' }}">{{ 'Còn kho' if row.item.status == 'available' else 'Đã bán' }}</span></td>
+        <td><span class="status {{ 'on' if row.item.status == 'available' else ('wait' if row.item.status == 'withdrawn' else 'off') }}">{{ 'Còn kho' if row.item.status == 'available' else ('Đã rút bảo hành' if row.item.status == 'withdrawn' else 'Đã bán') }}</span></td>
         <td>{{ row.item.created_at|localtime }}</td>
-        <td>{{ row.item.sold_at|localtime }}</td>
+        <td>{{ (row.item.withdrawn_at if row.item.status == 'withdrawn' else row.item.sold_at)|localtime }}</td>
         <td>
           {% if row.item.status == 'available' %}
           <form method="post" action="/admin/inventory/{{ row.item.id }}/delete" onsubmit="return confirm('Xóa mục kho chưa bán này?')">
             <input type="hidden" name="csrf" value="{{ csrf_token }}">
             <button class="button danger compact" type="submit">Xóa</button>
           </form>
+          {% elif row.item.status == 'withdrawn' %}
+          <a class="button quiet compact" href="/admin/inventory/withdrawals/{{ row.item.withdrawal_code }}">Xem lần rút</a>
           {% else %}—{% endif %}
         </td>
       </tr>
