@@ -29,6 +29,7 @@ from app.models import (
     ProductStockAlert,
     QuantityDiscount,
     SmsRental,
+    SupplierBalanceState,
     SupplierBalanceTransaction,
     SupplierPurchaseAttempt,
     SupplierRecoveryRequest,
@@ -333,6 +334,92 @@ def test_balance_adjustment_notification_shows_sign_reason_and_new_balance() -> 
     assert "Hoàn tiền &lt;đơn lỗi&gt;" in added
     assert "<b>60.000đ</b>" in added
     assert "<b>-5.000đ</b>" in deducted
+
+
+def test_canboso_audit_shows_vnd_and_usd_for_totals_and_transactions(tmp_path) -> None:
+    async def setup_database():
+        database_path = (tmp_path / "dashboard-canboso-audit.db").as_posix()
+        engine = create_async_engine(f"sqlite+aiosqlite:///{database_path}")
+        async with engine.begin() as connection:
+            await connection.run_sync(Base.metadata.create_all)
+        sessions = async_sessionmaker(engine, expire_on_commit=False)
+        now = datetime.now(UTC)
+        async with sessions() as session:
+            session.add(
+                SupplierBalanceState(
+                    provider="canboso",
+                    last_balance=11_000,
+                    checked_at=now,
+                )
+            )
+            session.add_all(
+                [
+                    SupplierBalanceTransaction(
+                        provider="canboso",
+                        kind="credit",
+                        amount=27_500,
+                        balance_before=0,
+                        balance_after=27_500,
+                        created_at=now,
+                    ),
+                    SupplierBalanceTransaction(
+                        provider="canboso",
+                        kind="purchase",
+                        amount=-11_000,
+                        balance_before=27_500,
+                        balance_after=16_500,
+                        created_at=now,
+                    ),
+                    SupplierBalanceTransaction(
+                        provider="canboso",
+                        kind="suspicious",
+                        amount=-5_500,
+                        balance_before=16_500,
+                        balance_after=11_000,
+                        created_at=now,
+                    ),
+                ]
+            )
+            await session.commit()
+        return engine, sessions
+
+    engine, sessions = asyncio.run(setup_database())
+    encryption_key = Fernet.generate_key().decode()
+    settings = Settings(
+        _env_file=None,
+        bot_token="123456:ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghi",
+        inventory_encryption_key=encryption_key,
+        dashboard_enabled=True,
+        dashboard_username="admin",
+        dashboard_password_hash=hash_dashboard_password("dashboard-password"),
+        dashboard_session_secret="session-secret-long-enough-for-tests",
+        canboso_usd_to_vnd=27_500,
+    )
+    app = create_api(
+        settings,
+        sessions,
+        FakeBot(),
+        SecretCipher(encryption_key),
+    )  # type: ignore[arg-type]
+
+    with TestClient(app, base_url="https://testserver") as client:
+        client.post(
+            "/admin/login",
+            data={"username": "admin", "password": "dashboard-password"},
+        )
+        page = client.get("/admin/supplier-audit?provider=canboso")
+
+        assert page.status_code == 200
+        assert "11.000đ" in page.text
+        assert "$0.40" in page.text
+        assert "+27.500đ" in page.text
+        assert "+$1.00" in page.text
+        assert "-11.000đ" in page.text
+        assert "-$0.40" in page.text
+        assert "16.500đ → 11.000đ" in page.text
+        assert "$0.60 → $0.40" in page.text
+
+    asyncio.run(engine.dispose())
 
 
 def test_admin_products_shows_selected_gpt_supplier_and_each_stock(tmp_path) -> None:

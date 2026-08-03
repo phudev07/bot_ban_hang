@@ -3,6 +3,7 @@ import hmac
 import re
 import time
 import unicodedata
+from decimal import Decimal, ROUND_HALF_UP
 from html import escape
 from urllib.parse import urlencode
 
@@ -11,6 +12,20 @@ from cryptography.fernet import Fernet
 
 def format_vnd(amount: int) -> str:
     return f"{amount:,}".replace(",", ".") + "đ"
+
+
+def format_usd_from_vnd(
+    amount: int,
+    vnd_per_usd: int,
+    show_positive_sign: bool = False,
+) -> str:
+    rate = max(1, int(vnd_per_usd))
+    value = (Decimal(int(amount)) / Decimal(rate)).quantize(
+        Decimal("0.01"),
+        rounding=ROUND_HALF_UP,
+    )
+    sign = "-" if value < 0 else "+" if show_positive_sign and value > 0 else ""
+    return f"{sign}${abs(value):,.2f}"
 
 
 def parse_vnd(value: str) -> int | None:

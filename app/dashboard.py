@@ -84,13 +84,14 @@ from app.suppliers import (
     supplier_balance_guard,
     supplier_route_sort_key,
 )
-from app.utils import SecretCipher, format_vnd, parse_vnd
+from app.utils import SecretCipher, format_usd_from_vnd, format_vnd, parse_vnd
 from app.wallet_ledger import apply_wallet_change
 from app.dashboard_security import new_csrf_token, verify_dashboard_password
 
 
 templates = Jinja2Templates(directory=Path(__file__).parent / "templates")
 templates.env.filters["vnd"] = format_vnd
+templates.env.filters["usd_from_vnd"] = format_usd_from_vnd
 
 
 LOCAL_TIMEZONE = ZoneInfo("Asia/Bangkok")
@@ -5311,6 +5312,7 @@ def create_dashboard_router(
                 selected_kind=selected_kind,
                 selected_provider=selected_provider,
                 provider_label=provider_label,
+                source_usd_rate=settings.canboso_usd_to_vnd,
                 supplier_connected=selected_client is not None,
                 purchase_attempts=purchase_attempts,
                 transaction_pager=transaction_pager,
