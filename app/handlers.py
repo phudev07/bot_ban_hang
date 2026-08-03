@@ -75,7 +75,11 @@ from app.sms_rentals import (
     sms_availability,
 )
 from app.states import DepositStates, PurchaseStates
-from app.suppliers import EXTERNAL_FULFILLMENT_SOURCES, SumistoreClient
+from app.suppliers import (
+    EXTERNAL_FULFILLMENT_SOURCES,
+    ExternalSupplierClient,
+    SumistoreClient,
+)
 from app.utils import (
     SecretCipher,
     build_sepay_qr_url,
@@ -213,6 +217,7 @@ def create_router(
     supplier_client: SumistoreClient | None = None,
     lehai_client: LeHaiPremiumClient | None = None,
     rentsim_client: RentSimClient | None = None,
+    canboso_client: ExternalSupplierClient | None = None,
 ) -> Router:
     router = Router(name="customer")
     warehouse_docs_url = (
@@ -719,6 +724,7 @@ def create_router(
             product.id,
             supplier_client,
             lehai_client=lehai_client,
+            canboso_client=canboso_client,
             refresh_external=True,
             refresh_max_age_seconds=settings.supplier_ui_cache_seconds,
         )
@@ -826,6 +832,7 @@ def create_router(
                 quantity,
                 supplier_client,
                 lehai_client=lehai_client,
+                canboso_client=canboso_client,
                 coupon_id=coupon_id,
                 referral_commission_percent=settings.referral_commission_percent,
                 on_fulfillment_started=(
@@ -1030,6 +1037,7 @@ def create_router(
             product.id,
             supplier_client,
             lehai_client=lehai_client,
+            canboso_client=canboso_client,
             refresh_external=True,
             refresh_max_age_seconds=settings.supplier_ui_cache_seconds,
         )
@@ -1105,6 +1113,7 @@ def create_router(
             product.id,
             supplier_client,
             lehai_client=lehai_client,
+            canboso_client=canboso_client,
             refresh_external=True,
             refresh_max_age_seconds=settings.supplier_ui_cache_seconds,
         )
@@ -1191,6 +1200,7 @@ def create_router(
             product.id,
             supplier_client,
             lehai_client=lehai_client,
+            canboso_client=canboso_client,
             refresh_external=True,
             refresh_max_age_seconds=settings.supplier_ui_cache_seconds,
         )
@@ -1297,6 +1307,7 @@ def create_router(
             product.id,
             supplier_client,
             lehai_client=lehai_client,
+            canboso_client=canboso_client,
             refresh_external=True,
             refresh_max_age_seconds=settings.supplier_ui_cache_seconds,
         )
@@ -1445,6 +1456,7 @@ def create_router(
                 product.id,
                 supplier_client,
                 lehai_client=lehai_client,
+                canboso_client=canboso_client,
                 refresh_external=True,
                 refresh_max_age_seconds=settings.supplier_ui_cache_seconds,
             )
@@ -1484,6 +1496,7 @@ def create_router(
             pricing,
             supplier_client,
             lehai_client,
+            canboso_client=canboso_client,
             local_stock=local_stock,
         )
         if supplier_quote is not None and not supplier_quote.available:

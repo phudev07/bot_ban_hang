@@ -8,7 +8,7 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 
 from aiogram.types import User as TelegramUser
-from sqlalchemy import func, select
+from sqlalchemy import case, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from sqlalchemy.orm import selectinload
 
@@ -58,7 +58,7 @@ from app.suppliers import (
     SupplierPurchase,
     configured_supplier_providers,
     enabled_supplier_providers,
-    fetch_sumistore_supplier_routes,
+    fetch_product_supplier_routes,
     is_multi_supplier_product,
     plan_supplier_routes,
     product_supplier_api_enabled,
@@ -439,11 +439,14 @@ def supplier_client_for_source(
     fulfillment_source: str,
     sumistore_client: SumistoreClient | None,
     lehai_client: LeHaiPremiumClient | None,
+    canboso_client: ExternalSupplierClient | None = None,
 ) -> ExternalSupplierClient | None:
     if fulfillment_source == "sumistore":
         return sumistore_client
     if fulfillment_source == "lehai":
         return lehai_client
+    if fulfillment_source == "canboso":
+        return canboso_client
     return None
 
 
@@ -451,6 +454,7 @@ def supplier_client_for_product(
     product: Product,
     sumistore_client: SumistoreClient | None,
     lehai_client: LeHaiPremiumClient | None,
+    canboso_client: ExternalSupplierClient | None = None,
 ) -> ExternalSupplierClient | None:
     if not product_supplier_api_enabled(product, product.fulfillment_source):
         return None
@@ -458,6 +462,7 @@ def supplier_client_for_product(
         product.fulfillment_source,
         sumistore_client,
         lehai_client,
+        canboso_client,
     )
 
 
@@ -465,6 +470,7 @@ def supplier_balance_clients_for_product(
     product: Product,
     sumistore_client: SumistoreClient | None,
     lehai_client: LeHaiPremiumClient | None,
+    canboso_client: ExternalSupplierClient | None = None,
 ) -> tuple[ExternalSupplierClient, ...]:
     clients: list[ExternalSupplierClient] = []
     # Lock every configured route. An admin may enable a route after this
@@ -477,14 +483,41 @@ def supplier_balance_clients_for_product(
         clients.append(sumistore_client)
     if "lehai" in configured_providers and lehai_client is not None:
         clients.append(lehai_client)
+    if "canboso" in configured_providers and canboso_client is not None:
+        clients.append(canboso_client)
     unique_clients = {id(client): client for client in clients}.values()
     return tuple(
         sorted(
             unique_clients,
             key=lambda client: (
-                0 if getattr(client, "provider", "") == "sumistore" else 1,
+                {"sumistore": 0, "canboso": 1, "lehai": 2}.get(
+                    getattr(client, "provider", ""),
+                    99,
+                ),
                 getattr(client, "provider", ""),
             ),
+        )
+    )
+
+
+def has_connected_alternative_supplier(
+    product: Product,
+    sumistore_client: SumistoreClient | None,
+    lehai_client: LeHaiPremiumClient | None,
+    canboso_client: ExternalSupplierClient | None = None,
+) -> bool:
+    clients = {
+        "sumistore": sumistore_client,
+        "lehai": lehai_client,
+        "canboso": canboso_client,
+    }
+    return any(
+        provider != product.fulfillment_source
+        and product_supplier_api_enabled(product, provider)
+        and clients.get(provider) is not None
+        for provider in configured_supplier_providers(
+            product.fulfillment_source,
+            product.supplier_product_id,
         )
     )
 
@@ -494,6 +527,7 @@ async def refresh_product_from_supplier(
     product: Product,
     sumistore_client: SumistoreClient | None,
     lehai_client: LeHaiPremiumClient | None,
+    canboso_client: ExternalSupplierClient | None = None,
 ) -> int:
     if product.fulfillment_source == "sumistore":
         return await refresh_external_product(
@@ -503,7 +537,30 @@ async def refresh_product_from_supplier(
             lehai_client=lehai_client,
         )
     if product.fulfillment_source == "lehai":
-        return await refresh_lehai_product(session, product, lehai_client)
+        return await refresh_lehai_product(
+            session,
+            product,
+            lehai_client,
+            sumistore_client=sumistore_client,
+            canboso_client=canboso_client,
+        )
+    if product.fulfillment_source == "canboso" and canboso_client is not None:
+        snapshot = await canboso_client.fetch_snapshot(product.supplier_product_id or "")
+        product.external_stock = snapshot.effective_stock
+        await apply_supplier_price(
+            session,
+            product,
+            snapshot.unit_price,
+            alert_provider="canboso",
+        )
+        await apply_supplier_stock(
+            session,
+            product,
+            snapshot.effective_stock,
+            alert_provider="canboso",
+        )
+        product.supplier_synced_at = datetime.now(UTC)
+        await session.flush()
     return product.external_stock
 
 
@@ -541,6 +598,7 @@ async def available_stock(
     supplier_client: SumistoreClient | None = None,
     *,
     lehai_client: LeHaiPremiumClient | None = None,
+    canboso_client: ExternalSupplierClient | None = None,
     refresh_external: bool = False,
     refresh_max_age_seconds: int = 0,
 ) -> int:
@@ -580,6 +638,7 @@ async def available_stock(
                 product,
                 supplier_client,
                 lehai_client,
+                canboso_client,
             )
             await session.commit()
         return max(0, product.external_stock)
@@ -792,6 +851,7 @@ async def multi_supplier_quote(
     sumistore_client: SumistoreClient | None,
     lehai_client: LeHaiPremiumClient | None,
     *,
+    canboso_client: ExternalSupplierClient | None = None,
     local_stock: int = 0,
 ) -> MultiSupplierQuote | None:
     if max(0, int(local_stock)) >= quantity:
@@ -799,16 +859,23 @@ async def multi_supplier_quote(
     if not is_multi_supplier_product(
         product.fulfillment_source,
         product.supplier_product_id,
-    ) or not product.supplier_product_id:
+    ) or not product.supplier_product_id or not has_connected_alternative_supplier(
+        product,
+        sumistore_client,
+        lehai_client,
+        canboso_client,
+    ):
         return None
     enabled_providers = enabled_supplier_providers(product)
     if not enabled_providers:
         # With every API route disabled, any visible stock is local inventory.
         return None
-    fetched = await fetch_sumistore_supplier_routes(
+    fetched = await fetch_product_supplier_routes(
+        product.fulfillment_source,
         product.supplier_product_id,
         sumistore_client,
         lehai_client,
+        canboso_client,
         enabled_providers=enabled_providers,
     )
     plan = plan_supplier_routes(fetched.routes, quantity)
@@ -1028,6 +1095,7 @@ async def purchase_product(
     supplier_client: SumistoreClient | None = None,
     *,
     lehai_client: LeHaiPremiumClient | None = None,
+    canboso_client: ExternalSupplierClient | None = None,
     coupon_code: str | None = None,
     coupon_id: int | None = None,
     sales_channel: str = "telegram",
@@ -1042,7 +1110,14 @@ async def purchase_product(
     async with session_factory() as session:
         product = await session.get(Product, product_id)
     external_clients = (
-        list(supplier_balance_clients_for_product(product, supplier_client, lehai_client))
+        list(
+            supplier_balance_clients_for_product(
+                product,
+                supplier_client,
+                lehai_client,
+                canboso_client,
+            )
+        )
         if product is not None
         else []
     )
@@ -1058,6 +1133,7 @@ async def purchase_product(
                 quantity,
                 supplier_client,
                 lehai_client,
+                canboso_client,
                 coupon_code=coupon_code,
                 coupon_id=coupon_id,
                 sales_channel=sales_channel,
@@ -1077,6 +1153,7 @@ async def purchase_product(
         quantity,
         supplier_client,
         lehai_client,
+        canboso_client,
         coupon_code=coupon_code,
         coupon_id=coupon_id,
         sales_channel=sales_channel,
@@ -1098,6 +1175,7 @@ async def _purchase_product(
     quantity: int,
     supplier_client: SumistoreClient | None,
     lehai_client: LeHaiPremiumClient | None,
+    canboso_client: ExternalSupplierClient | None,
     *,
     coupon_code: str | None,
     coupon_id: int | None,
@@ -1137,6 +1215,7 @@ async def _purchase_product(
                 product,
                 supplier_client,
                 lehai_client,
+                canboso_client,
             )
             recovered_items: list[InventoryItem] = []
             recovered_stock = 0
@@ -1156,21 +1235,39 @@ async def _purchase_product(
                             product.fulfillment_source,
                             product.supplier_product_id,
                         )
+                        and has_connected_alternative_supplier(
+                            product,
+                            supplier_client,
+                            lehai_client,
+                            canboso_client,
+                        )
                         and product.supplier_product_id
                     ):
-                        multi_route_fetch = await fetch_sumistore_supplier_routes(
+                        multi_route_fetch = await fetch_product_supplier_routes(
+                            product.fulfillment_source,
                             product.supplier_product_id,
                             supplier_client,
                             lehai_client,
+                            canboso_client,
                             enabled_providers=enabled_supplier_providers(product),
                         )
-                        await refresh_external_product(
-                            session,
-                            product,
-                            supplier_client,
-                            lehai_client=lehai_client,
-                            route_fetch=multi_route_fetch,
-                        )
+                        if product.fulfillment_source == "sumistore":
+                            await refresh_external_product(
+                                session,
+                                product,
+                                supplier_client,
+                                lehai_client=lehai_client,
+                                route_fetch=multi_route_fetch,
+                            )
+                        else:
+                            await refresh_lehai_product(
+                                session,
+                                product,
+                                lehai_client,
+                                sumistore_client=supplier_client,
+                                canboso_client=canboso_client,
+                                route_fetch=multi_route_fetch,
+                            )
                         multi_plan = plan_supplier_routes(
                             multi_route_fetch.routes,
                             quantity,
@@ -1181,6 +1278,7 @@ async def _purchase_product(
                             product,
                             supplier_client,
                             lehai_client,
+                            canboso_client,
                         )
                     supplier_stock = max(0, product.external_stock - recovered_stock)
                     if (
@@ -2066,8 +2164,13 @@ async def process_sepay_payment(
     referral_commission_percent: int = 2,
     on_fulfillment_started: FulfillmentStartedCallback | None = None,
     lehai_client: LeHaiPremiumClient | None = None,
+    canboso_client: ExternalSupplierClient | None = None,
 ) -> PaymentResult:
-    if supplier_client is not None or lehai_client is not None:
+    if (
+        supplier_client is not None
+        or lehai_client is not None
+        or canboso_client is not None
+    ):
         payment_text = " ".join(
             str(payload.get(key) or "") for key in ("code", "content", "description")
         )
@@ -2089,6 +2192,7 @@ async def process_sepay_payment(
                         product,
                         supplier_client,
                         lehai_client,
+                        canboso_client,
                     )
                 )
                 if product is not None
@@ -2107,6 +2211,7 @@ async def process_sepay_payment(
                         referral_commission_percent,
                         on_fulfillment_started,
                         lehai_client,
+                        canboso_client,
                     )
     return await _process_sepay_payment(
         session_factory,
@@ -2117,6 +2222,7 @@ async def process_sepay_payment(
         referral_commission_percent,
         on_fulfillment_started,
         lehai_client,
+        canboso_client,
     )
 
 
@@ -2129,6 +2235,7 @@ async def _process_sepay_payment(
     referral_commission_percent: int,
     on_fulfillment_started: FulfillmentStartedCallback | None,
     lehai_client: LeHaiPremiumClient | None,
+    canboso_client: ExternalSupplierClient | None,
 ) -> PaymentResult:
     transfer_type = str(payload.get("transferType") or payload.get("transfer_type") or "").lower()
     if transfer_type and transfer_type not in {"in", "credit", "incoming"}:
@@ -2338,6 +2445,7 @@ async def _process_sepay_payment(
                             product,
                             supplier_client,
                             lehai_client,
+                            canboso_client,
                         )
                         if product.fulfillment_source in EXTERNAL_FULFILLMENT_SOURCES:
                             supplier_stock = 0
@@ -2366,25 +2474,43 @@ async def _process_sepay_payment(
                                         product.fulfillment_source,
                                         product.supplier_product_id,
                                     )
+                                    and has_connected_alternative_supplier(
+                                        product,
+                                        supplier_client,
+                                        lehai_client,
+                                        canboso_client,
+                                    )
                                     and product.supplier_product_id
                                 ):
                                     multi_route_fetch = (
-                                        await fetch_sumistore_supplier_routes(
+                                        await fetch_product_supplier_routes(
+                                            product.fulfillment_source,
                                             product.supplier_product_id,
                                             supplier_client,
                                             lehai_client,
+                                            canboso_client,
                                             enabled_providers=enabled_supplier_providers(
                                                 product
                                             ),
                                         )
                                     )
-                                    await refresh_external_product(
-                                        session,
-                                        product,
-                                        supplier_client,
-                                        lehai_client=lehai_client,
-                                        route_fetch=multi_route_fetch,
-                                    )
+                                    if product.fulfillment_source == "sumistore":
+                                        await refresh_external_product(
+                                            session,
+                                            product,
+                                            supplier_client,
+                                            lehai_client=lehai_client,
+                                            route_fetch=multi_route_fetch,
+                                        )
+                                    else:
+                                        await refresh_lehai_product(
+                                            session,
+                                            product,
+                                            lehai_client,
+                                            sumistore_client=supplier_client,
+                                            canboso_client=canboso_client,
+                                            route_fetch=multi_route_fetch,
+                                        )
                                     multi_plan = plan_supplier_routes(
                                         multi_route_fetch.routes,
                                         deposit.quantity,
@@ -2395,6 +2521,7 @@ async def _process_sepay_payment(
                                         product,
                                         supplier_client,
                                         lehai_client,
+                                        canboso_client,
                                     )
                                 if deposit_campaign is not None:
                                     unsafe_status = stop_unsafe_flash_sale(
@@ -2858,18 +2985,40 @@ async def active_categories(session: AsyncSession) -> list[Category]:
 
 
 async def active_products(session: AsyncSession, category_id: int | None = None) -> list[Product]:
+    gpt_product = or_(
+        Category.name_vi.ilike("%gpt%"),
+        Category.name_en.ilike("%gpt%"),
+        Category.name_vi.ilike("%chatgpt%"),
+        Category.name_en.ilike("%chatgpt%"),
+        Product.name_vi.ilike("%gpt%"),
+        Product.name_en.ilike("%gpt%"),
+        Product.name_vi.ilike("%chatgpt%"),
+        Product.name_en.ilike("%chatgpt%"),
+    )
+    google_product = or_(
+        Category.name_vi.ilike("%gemini%"),
+        Category.name_en.ilike("%gemini%"),
+        Product.name_vi.ilike("%gemini%"),
+        Product.name_en.ilike("%gemini%"),
+        Product.name_vi.ilike("%gg %"),
+        Product.name_en.ilike("%google%"),
+    )
     statement = (
         select(Product)
+        .join(Category, Category.id == Product.category_id)
         .where(
             Product.active.is_(True),
             Product.archived_at.is_(None),
-            Product.category.has(
-                Category.active.is_(True) & Category.archived_at.is_(None)
-            ),
+            Category.active.is_(True),
+            Category.archived_at.is_(None),
             Product.fulfillment_source.in_(SELLABLE_FULFILLMENT_SOURCES),
             Product.product_type == "account",
         )
-        .order_by(Product.id)
+        .order_by(
+            case((gpt_product, 0), (google_product, 1), else_=2),
+            Category.position,
+            Product.id,
+        )
     )
     if category_id is not None:
         statement = statement.where(Product.category_id == category_id)

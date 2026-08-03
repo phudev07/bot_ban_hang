@@ -21,6 +21,7 @@ from app.broadcasts import (
     broadcast_worker,
     sale_alert_worker,
 )
+from app.canboso_suppliers import create_canboso_client
 from app.config import get_settings
 from app.database import Base, DatabaseSessionMiddleware, create_database
 from app.handlers import create_router
@@ -291,6 +292,12 @@ async def initialize_database(engine, session_factory, seed_demo_data: bool) -> 
         await connection.execute(
             text(
                 "ALTER TABLE products ADD COLUMN IF NOT EXISTS "
+                "canboso_api_enabled BOOLEAN NOT NULL DEFAULT TRUE"
+            )
+        )
+        await connection.execute(
+            text(
+                "ALTER TABLE products ADD COLUMN IF NOT EXISTS "
                 "supplier_markup BIGINT NOT NULL DEFAULT 0"
             )
         )
@@ -383,7 +390,7 @@ async def initialize_database(engine, session_factory, seed_demo_data: bool) -> 
                 "supplier_available_stock_initialized = TRUE "
                 "WHERE supplier_available_stock_initialized = FALSE "
                 "AND supplier_synced_at IS NOT NULL "
-                "AND fulfillment_source IN ('sumistore', 'lehai')"
+                "AND fulfillment_source IN ('sumistore', 'lehai', 'canboso')"
             )
         )
         await connection.execute(
@@ -635,10 +642,10 @@ async def initialize_database(engine, session_factory, seed_demo_data: bool) -> 
                 "UPDATE inventory_items AS item SET supplier_provider = COALESCE("
                 "(SELECT tx.provider FROM supplier_balance_transactions AS tx "
                 "WHERE tx.supplier_order_code = item.supplier_order_code "
-                "AND tx.provider IN ('sumistore', 'lehai') ORDER BY tx.id DESC LIMIT 1), "
+                "AND tx.provider IN ('sumistore', 'lehai', 'canboso') ORDER BY tx.id DESC LIMIT 1), "
                 "(SELECT attempt.provider FROM supplier_purchase_attempts AS attempt "
                 "WHERE attempt.supplier_order_code = item.supplier_order_code "
-                "AND attempt.provider IN ('sumistore', 'lehai') "
+                "AND attempt.provider IN ('sumistore', 'lehai', 'canboso') "
                 "ORDER BY attempt.id DESC LIMIT 1), "
                 "CASE WHEN item.supplier_order_code LIKE 'API-TELE-%' THEN 'sumistore' "
                 "WHEN item.supplier_order_code LIKE 'LHP-%' THEN 'lehai' END) "
@@ -653,10 +660,10 @@ async def initialize_database(engine, session_factory, seed_demo_data: bool) -> 
                 "WHERE item.id = shop_order.inventory_item_id), "
                 "(SELECT tx.provider FROM supplier_balance_transactions AS tx "
                 "WHERE tx.supplier_order_code = shop_order.supplier_order_code "
-                "AND tx.provider IN ('sumistore', 'lehai') ORDER BY tx.id DESC LIMIT 1), "
+                "AND tx.provider IN ('sumistore', 'lehai', 'canboso') ORDER BY tx.id DESC LIMIT 1), "
                 "(SELECT attempt.provider FROM supplier_purchase_attempts AS attempt "
                 "WHERE attempt.supplier_order_code = shop_order.supplier_order_code "
-                "AND attempt.provider IN ('sumistore', 'lehai') "
+                "AND attempt.provider IN ('sumistore', 'lehai', 'canboso') "
                 "ORDER BY attempt.id DESC LIMIT 1), "
                 "CASE WHEN shop_order.supplier_order_code LIKE 'API-TELE-%' "
                 "THEN 'sumistore' WHEN shop_order.supplier_order_code LIKE 'LHP-%' "
@@ -908,9 +915,10 @@ async def supplier_recovery_worker(
 
 async def lehai_sync_worker(
     session_factory,
-    client: LeHaiPremiumClient,
+    client: LeHaiPremiumClient | None,
     interval_seconds: int,
     sumistore_client: SumistoreClient | None = None,
+    canboso_client: ExternalSupplierClient | None = None,
 ) -> None:
     while True:
         try:
@@ -918,6 +926,7 @@ async def lehai_sync_worker(
                 session_factory,
                 client,
                 sumistore_client,
+                canboso_client,
             )
         except Exception:
             logging.getLogger(__name__).exception(
@@ -1209,6 +1218,7 @@ async def main() -> None:
     supplier_client = create_sumistore_client(settings)
     await ensure_lehai_products(session_factory, settings)
     lehai_client = create_lehai_client(settings)
+    canboso_client = create_canboso_client(settings)
     rentsim_client = create_rentsim_client(settings)
 
     cipher = SecretCipher(settings.inventory_encryption_key.get_secret_value())
@@ -1246,7 +1256,14 @@ async def main() -> None:
     dispatcher.update.outer_middleware(DatabaseSessionMiddleware(session_factory))
     dispatcher.include_router(create_admin_router(settings, cipher))
     dispatcher.include_router(
-        create_router(settings, cipher, supplier_client, lehai_client, rentsim_client)
+        create_router(
+            settings,
+            cipher,
+            supplier_client,
+            lehai_client,
+            rentsim_client,
+            canboso_client=canboso_client,
+        )
     )
 
     api = create_api(
@@ -1259,6 +1276,7 @@ async def main() -> None:
         api_redis=storage.redis,
         lehai_client=lehai_client,
         rentsim_client=rentsim_client,
+        canboso_client=canboso_client,
     )
     server = uvicorn.Server(
         uvicorn.Config(
@@ -1368,11 +1386,12 @@ async def main() -> None:
             lehai_sync_worker(
                 session_factory,
                 lehai_client,
-                settings.lehai_sync_seconds,
+                min(settings.lehai_sync_seconds, settings.canboso_sync_seconds),
                 supplier_client,
+                canboso_client,
             )
         )
-        if lehai_client is not None
+        if lehai_client is not None or canboso_client is not None
         else None
     )
     lehai_audit_task = (
@@ -1388,6 +1407,21 @@ async def main() -> None:
             )
         )
         if lehai_client is not None
+        else None
+    )
+    canboso_audit_task = (
+        asyncio.create_task(
+            supplier_audit_worker(
+                session_factory,
+                canboso_client,
+                bot,
+                settings.admin_ids,
+                settings.canboso_audit_seconds,
+                provider="canboso",
+                provider_label="Canboso",
+            )
+        )
+        if canboso_client is not None
         else None
     )
     rentsim_task = (
@@ -1452,6 +1486,10 @@ async def main() -> None:
             lehai_audit_task.cancel()
             with contextlib.suppress(asyncio.CancelledError):
                 await lehai_audit_task
+        if canboso_audit_task is not None:
+            canboso_audit_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await canboso_audit_task
         if rentsim_task is not None:
             rentsim_task.cancel()
             with contextlib.suppress(asyncio.CancelledError):
@@ -1462,7 +1500,12 @@ async def main() -> None:
         server.should_exit = True
         await api_task
         await storage.close()
-        for external_client in (supplier_client, lehai_client, rentsim_client):
+        for external_client in (
+            supplier_client,
+            lehai_client,
+            canboso_client,
+            rentsim_client,
+        ):
             if external_client is not None:
                 await external_client.aclose()
         if deposit_notification_bot is not None:

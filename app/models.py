@@ -73,6 +73,9 @@ class Product(Base):
     lehai_api_enabled: Mapped[bool] = mapped_column(
         Boolean, default=True, server_default="true"
     )
+    canboso_api_enabled: Mapped[bool] = mapped_column(
+        Boolean, default=True, server_default="true"
+    )
     supplier_markup: Mapped[int] = mapped_column(BigInteger, default=0)
     supplier_price: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
     price_lock_enabled: Mapped[bool] = mapped_column(

@@ -78,6 +78,15 @@ class Settings(BaseSettings):
     lehai_sync_seconds: int = 60
     lehai_audit_seconds: int = 30
 
+    canboso_enabled: bool = False
+    canboso_base_url: str = "https://canboso.com"
+    canboso_api_key: SecretStr = SecretStr("")
+    canboso_gg18m_product_id: str = ""
+    canboso_usd_to_vnd: int = 27_500
+    canboso_timeout_seconds: float = 15
+    canboso_sync_seconds: int = 60
+    canboso_audit_seconds: int = 30
+
     rentsim_enabled: bool = False
     rentsim_base_url: str = "http://rentsim.net:8080"
     rentsim_api_key: SecretStr = SecretStr("")
@@ -163,6 +172,14 @@ class Settings(BaseSettings):
             raise ValueError("Le Hai Premium sync interval must be at least 15 seconds")
         if self.lehai_audit_seconds < 10:
             raise ValueError("Le Hai Premium audit interval must be at least 10 seconds")
+        if self.canboso_enabled and not self.canboso_api_key.get_secret_value():
+            raise ValueError("Canboso is enabled but buyer API key is missing")
+        if self.canboso_usd_to_vnd <= 0 or self.canboso_timeout_seconds <= 0:
+            raise ValueError("Canboso exchange rate or timeout configuration is invalid")
+        if self.canboso_sync_seconds < 15:
+            raise ValueError("Canboso sync interval must be at least 15 seconds")
+        if self.canboso_audit_seconds < 10:
+            raise ValueError("Canboso audit interval must be at least 10 seconds")
         if self.rentsim_enabled and not self.rentsim_api_key.get_secret_value():
             raise ValueError("RentSim is enabled but API key is missing")
         if (

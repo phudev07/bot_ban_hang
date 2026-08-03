@@ -122,6 +122,21 @@ def test_enabled_lehai_requires_buyer_key() -> None:
     assert settings.lehai_markup == 5_000
 
 
+def test_enabled_canboso_requires_buyer_key_and_uses_fixed_usd_rate() -> None:
+    with pytest.raises(ValidationError):
+        base_settings(canboso_enabled=True)
+
+    settings = base_settings(
+        canboso_enabled=True,
+        canboso_api_key="tgb_test-only",
+    )
+    assert settings.canboso_usd_to_vnd == 27_500
+    assert settings.canboso_base_url == "https://canboso.com"
+
+    with pytest.raises(ValidationError):
+        base_settings(canboso_usd_to_vnd=0)
+
+
 def test_enabled_rentsim_requires_key_and_uses_cambodia_chatgpt_defaults() -> None:
     with pytest.raises(ValidationError):
         base_settings(rentsim_enabled=True)

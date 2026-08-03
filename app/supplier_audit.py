@@ -21,6 +21,7 @@ PROVIDER = "sumistore"
 SUPPLIER_ALERT_GRACE_PERIODS = {
     "sumistore": timedelta(hours=24),
     "lehai": timedelta(hours=48),
+    "canboso": timedelta(hours=24),
 }
 
 
@@ -221,7 +222,11 @@ def record_supplier_purchase(
     quantity: int,
     provider: str = PROVIDER,
 ) -> SupplierBalanceTransaction:
-    provider_name = "Sumi" if provider == PROVIDER else "Lê Hải Premium"
+    provider_name = {
+        PROVIDER: "Sumi",
+        "lehai": "Lê Hải Premium",
+        "canboso": "Canboso",
+    }.get(provider, "nhà cung cấp")
     transaction = SupplierBalanceTransaction(
         provider=provider,
         kind="purchase",

@@ -22,6 +22,7 @@ from sqlalchemy import String, case, cast, delete, func, literal, or_, select, u
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from sqlalchemy.orm import aliased
 
+from app.canboso_suppliers import CanbosoClient
 from app.config import Settings
 from app.inventory_dedup import filter_duplicate_inventory
 from app.lehai_suppliers import LeHaiPremiumClient
@@ -76,7 +77,7 @@ from app.suppliers import (
     SupplierRouteFetch,
     configured_supplier_providers,
     enabled_supplier_providers,
-    fetch_sumistore_supplier_routes,
+    fetch_product_supplier_routes,
     is_multi_supplier_product,
     plan_supplier_routes,
     product_supplier_api_enabled,
@@ -100,6 +101,7 @@ logger = logging.getLogger(__name__)
 SUPPLIER_PROVIDER_LABELS = {
     "sumistore": "Sumi",
     "lehai": "Lê Hải",
+    "canboso": "Canboso",
 }
 
 WALLET_KIND_LABELS = {
@@ -227,6 +229,8 @@ def order_supplier_provider(order: Order) -> str:
         return "sumistore"
     if code.startswith("LHP-"):
         return "lehai"
+    if code.startswith("CBS-"):
+        return "canboso"
     return "local"
 
 
@@ -238,6 +242,7 @@ def order_supplier_provider_expression():
         ),
         (Order.supplier_order_code.like("API-TELE-%"), "sumistore"),
         (Order.supplier_order_code.like("LHP-%"), "lehai"),
+        (Order.supplier_order_code.like("CBS-%"), "canboso"),
         else_="local",
     )
 
@@ -245,7 +250,7 @@ def order_supplier_provider_expression():
 def order_supplier_label(providers: set[str]) -> str:
     ordered = [
         provider
-        for provider in ("sumistore", "lehai", "local")
+        for provider in ("sumistore", "canboso", "lehai", "local")
         if provider in providers
     ]
     return " + ".join(
@@ -663,45 +668,49 @@ def create_dashboard_router(
     lehai_client: LeHaiPremiumClient | None = None,
     rentsim_client: RentSimClient | None = None,
     bot: Bot | None = None,
+    *,
+    canboso_client: CanbosoClient | None = None,
 ) -> APIRouter:
     router = APIRouter()
-    gpt_route_cache: SupplierRouteFetch | None = None
-    gpt_route_cache_key: tuple[str, ...] | None = None
-    gpt_route_cache_at = 0.0
-    gpt_route_cache_lock = asyncio.Lock()
+    route_cache: dict[tuple[str, ...], tuple[float, SupplierRouteFetch]] = {}
+    route_cache_lock = asyncio.Lock()
 
-    async def gpt_plus_route_fetch(
-        enabled_providers: frozenset[str],
+    async def multi_source_route_fetch(
+        product: Product,
     ) -> SupplierRouteFetch | None:
-        nonlocal gpt_route_cache, gpt_route_cache_at, gpt_route_cache_key
-        if supplier_client is None and lehai_client is None:
+        if (
+            supplier_client is None
+            and lehai_client is None
+            and canboso_client is None
+        ):
             return None
-        cache_key = tuple(sorted(enabled_providers))
+        if not product.supplier_product_id:
+            return None
+        enabled_providers = enabled_supplier_providers(product)
+        cache_key = (
+            product.fulfillment_source,
+            product.supplier_product_id,
+            *sorted(enabled_providers),
+        )
         now = time.monotonic()
         cache_seconds = max(5, settings.supplier_ui_cache_seconds)
-        if (
-            gpt_route_cache is not None
-            and gpt_route_cache_key == cache_key
-            and now - gpt_route_cache_at < cache_seconds
-        ):
-            return gpt_route_cache
-        async with gpt_route_cache_lock:
+        cached = route_cache.get(cache_key)
+        if cached is not None and now - cached[0] < cache_seconds:
+            return cached[1]
+        async with route_cache_lock:
             now = time.monotonic()
-            if (
-                gpt_route_cache is not None
-                and gpt_route_cache_key == cache_key
-                and now - gpt_route_cache_at < cache_seconds
-            ):
-                return gpt_route_cache
-            fetched = await fetch_sumistore_supplier_routes(
-                "SP-GEF55PBV",
+            cached = route_cache.get(cache_key)
+            if cached is not None and now - cached[0] < cache_seconds:
+                return cached[1]
+            fetched = await fetch_product_supplier_routes(
+                product.fulfillment_source,
+                product.supplier_product_id,
                 supplier_client,
                 lehai_client,
+                canboso_client,
                 enabled_providers=enabled_providers,
             )
-            gpt_route_cache = fetched
-            gpt_route_cache_key = cache_key
-            gpt_route_cache_at = now
+            route_cache[cache_key] = (now, fetched)
             return fetched
 
     def supplier_source_rows(product: Product) -> list[dict[str, object]]:
@@ -1429,17 +1438,15 @@ def create_dashboard_router(
                     .order_by(Category.position, Category.id)
                 )
             )
-        gpt_row = next(
-            (
-                row
-                for row in products
-                if row["product"].supplier_product_id == "SP-GEF55PBV"
-            ),
-            None,
-        )
-        if gpt_row is not None:
-            enabled_providers = enabled_supplier_providers(gpt_row["product"])
-            fetched = await gpt_plus_route_fetch(enabled_providers)
+        for product_row in products:
+            product = product_row["product"]
+            if not is_multi_supplier_product(
+                product.fulfillment_source,
+                product.supplier_product_id,
+            ):
+                continue
+            enabled_providers = enabled_supplier_providers(product)
+            fetched = await multi_source_route_fetch(product)
             if fetched is not None:
                 routes = {route.provider: route for route in fetched.routes}
                 failures = {failure.provider: failure for failure in fetched.failures}
@@ -1448,7 +1455,10 @@ def create_dashboard_router(
                     selected_plan[0][0].provider if selected_plan else None
                 )
                 source_rows = []
-                for provider in ("sumistore", "lehai"):
+                for provider in configured_supplier_providers(
+                    product.fulfillment_source,
+                    product.supplier_product_id,
+                ):
                     route = routes.get(provider)
                     source_rows.append(
                         {
@@ -1464,21 +1474,33 @@ def create_dashboard_router(
                             "selected": provider == selected_provider,
                         }
                     )
-                gpt_row["supplier_sources"] = source_rows
-                gpt_row["active_supplier_label"] = (
+                product_row["supplier_sources"] = source_rows
+                configured_count = len(
+                    configured_supplier_providers(
+                        product.fulfillment_source,
+                        product.supplier_product_id,
+                    )
+                )
+                product_row["active_supplier_label"] = (
                     SUPPLIER_PROVIDER_LABELS.get(
                         selected_provider,
-                        "Đã tắt cả hai" if not enabled_providers else "Chưa có nguồn",
+                        (
+                            "Đã tắt cả hai"
+                            if not enabled_providers and configured_count == 2
+                            else "Đã tắt tất cả"
+                            if not enabled_providers
+                            else "Chưa có nguồn"
+                        ),
                     )
                 )
                 if len(routes) == fetched.configured_count:
                     live_stock = sum(
                         max(0, int(route.snapshot.effective_stock))
                         for route in fetched.routes
-                    ) + int(gpt_row["local_stock"])
-                    gpt_row["source_stock"] = live_stock
-                    gpt_row["stock"] = (
-                        0 if gpt_row["product"].force_out_of_stock else live_stock
+                    ) + int(product_row["local_stock"])
+                    product_row["source_stock"] = live_stock
+                    product_row["stock"] = (
+                        0 if product.force_out_of_stock else live_stock
                     )
         return templates.TemplateResponse(
             request,
@@ -1565,6 +1587,7 @@ def create_dashboard_router(
                     external_stock=0,
                     sumistore_api_enabled=True,
                     lehai_api_enabled=True,
+                    canboso_api_enabled=True,
                     notify_stock_without_balance_topup=(
                         notify_stock_without_balance_topup is not None
                         and normalized_source in EXTERNAL_FULFILLMENT_SOURCES
@@ -1646,6 +1669,7 @@ def create_dashboard_router(
         api_source_controls_present: str | None = Form(None),
         sumistore_api_enabled: str | None = Form(None),
         lehai_api_enabled: str | None = Form(None),
+        canboso_api_enabled: str | None = Form(None),
         notification_controls_present: str | None = Form(None),
         sale_notifications_enabled: str | None = Form(None),
         stock_notifications_enabled: str | None = Form(None),
@@ -1724,6 +1748,7 @@ def create_dashboard_router(
             submitted_enabled = {
                 "sumistore": sumistore_api_enabled is not None,
                 "lehai": lehai_api_enabled is not None,
+                "canboso": canboso_api_enabled is not None,
             }
             product.sumistore_api_enabled = (
                 (
@@ -1741,6 +1766,15 @@ def create_dashboard_router(
                     else product.lehai_api_enabled
                 )
                 if "lehai" in new_configured and "lehai" in old_configured
+                else True
+            )
+            product.canboso_api_enabled = (
+                (
+                    submitted_enabled["canboso"]
+                    if api_source_controls_present is not None
+                    else product.canboso_api_enabled
+                )
+                if "canboso" in new_configured and "canboso" in old_configured
                 else True
             )
             new_enabled = enabled_supplier_providers(product)
@@ -1810,6 +1844,7 @@ def create_dashboard_router(
                     product,
                     supplier_client,
                     lehai_client,
+                    canboso_client,
                 )
             active_campaign = await session.scalar(
                 select(FlashSaleCampaign)
@@ -3003,6 +3038,7 @@ def create_dashboard_router(
                 product_snapshot,
                 supplier_client,
                 lehai_client,
+                canboso_client,
             )
             if normalized_source != "local"
             else ()
@@ -3109,10 +3145,12 @@ def create_dashboard_router(
                             product.fulfillment_source,
                             product.supplier_product_id,
                         ):
-                            route_fetch = await fetch_sumistore_supplier_routes(
+                            route_fetch = await fetch_product_supplier_routes(
+                                product.fulfillment_source,
                                 product.supplier_product_id,
                                 supplier_client,
                                 lehai_client,
+                                canboso_client,
                                 enabled_providers=enabled_supplier_providers(product),
                             )
                             selected_route = next(
@@ -3167,6 +3205,7 @@ def create_dashboard_router(
                                 product,
                                 supplier_client,
                                 lehai_client,
+                                canboso_client,
                             )
                             if external_client is None:
                                 await session.rollback()
@@ -5156,11 +5195,19 @@ def create_dashboard_router(
     ) -> Response:
         if not is_admin(request):
             return redirect_to_login()
-        selected_provider = provider if provider in {PROVIDER, "lehai"} else PROVIDER
-        provider_label = "Sumi" if selected_provider == PROVIDER else "Lê Hải Premium"
-        selected_client = (
-            supplier_client if selected_provider == PROVIDER else lehai_client
-        )
+        provider_clients = {
+            PROVIDER: supplier_client,
+            "lehai": lehai_client,
+            "canboso": canboso_client,
+        }
+        provider_labels = {
+            PROVIDER: "Sumi",
+            "lehai": "Lê Hải Premium",
+            "canboso": "Canboso",
+        }
+        selected_provider = provider if provider in provider_clients else PROVIDER
+        provider_label = provider_labels[selected_provider]
+        selected_client = provider_clients[selected_provider]
         selected_kind = (
             kind
             if kind
@@ -5290,11 +5337,19 @@ def create_dashboard_router(
             return redirect_to_login()
         if not valid_csrf(request, csrf):
             return RedirectResponse("/admin/supplier-audit", status_code=303)
-        selected_provider = provider if provider in {PROVIDER, "lehai"} else PROVIDER
-        provider_label = "Sumi" if selected_provider == PROVIDER else "Lê Hải Premium"
-        selected_client = (
-            supplier_client if selected_provider == PROVIDER else lehai_client
-        )
+        provider_clients = {
+            PROVIDER: supplier_client,
+            "lehai": lehai_client,
+            "canboso": canboso_client,
+        }
+        provider_labels = {
+            PROVIDER: "Sumi",
+            "lehai": "Lê Hải Premium",
+            "canboso": "Canboso",
+        }
+        selected_provider = provider if provider in provider_clients else PROVIDER
+        provider_label = provider_labels[selected_provider]
+        selected_client = provider_clients[selected_provider]
         redirect_url = f"/admin/supplier-audit?provider={selected_provider}"
         if selected_client is None:
             flash(

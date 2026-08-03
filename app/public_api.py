@@ -37,7 +37,7 @@ from app.models import (
 )
 from app.partner_services import api_signature
 from app.services import active_products, available_stock, purchase_product
-from app.suppliers import SumistoreClient
+from app.suppliers import ExternalSupplierClient, SumistoreClient
 from app.suppliers import EXTERNAL_FULFILLMENT_SOURCES, SELLABLE_FULFILLMENT_SOURCES
 from app.utils import SecretCipher, sanitize_customer_text
 
@@ -229,6 +229,7 @@ def create_public_api_router(
     redis_client: Redis,
     *,
     lehai_client: LeHaiPremiumClient | None = None,
+    canboso_client: ExternalSupplierClient | None = None,
 ) -> APIRouter:
     router = APIRouter(prefix="/v1", tags=["shop-api"])
 
@@ -591,6 +592,7 @@ def create_public_api_router(
                 body.quantity,
                 supplier_client,
                 lehai_client=lehai_client,
+                canboso_client=canboso_client,
                 coupon_code=body.coupon_code,
                 sales_channel="api",
                 api_client_id=principal.client.id,

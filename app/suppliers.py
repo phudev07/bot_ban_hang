@@ -23,11 +23,17 @@ from app.stock_alerts import apply_supplier_stock
 
 logger = logging.getLogger(__name__)
 
-EXTERNAL_FULFILLMENT_SOURCES = ("sumistore", "lehai")
+EXTERNAL_FULFILLMENT_SOURCES = ("sumistore", "lehai", "canboso")
 SELLABLE_FULFILLMENT_SOURCES = ("local", *EXTERNAL_FULFILLMENT_SOURCES)
 SUMISTORE_ALTERNATIVE_PRODUCTS: dict[str, tuple[str, str]] = {
     # The same GPT Plus account is available from both supplier wallets.
     "SP-GEF55PBV": ("lehai", "gpt_bh48_1m"),
+}
+SUPPLIER_ALTERNATIVE_PRODUCTS: dict[
+    tuple[str, str], tuple[tuple[str, str], ...]
+] = {
+    ("sumistore", "SP-GEF55PBV"): (("lehai", "gpt_bh48_1m"),),
+    ("lehai", "cdk_ggpro_18m"): (("canboso", "gg18m"),),
 }
 DEFINITIVE_PRODUCT_UNAVAILABLE_CODES = {
     "PRODUCT_NOT_FOUND",
@@ -171,10 +177,25 @@ def is_multi_supplier_product(
     fulfillment_source: str,
     supplier_product_id: str | None,
 ) -> bool:
+    return bool(
+        supplier_product_id
+        and (fulfillment_source, supplier_product_id)
+        in SUPPLIER_ALTERNATIVE_PRODUCTS
+    )
+
+
+def configured_supplier_routes(
+    fulfillment_source: str,
+    supplier_product_id: str | None,
+) -> tuple[tuple[str, str], ...]:
+    if fulfillment_source not in EXTERNAL_FULFILLMENT_SOURCES or not supplier_product_id:
+        return ()
     return (
-        fulfillment_source == "sumistore"
-        and bool(supplier_product_id)
-        and supplier_product_id in SUMISTORE_ALTERNATIVE_PRODUCTS
+        (fulfillment_source, supplier_product_id),
+        *SUPPLIER_ALTERNATIVE_PRODUCTS.get(
+            (fulfillment_source, supplier_product_id),
+            (),
+        ),
     )
 
 
@@ -185,11 +206,15 @@ def configured_supplier_providers(
     providers: list[str] = []
     if fulfillment_source in EXTERNAL_FULFILLMENT_SOURCES:
         providers.append(fulfillment_source)
-    if fulfillment_source == "sumistore" and supplier_product_id:
-        alternative = SUMISTORE_ALTERNATIVE_PRODUCTS.get(supplier_product_id)
-        if alternative is not None and alternative[0] not in providers:
-            providers.append(alternative[0])
-    return tuple(providers)
+    if supplier_product_id:
+        providers.extend(
+            provider
+            for provider, _product_id in SUPPLIER_ALTERNATIVE_PRODUCTS.get(
+                (fulfillment_source, supplier_product_id),
+                (),
+            )
+        )
+    return tuple(dict.fromkeys(providers))
 
 
 def supplier_provider_is_configured(
@@ -215,6 +240,8 @@ def product_supplier_api_enabled(product: Product, provider: str) -> bool:
         return getattr(product, "sumistore_api_enabled", True) is not False
     if provider == "lehai":
         return getattr(product, "lehai_api_enabled", True) is not False
+    if provider == "canboso":
+        return getattr(product, "canboso_api_enabled", True) is not False
     return False
 
 
@@ -230,10 +257,11 @@ def enabled_supplier_providers(product: Product) -> frozenset[str]:
 
 
 def supplier_route_sort_key(route: SupplierRoute) -> tuple[int, int, str]:
-    # When costs are equal, keep Sumi first as the deterministic preferred source.
+    # Equal-cost GPT prefers Sumi; equal-cost GG 18M prefers Canboso over Le Hai.
+    provider_priority = {"sumistore": 0, "canboso": 1, "lehai": 2}
     return (
         max(0, int(route.snapshot.unit_price)),
-        0 if route.provider == "sumistore" else 1,
+        provider_priority.get(route.provider, 99),
         route.product_id,
     )
 
@@ -300,6 +328,69 @@ async def fetch_sumistore_supplier_routes(
 
     results = await asyncio.gather(
         *(fetch_one(provider, route_product_id, client) for provider, route_product_id, client in specs)
+    )
+    return SupplierRouteFetch(
+        routes=tuple(result for result in results if isinstance(result, SupplierRoute)),
+        failures=tuple(
+            result for result in results if isinstance(result, SupplierRouteFailure)
+        ),
+        configured_count=len(specs),
+    )
+
+
+async def fetch_product_supplier_routes(
+    fulfillment_source: str,
+    product_id: str,
+    sumistore_client: ExternalSupplierClient | None,
+    lehai_client: ExternalSupplierClient | None,
+    canboso_client: ExternalSupplierClient | None = None,
+    *,
+    enabled_providers: Collection[str] | None = None,
+) -> SupplierRouteFetch:
+    allowed = set(enabled_providers) if enabled_providers is not None else None
+    clients = {
+        "sumistore": sumistore_client,
+        "lehai": lehai_client,
+        "canboso": canboso_client,
+    }
+    specs = [
+        (provider, route_product_id, client)
+        for provider, route_product_id in configured_supplier_routes(
+            fulfillment_source,
+            product_id,
+        )
+        if (allowed is None or provider in allowed)
+        and (client := clients.get(provider)) is not None
+    ]
+
+    async def fetch_one(
+        provider: str,
+        route_product_id: str,
+        client: ExternalSupplierClient,
+    ) -> SupplierRoute | SupplierRouteFailure:
+        if supplier_refresh_is_backed_off(client, route_product_id):
+            return SupplierRouteFailure(
+                provider,
+                route_product_id,
+                SupplierError("SUPPLIER_REFRESH_BACKOFF"),
+            )
+        try:
+            snapshot = await client.fetch_snapshot(route_product_id)
+        except SupplierError as exc:
+            mark_supplier_refresh_failure(
+                client,
+                route_product_id,
+                definitive=exc.code in DEFINITIVE_PRODUCT_UNAVAILABLE_CODES,
+            )
+            return SupplierRouteFailure(provider, route_product_id, exc)
+        clear_supplier_refresh_failure(client, route_product_id)
+        return SupplierRoute(provider, route_product_id, client, snapshot)
+
+    results = await asyncio.gather(
+        *(
+            fetch_one(provider, route_product_id, client)
+            for provider, route_product_id, client in specs
+        )
     )
     return SupplierRouteFetch(
         routes=tuple(result for result in results if isinstance(result, SupplierRoute)),

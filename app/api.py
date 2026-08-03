@@ -14,6 +14,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from starlette.middleware.sessions import SessionMiddleware
 
 from app.config import Settings
+from app.canboso_suppliers import CanbosoClient
 from app.dashboard import create_dashboard_router
 from app.dashboard_security import LoginRateLimiter
 from app.deposit_notifications import send_deposit_notification
@@ -56,6 +57,7 @@ def create_api(
     api_redis: Redis | None = None,
     lehai_client: LeHaiPremiumClient | None = None,
     rentsim_client: RentSimClient | None = None,
+    canboso_client: CanbosoClient | None = None,
 ) -> FastAPI:
     owned_api_redis = api_redis is None
     api_redis_client = api_redis or Redis.from_url(settings.redis_url, decode_responses=True)
@@ -216,6 +218,7 @@ def create_api(
                 lehai_client,
                 rentsim_client,
                 bot,
+                canboso_client=canboso_client,
             )
         )
 
@@ -229,6 +232,7 @@ def create_api(
                 supplier_client,
                 api_redis_client,
                 lehai_client=lehai_client,
+                canboso_client=canboso_client,
             )
         )
 
@@ -331,6 +335,7 @@ def create_api(
                 settings.referral_commission_percent,
                 show_fulfillment_started,
                 lehai_client=lehai_client,
+                canboso_client=canboso_client,
             )
         finally:
             if fulfillment_message is not None:

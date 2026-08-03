@@ -153,6 +153,10 @@ Sua toi thieu cac bien:
 - `LEHAI_ENABLED=true` va `LEHAI_API_KEY`: bat nguon Le Hai Premium bang Buyer
   API key dang `tgb_...`; key chi luu trong `.env`.
 - `LEHAI_MARKUP=5000`: muc cong mac dinh cho hai san pham Le Hai Premium.
+- `CANBOSO_ENABLED=true` va `CANBOSO_API_KEY`: bat nguon Canboso cho GG Pro
+  Jio 18M. Gia USD duoc quy doi bang `CANBOSO_USD_TO_VND=27500`, sau do cong
+  muc chenh cua san pham. Co the dat `CANBOSO_GG18M_PRODUCT_ID` de khoa dung ID;
+  neu bo trong, bot tu nhan dien san pham GG/Jio/Gemini 18M trong catalog.
 - Mat khau PostgreSQL trong ca `.env` va `docker-compose.yml` phai trung nhau.
 
 ### 3. Chay bot

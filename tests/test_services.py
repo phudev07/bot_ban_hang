@@ -23,6 +23,7 @@ from app.models import (
 )
 from app.services import (
     approve_wallet_deposit,
+    active_products,
     available_stock,
     cancel_wallet_deposit,
     CouponValidationError,
@@ -54,6 +55,54 @@ def test_purchase_quantity_limit_never_exceeds_current_stock() -> None:
     assert purchase_quantity_limit(product, 24) == 24
     assert purchase_quantity_limit(product, 150) == 100
     assert purchase_quantity_limit(product, 0) == 0
+
+
+def test_quick_buy_orders_all_gpt_products_before_google_products() -> None:
+    async def scenario() -> None:
+        engine, sessions = await make_database()
+        async with sessions() as session:
+            google = Category(
+                name_vi="Gemini / Veo3 / Antigravity",
+                name_en="Google",
+                position=0,
+            )
+            gpt = Category(name_vi="Tài Khoản ChatGPT cá nhân", name_en="ChatGPT", position=99)
+            session.add_all([google, gpt])
+            await session.flush()
+            session.add_all(
+                [
+                    Product(
+                        category_id=google.id,
+                        name_vi="Link GG Pro Jio 18M",
+                        name_en="Google Pro Jio 18M",
+                        price=20_000,
+                    ),
+                    Product(
+                        category_id=gpt.id,
+                        name_vi="GPT Plus",
+                        name_en="GPT Plus",
+                        price=40_000,
+                    ),
+                    Product(
+                        category_id=gpt.id,
+                        name_vi="GPT trắng",
+                        name_en="New ChatGPT account",
+                        price=6_000,
+                    ),
+                ]
+            )
+            await session.commit()
+
+        async with sessions() as session:
+            products = await active_products(session)
+            assert [product.name_vi for product in products] == [
+                "GPT Plus",
+                "GPT trắng",
+                "Link GG Pro Jio 18M",
+            ]
+        await engine.dispose()
+
+    asyncio.run(scenario())
 
 
 class FakeSupplier:

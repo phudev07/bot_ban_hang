@@ -25,14 +25,18 @@ from app.suppliers import (
     ExternalSupplierClient,
     SupplierError,
     SupplierPurchase,
+    SupplierRouteFetch,
     SupplierSnapshot,
     clear_supplier_refresh_failure,
     enabled_supplier_providers,
+    fetch_product_supplier_routes,
     fetch_sumistore_supplier_routes,
+    is_multi_supplier_product,
     mark_supplier_refresh_failure,
     plan_supplier_routes,
     refresh_external_product,
     supplier_refresh_is_backed_off,
+    supplier_route_sort_key,
 )
 
 
@@ -604,12 +608,17 @@ async def ensure_lehai_products(
     settings: Settings,
 ) -> None:
     async with session_factory() as session:
-        product_ids = tuple(
+        configured_product_ids = tuple(
             product_id
             for product_id in settings.lehai_product_ids
             if product_id in LEHAI_PRODUCT_SEEDS
         )
-        configured_ids = set(product_ids) if settings.lehai_enabled else set()
+        product_ids = (
+            configured_product_ids
+            if settings.lehai_enabled
+            else ((JIO_18M_PRODUCT_ID,) if settings.canboso_enabled else ())
+        )
+        configured_ids = set(product_ids)
         existing_products = list(
             await session.scalars(
                 select(Product).where(Product.fulfillment_source == "lehai")
@@ -638,7 +647,7 @@ async def ensure_lehai_products(
                 product.active = False
                 product.external_stock = 0
 
-        if not settings.lehai_enabled:
+        if not settings.lehai_enabled and not settings.canboso_enabled:
             await session.commit()
             return
 
@@ -699,6 +708,8 @@ async def refresh_lehai_product(
     client: LeHaiPremiumClient | None,
     *,
     sumistore_client: ExternalSupplierClient | None = None,
+    canboso_client: ExternalSupplierClient | None = None,
+    route_fetch: SupplierRouteFetch | None = None,
 ) -> int:
     if product.fulfillment_source != "lehai" or not product.supplier_product_id:
         return product.external_stock
@@ -713,7 +724,8 @@ async def refresh_lehai_product(
     )
     if product.price_lock_enabled and recovered_stock <= 0:
         await release_price_lock_if_inventory_empty(session, product)
-    if "lehai" not in enabled_supplier_providers(product):
+    enabled_providers = enabled_supplier_providers(product)
+    if not enabled_providers:
         product.external_stock = recovered_stock
         await apply_supplier_stock(
             session,
@@ -725,7 +737,137 @@ async def refresh_lehai_product(
         product.supplier_synced_at = datetime.now(UTC)
         await session.flush()
         return product.external_stock
-    if client is None:
+    if is_multi_supplier_product(
+        product.fulfillment_source,
+        product.supplier_product_id,
+    ) and canboso_client is not None and "canboso" in enabled_providers:
+        fetched = route_fetch or await fetch_product_supplier_routes(
+            product.fulfillment_source,
+            product.supplier_product_id,
+            sumistore_client,
+            client,
+            canboso_client,
+            enabled_providers=enabled_providers,
+        )
+        for failure in fetched.failures:
+            logger.warning(
+                "Supplier route sync failed: provider=%s product=%s code=%s",
+                failure.provider,
+                failure.product_id,
+                failure.error.code,
+            )
+        if not fetched.routes:
+            all_definitive = (
+                fetched.configured_count > 0
+                and len(fetched.failures) == fetched.configured_count
+                and all(
+                    failure.error.code in DEFINITIVE_PRODUCT_UNAVAILABLE_CODES
+                    for failure in fetched.failures
+                )
+            )
+            if all_definitive:
+                product.external_stock = recovered_stock
+                await apply_supplier_stock(
+                    session,
+                    product,
+                    0,
+                    local_inventory_stock=recovered_stock,
+                )
+                product.supplier_synced_at = datetime.now(UTC)
+            else:
+                product.external_stock = max(
+                    0,
+                    product.external_stock,
+                    product.supplier_available_stock + recovered_stock,
+                )
+            await session.flush()
+            return product.external_stock
+
+        supplier_stock = sum(
+            max(0, int(route.snapshot.effective_stock)) for route in fetched.routes
+        )
+        primary_route = next(
+            (route for route in fetched.routes if route.provider == "lehai"),
+            None,
+        )
+        balance_increased = False
+        refund_increase = False
+        route_topup_to_gpt = False
+        if primary_route is not None:
+            previous_owner_balance = product.supplier_owner_balance
+            current_owner_balance = max(0, primary_route.snapshot.owner_balance)
+            balance_increased = (
+                previous_owner_balance is not None
+                and current_owner_balance > previous_owner_balance
+            )
+            refund_increase = (
+                balance_increased
+                and await _balance_increase_is_api_refund(
+                    session,
+                    previous_owner_balance,
+                    current_owner_balance,
+                )
+            )
+            if (
+                balance_increased
+                and not refund_increase
+                and product.supplier_product_id == JIO_18M_PRODUCT_ID
+                and client is not None
+            ):
+                route_topup_to_gpt = await _route_lehai_topup_alert_to_gpt_plus(
+                    session,
+                    client,
+                    sumistore_client,
+                )
+            product.supplier_owner_balance = current_owner_balance
+
+        priced_routes = tuple(
+            route
+            for route in fetched.routes
+            if route.snapshot.effective_stock > 0 and route.snapshot.unit_price > 0
+        )
+        if priced_routes:
+            cheapest_route = min(priced_routes, key=supplier_route_sort_key)
+            await apply_supplier_price(
+                session,
+                product,
+                cheapest_route.snapshot.unit_price,
+                alert_provider=cheapest_route.provider,
+            )
+        product.external_stock = supplier_stock + recovered_stock
+        await apply_supplier_stock(
+            session,
+            product,
+            supplier_stock,
+            notify_on_increase=(
+                product.notify_stock_without_balance_topup
+                or (
+                    balance_increased
+                    and not refund_increase
+                    and not route_topup_to_gpt
+                )
+            ),
+            local_inventory_stock=recovered_stock,
+            alert_provider=(
+                min(priced_routes, key=supplier_route_sort_key).provider
+                if priced_routes
+                else None
+            ),
+        )
+        if route_topup_to_gpt:
+            await session.execute(
+                update(ProductStockAlert)
+                .where(
+                    ProductStockAlert.product_id == product.id,
+                    ProductStockAlert.status == "pending",
+                )
+                .values(status="superseded")
+            )
+        product.supplier_synced_at = datetime.now(UTC)
+        await session.flush()
+        return product.external_stock
+
+    if client is None or "lehai" not in enabled_providers:
         product.external_stock = recovered_stock
         await session.flush()
         return product.external_stock
@@ -851,6 +993,7 @@ async def sync_lehai_products(
     session_factory: async_sessionmaker[AsyncSession],
     client: LeHaiPremiumClient | None,
     sumistore_client: ExternalSupplierClient | None = None,
+    canboso_client: ExternalSupplierClient | None = None,
 ) -> None:
     async with session_factory() as session:
         products = list(
@@ -868,5 +1011,6 @@ async def sync_lehai_products(
                 product,
                 client,
                 sumistore_client=sumistore_client,
+                canboso_client=canboso_client,
             )
         await session.commit()

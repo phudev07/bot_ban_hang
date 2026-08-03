@@ -100,12 +100,14 @@ and binds port 8080 only to localhost. Caddy is the public reverse proxy.
   can show both Sumi and Le Hai.
 - Supplier cost is saved at delivery time. Dashboard profit is revenue minus cost minus
   referral commission.
-- Sumi, Le Hai, and RentSim keys live only in production `.env`.
+- Sumi, Le Hai, Canboso, and RentSim keys live only in production `.env`.
 - Warehouse API partners receive shop product IDs and shop selling prices, never supplier
   keys, supplier URLs, supplier product IDs, supplier order IDs, or supplier cost.
 - Warehouse API only sells active account products. SMS rental is excluded.
 - Public API orders require HMAC, nonce, timestamp, idempotency key, and `max_unit_price`.
 - Le Hai Jio 18M may resolve to the temporary sale ID `sale_link18mgemini`.
+- Jio 18M can also use Canboso. USD cost is normalized to VND before routing;
+  the cheaper source wins and equal prices prefer Canboso over Le Hai.
 - If the temporary Le Hai sale purchase endpoint returns HTTP 5xx, the bot sets stock to
   zero and opens a 10-minute purchase circuit. Later customers are blocked locally and do
   not call Le Hai. The circuit is restored from recent failure logs after an app restart.
