@@ -3017,6 +3017,19 @@ async def active_categories(session: AsyncSession) -> list[Category]:
 
 
 async def active_products(session: AsyncSession, category_id: int | None = None) -> list[Product]:
+    local_available_stock = (
+        select(func.count(InventoryItem.id))
+        .where(
+            InventoryItem.product_id == Product.id,
+            InventoryItem.status == "available",
+        )
+        .correlate(Product)
+        .scalar_subquery()
+    )
+    menu_stock = case(
+        (Product.fulfillment_source == "local", local_available_stock),
+        else_=Product.external_stock,
+    )
     gpt_product = or_(
         Category.name_vi.ilike("%gpt%"),
         Category.name_en.ilike("%gpt%"),
@@ -3036,7 +3049,7 @@ async def active_products(session: AsyncSession, category_id: int | None = None)
         Product.name_en.ilike("%google%"),
     )
     statement = (
-        select(Product)
+        select(Product, menu_stock.label("menu_stock"))
         .join(Category, Category.id == Product.category_id)
         .where(
             Product.active.is_(True),
@@ -3051,7 +3064,7 @@ async def active_products(session: AsyncSession, category_id: int | None = None)
                 (
                     or_(
                         Product.force_out_of_stock.is_(True),
-                        Product.external_stock <= 0,
+                        menu_stock <= 0,
                     ),
                     1,
                 ),
@@ -3064,5 +3077,11 @@ async def active_products(session: AsyncSession, category_id: int | None = None)
     )
     if category_id is not None:
         statement = statement.where(Product.category_id == category_id)
-    result = await session.scalars(statement)
-    return list(result)
+    rows = await session.execute(statement)
+    products: list[Product] = []
+    for product, stock in rows:
+        # Telegram menus need the actual sellable stock without persisting a
+        # derived local-inventory count back into the product row.
+        product._menu_stock = max(0, int(stock or 0))
+        products.append(product)
+    return products

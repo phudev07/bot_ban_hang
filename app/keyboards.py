@@ -185,7 +185,11 @@ def products_menu(
     for product in products:
         name = sanitize_customer_text(product.name_en if language == "en" else product.name_vi)
         display_price = (prices or {}).get(product.id, product.price)
-        in_stock = not product.force_out_of_stock and product.external_stock > 0
+        menu_stock = max(
+            0,
+            int(getattr(product, "_menu_stock", product.external_stock) or 0),
+        )
+        in_stock = not product.force_out_of_stock and menu_stock > 0
         stock_label = "Hết hàng" if language == "vi" else "Out of stock"
         button_text = f"{name} · {format_vnd(display_price)}"
         if not in_stock:

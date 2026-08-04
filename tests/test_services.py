@@ -120,6 +120,7 @@ def test_quick_buy_moves_sold_out_products_below_available_products() -> None:
                         name_vi="GPT còn hàng",
                         name_en="GPT available",
                         price=40_000,
+                        fulfillment_source="sumistore",
                         external_stock=2,
                     ),
                     Product(
@@ -127,6 +128,7 @@ def test_quick_buy_moves_sold_out_products_below_available_products() -> None:
                         name_vi="GPT hết hàng",
                         name_en="GPT sold out",
                         price=40_000,
+                        fulfillment_source="sumistore",
                         external_stock=0,
                     ),
                     Product(
@@ -134,6 +136,7 @@ def test_quick_buy_moves_sold_out_products_below_available_products() -> None:
                         name_vi="GG còn hàng",
                         name_en="Google available",
                         price=20_000,
+                        fulfillment_source="sumistore",
                         external_stock=5,
                     ),
                 ]
@@ -147,6 +150,53 @@ def test_quick_buy_moves_sold_out_products_below_available_products() -> None:
                 "GG còn hàng",
                 "GPT hết hàng",
             ]
+        await engine.dispose()
+
+    asyncio.run(scenario())
+
+
+def test_quick_buy_uses_available_inventory_for_local_product_stock() -> None:
+    async def scenario() -> None:
+        engine, sessions = await make_database()
+        async with sessions() as session:
+            category = Category(name_vi="ChatGPT", name_en="ChatGPT")
+            session.add(category)
+            await session.flush()
+            local_product = Product(
+                category_id=category.id,
+                name_vi="GPT kho nhập",
+                name_en="Local GPT",
+                price=40_000,
+                fulfillment_source="local",
+                external_stock=0,
+            )
+            sold_out_product = Product(
+                category_id=category.id,
+                name_vi="GPT hết hàng",
+                name_en="Sold-out GPT",
+                price=40_000,
+                fulfillment_source="local",
+                external_stock=10,
+            )
+            session.add_all([local_product, sold_out_product])
+            await session.flush()
+            session.add(
+                InventoryItem(
+                    product_id=local_product.id,
+                    encrypted_secret="encrypted",
+                    status="available",
+                )
+            )
+            await session.commit()
+
+        async with sessions() as session:
+            products = await active_products(session)
+            assert [product.name_vi for product in products] == [
+                "GPT kho nhập",
+                "GPT hết hàng",
+            ]
+            assert products[0]._menu_stock == 1
+            assert products[1]._menu_stock == 0
         await engine.dispose()
 
     asyncio.run(scenario())

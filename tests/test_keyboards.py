@@ -51,6 +51,18 @@ def test_out_of_stock_product_button_is_red_and_clearly_labelled() -> None:
     assert sold_out_button.text == "🔴 Hết hàng · 30.000đ · Hết hàng"
 
 
+def test_local_inventory_menu_stock_overrides_stale_external_stock() -> None:
+    product = make_product()
+    product.external_stock = 0
+    product._menu_stock = 15
+
+    keyboard = products_menu([product], "vi", "back:menu")
+    button = keyboard.inline_keyboard[0][0]
+
+    assert button.style is None
+    assert "Hết hàng" not in button.text
+
+
 def test_main_menu_exposes_warehouse_api_and_referrals() -> None:
     keyboard = main_menu("vi", sms_enabled=True)
     callbacks = [button.callback_data for row in keyboard.inline_keyboard for button in row]
