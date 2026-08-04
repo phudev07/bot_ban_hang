@@ -23,6 +23,7 @@ from app.models import (
     InventoryItem,
     Order,
     Product,
+    ProductSupplierState,
     ProductStockAlert,
     SupplierBalanceTransaction,
     SupplierPurchaseAttempt,
@@ -568,6 +569,117 @@ def test_lehai_jio_stock_alert_requires_a_real_wallet_topup() -> None:
             alert = await session.scalar(select(ProductStockAlert))
             assert alert is not None
             assert alert.stock_before == 4
+            assert alert.stock_after == 5
+
+        await engine.dispose()
+
+    asyncio.run(scenario())
+
+
+def test_canboso_topup_stays_armed_until_supplier_stock_returns() -> None:
+    class RouteSupplier:
+        def __init__(
+            self,
+            provider: str,
+            *,
+            unit_price: int,
+            source_stock: int,
+            owner_balance: int,
+        ) -> None:
+            self.provider = provider
+            self.unit_price = unit_price
+            self.source_stock = source_stock
+            self.owner_balance = owner_balance
+
+        async def fetch_snapshot(self, product_id: str) -> SupplierSnapshot:
+            return SupplierSnapshot(
+                product_id=product_id,
+                name="GG Pro 18M",
+                description="",
+                unit_price=self.unit_price,
+                source_stock=self.source_stock,
+                owner_balance=self.owner_balance,
+            )
+
+    async def scenario() -> None:
+        engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+        async with engine.begin() as connection:
+            await connection.run_sync(Base.metadata.create_all)
+        sessions = async_sessionmaker(engine, expire_on_commit=False)
+        lehai = RouteSupplier(
+            "lehai",
+            unit_price=20_000,
+            source_stock=3,
+            owner_balance=60_000,
+        )
+        canboso = RouteSupplier(
+            "canboso",
+            unit_price=11_000,
+            source_stock=0,
+            owner_balance=22_000,
+        )
+
+        async with sessions() as session:
+            category = Category(name_vi=CATEGORY_VI, name_en=CATEGORY_VI)
+            session.add(category)
+            await session.flush()
+            product = Product(
+                category_id=category.id,
+                name_vi="Link GG Pro Jio 18M",
+                name_en="Google Pro Jio 18M Link",
+                price=28_000,
+                fulfillment_source="lehai",
+                supplier_product_id="cdk_ggpro_18m",
+                supplier_markup=8_000,
+                supplier_price=20_000,
+                external_stock=3,
+                supplier_available_stock=3,
+                supplier_available_stock_initialized=True,
+                supplier_owner_balance=60_000,
+                supplier_synced_at=datetime.now(UTC) - timedelta(minutes=5),
+            )
+            session.add(product)
+            await session.flush()
+            session.add(
+                SupplierBalanceTransaction(
+                    provider="canboso",
+                    kind="credit",
+                    amount=22_000,
+                    balance_before=0,
+                    balance_after=22_000,
+                    created_at=datetime.now(UTC),
+                )
+            )
+            await session.commit()
+
+            await refresh_lehai_product(
+                session,
+                product,
+                lehai,  # type: ignore[arg-type]
+                canboso_client=canboso,  # type: ignore[arg-type]
+            )
+            await session.commit()
+            state = await session.get(
+                ProductSupplierState,
+                {"product_id": product.id, "provider": "canboso"},
+            )
+            assert state is not None and state.topup_pending is True
+            assert await session.scalar(select(ProductStockAlert.id)) is None
+
+            canboso.source_stock = 10
+            await refresh_lehai_product(
+                session,
+                product,
+                lehai,  # type: ignore[arg-type]
+                canboso_client=canboso,  # type: ignore[arg-type]
+            )
+            await session.commit()
+            await session.refresh(state)
+            alert = await session.scalar(select(ProductStockAlert))
+            assert state.topup_pending is False
+            assert alert is not None
+            assert alert.provider == "canboso"
+            assert alert.stock_before == 3
             assert alert.stock_after == 5
 
         await engine.dispose()

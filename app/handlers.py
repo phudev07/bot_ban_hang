@@ -43,7 +43,7 @@ from app.keyboards import (
     warehouse_api_rotate_confirmation,
 )
 from app.lehai_suppliers import LeHaiPremiumClient
-from app.models import ApiClient, Product, User
+from app.models import ApiClient, Product, QuantityDiscount, User
 from app.partner_services import ensure_api_client, referral_stats, rotate_api_secret
 from app.payment_expiry import register_deposit_message
 from app.product_tutorials import send_purchase_tutorials
@@ -124,6 +124,47 @@ COUPON_ERROR_MESSAGES = {
         "This discount code has no uses remaining.",
     ),
 }
+
+
+def quantity_tier_offer_text(
+    tier: QuantityDiscount,
+    unit_price: int,
+    language: str,
+) -> str:
+    if tier.discount_type == "fixed":
+        final_price = max(1, int(unit_price) - max(0, int(tier.discount_amount)))
+        return (
+            f"Mua từ <b>{tier.min_quantity}+</b> nick giảm còn "
+            f"<b>{format_vnd(final_price)}/1</b>"
+            if language == "vi"
+            else f"Buy <b>{tier.min_quantity}+</b> accounts for "
+            f"<b>{format_vnd(final_price)} each</b>"
+        )
+    return (
+        f"Mua từ <b>{tier.min_quantity}+</b> nick giảm "
+        f"<b>{tier.discount_percent}%</b>"
+        if language == "vi"
+        else f"Buy <b>{tier.min_quantity}+</b> accounts and save "
+        f"<b>{tier.discount_percent}%</b>"
+    )
+
+
+def applied_quantity_discount_text(
+    discount_type: str | None,
+    discount_value: int,
+    language: str,
+) -> str:
+    if discount_type == "fixed":
+        return (
+            f"giảm <b>{format_vnd(discount_value)}/1</b>"
+            if language == "vi"
+            else f"<b>{format_vnd(discount_value)} off each</b>"
+        )
+    return (
+        f"<b>-{discount_value}%</b>"
+        if language == "vi"
+        else f"<b>{discount_value}% off</b>"
+    )
 
 
 def coupon_error_message(code: str, language: str) -> str:
@@ -762,11 +803,7 @@ def create_router(
             )
         if quantity_discounts and not (pricing and pricing.flash_sale):
             tier_lines = "\n".join(
-                (
-                    f"• Từ <b>{tier.min_quantity}</b>: giảm <b>{tier.discount_percent}%</b>"
-                    if user.language == "vi"
-                    else f"• From <b>{tier.min_quantity}</b>: <b>{tier.discount_percent}%</b> off"
-                )
+                f"• {quantity_tier_offer_text(tier, product.price, user.language)}"
                 for tier in quantity_discounts
             )
             tier_title = (
@@ -887,13 +924,15 @@ def create_router(
                         else ""
                     )
                     quantity_line_vi = (
-                        f"Ưu đãi số lượng: <b>-{result.quantity_discount_percent}%</b>\n"
-                        if result.quantity_discount_percent
+                        "Ưu đãi số lượng: "
+                        f"{applied_quantity_discount_text(result.quantity_discount_type, result.quantity_discount_value, 'vi')}\n"
+                        if result.quantity_discount_type
                         else ""
                     )
                     quantity_line_en = (
-                        f"Quantity discount: <b>-{result.quantity_discount_percent}%</b>\n"
-                        if result.quantity_discount_percent
+                        "Quantity discount: "
+                        f"{applied_quantity_discount_text(result.quantity_discount_type, result.quantity_discount_value, 'en')}\n"
+                        if result.quantity_discount_type
                         else ""
                     )
                     text = (
@@ -949,19 +988,30 @@ def create_router(
                 language=user.language,
             )
             if result.discount_amount:
+                has_quantity_discount = result.quantity_discount_type is not None
+                quantity_label_vi = applied_quantity_discount_text(
+                    result.quantity_discount_type,
+                    result.quantity_discount_value,
+                    "vi",
+                )
+                quantity_label_en = applied_quantity_discount_text(
+                    result.quantity_discount_type,
+                    result.quantity_discount_value,
+                    "en",
+                )
                 discount_label = (
                     f"Mã <b>{escape(result.coupon_code)}</b> và ưu đãi số lượng"
-                    if result.coupon_code and result.quantity_discount_percent
+                    if result.coupon_code and has_quantity_discount
                     else f"Mã <b>{escape(result.coupon_code)}</b>"
                     if result.coupon_code
-                    else f"Ưu đãi số lượng <b>-{result.quantity_discount_percent}%</b>"
+                    else f"Ưu đãi số lượng {quantity_label_vi}"
                 )
                 discount_label_en = (
                     f"Code <b>{escape(result.coupon_code)}</b> and quantity discount"
-                    if result.coupon_code and result.quantity_discount_percent
+                    if result.coupon_code and has_quantity_discount
                     else f"Code <b>{escape(result.coupon_code)}</b>"
                     if result.coupon_code
-                    else f"Quantity discount <b>-{result.quantity_discount_percent}%</b>"
+                    else f"Quantity discount {quantity_label_en}"
                 )
                 text += (
                     f"\n\n🏷 {discount_label} đã giảm tổng "
@@ -1156,13 +1206,7 @@ def create_router(
         )
         if quantity_discounts and not (pricing and pricing.flash_sale):
             tier_summary = "\n".join(
-                (
-                    f"🎁 Mua từ <b>{tier.min_quantity}+</b> nick giảm "
-                    f"<b>{tier.discount_percent}%</b>"
-                    if user.language == "vi"
-                    else f"🎁 Buy <b>{tier.min_quantity}+</b> accounts and save "
-                    f"<b>{tier.discount_percent}%</b>"
-                )
+                f"🎁 {quantity_tier_offer_text(tier, product.price, user.language)}"
                 for tier in quantity_discounts
             )
             text += f"\n\n{tier_summary}"
@@ -1613,15 +1657,17 @@ def create_router(
             else ""
         )
         quantity_line_vi = (
-            f"• Ưu đãi số lượng: <b>-{pricing.quantity_discount_percent}%</b> "
+            "• Ưu đãi số lượng: "
+            f"{applied_quantity_discount_text(pricing.quantity_discount_type, pricing.quantity_discount_value, 'vi')} "
             f"(-{format_vnd(quantity_discount_amount)})\n"
-            if pricing.quantity_discount_percent
+            if pricing.quantity_discount_type
             else ""
         )
         quantity_line_en = (
-            f"• Quantity discount: <b>-{pricing.quantity_discount_percent}%</b> "
+            "• Quantity discount: "
+            f"{applied_quantity_discount_text(pricing.quantity_discount_type, pricing.quantity_discount_value, 'en')} "
             f"(-{format_vnd(quantity_discount_amount)})\n"
-            if pricing.quantity_discount_percent
+            if pricing.quantity_discount_type
             else ""
         )
         text = (

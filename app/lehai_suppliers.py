@@ -14,7 +14,9 @@ from app.models import (
     Category,
     InventoryItem,
     Product,
+    ProductSupplierState,
     ProductStockAlert,
+    SupplierBalanceState,
     SupplierBalanceTransaction,
     SupplierPurchaseAttempt,
 )
@@ -523,6 +525,72 @@ async def _balance_increase_is_api_refund(
     return False
 
 
+async def _track_secondary_supplier_state(
+    session: AsyncSession,
+    product: Product,
+    *,
+    provider: str,
+    owner_balance: int,
+    effective_stock: int,
+) -> ProductSupplierState:
+    now = datetime.now(UTC)
+    state = await session.scalar(
+        select(ProductSupplierState)
+        .where(
+            ProductSupplierState.product_id == product.id,
+            ProductSupplierState.provider == provider,
+        )
+        .with_for_update()
+    )
+    current_balance = max(0, int(owner_balance))
+    current_stock = max(0, int(effective_stock))
+    if state is None:
+        state = ProductSupplierState(
+            product_id=product.id,
+            provider=provider,
+            owner_balance=current_balance,
+            effective_stock=current_stock,
+            topup_pending=False,
+            updated_at=now,
+        )
+        session.add(state)
+        since = product.supplier_synced_at
+    else:
+        since = state.updated_at
+        if state.owner_balance is not None and current_balance > state.owner_balance:
+            state.topup_pending = True
+
+    if since is not None:
+        if since.tzinfo is None:
+            since = since.replace(tzinfo=UTC)
+        recent_credit = await session.scalar(
+            select(SupplierBalanceTransaction.id)
+            .where(
+                SupplierBalanceTransaction.provider == provider,
+                SupplierBalanceTransaction.kind == "credit",
+                SupplierBalanceTransaction.amount > 0,
+                SupplierBalanceTransaction.created_at > since,
+            )
+            .order_by(SupplierBalanceTransaction.id.desc())
+            .limit(1)
+        )
+        if recent_credit is not None:
+            state.topup_pending = True
+
+    audit_state = await session.get(SupplierBalanceState, provider)
+    if (
+        audit_state is not None
+        and audit_state.last_balance is not None
+        and current_balance > audit_state.last_balance
+    ):
+        state.topup_pending = True
+
+    state.owner_balance = current_balance
+    state.effective_stock = current_stock
+    state.updated_at = now
+    return state
+
+
 async def _route_lehai_topup_alert_to_gpt_plus(
     session: AsyncSession,
     lehai_client: ExternalSupplierClient,
@@ -786,6 +854,27 @@ async def refresh_lehai_product(
         supplier_stock = sum(
             max(0, int(route.snapshot.effective_stock)) for route in fetched.routes
         )
+        previous_supplier_stock = max(0, int(product.supplier_available_stock))
+        canboso_route = next(
+            (route for route in fetched.routes if route.provider == "canboso"),
+            None,
+        )
+        canboso_state: ProductSupplierState | None = None
+        if canboso_route is not None:
+            canboso_state = await _track_secondary_supplier_state(
+                session,
+                product,
+                provider="canboso",
+                owner_balance=canboso_route.snapshot.owner_balance,
+                effective_stock=canboso_route.snapshot.effective_stock,
+            )
+        canboso_topup_ready = bool(
+            canboso_state is not None
+            and canboso_state.topup_pending
+            and canboso_route is not None
+            and canboso_route.snapshot.effective_stock > 0
+            and supplier_stock > previous_supplier_stock
+        )
         primary_route = next(
             (route for route in fetched.routes if route.provider == "lehai"),
             None,
@@ -841,6 +930,7 @@ async def refresh_lehai_product(
             supplier_stock,
             notify_on_increase=(
                 product.notify_stock_without_balance_topup
+                or canboso_topup_ready
                 or (
                     balance_increased
                     and not refund_increase
@@ -849,11 +939,15 @@ async def refresh_lehai_product(
             ),
             local_inventory_stock=recovered_stock,
             alert_provider=(
-                min(priced_routes, key=supplier_route_sort_key).provider
+                "canboso"
+                if canboso_topup_ready
+                else min(priced_routes, key=supplier_route_sort_key).provider
                 if priced_routes
                 else None
             ),
         )
+        if canboso_topup_ready and canboso_state is not None:
+            canboso_state.topup_pending = False
         if route_topup_to_gpt:
             await session.execute(
                 update(ProductStockAlert)

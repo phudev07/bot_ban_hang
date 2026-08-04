@@ -261,6 +261,18 @@ async def initialize_database(engine, session_factory, seed_demo_data: bool) -> 
             )
         )
         await connection.execute(
+            text(
+                "ALTER TABLE quantity_discounts ADD COLUMN IF NOT EXISTS "
+                "discount_type VARCHAR(20) NOT NULL DEFAULT 'percent'"
+            )
+        )
+        await connection.execute(
+            text(
+                "ALTER TABLE quantity_discounts ADD COLUMN IF NOT EXISTS "
+                "discount_amount BIGINT NOT NULL DEFAULT 0"
+            )
+        )
+        await connection.execute(
             text("ALTER TABLE orders ADD COLUMN IF NOT EXISTS batch_code VARCHAR(32) NULL")
         )
         await connection.execute(

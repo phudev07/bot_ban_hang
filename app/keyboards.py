@@ -185,8 +185,15 @@ def products_menu(
     for product in products:
         name = sanitize_customer_text(product.name_en if language == "en" else product.name_vi)
         display_price = (prices or {}).get(product.id, product.price)
+        in_stock = not product.force_out_of_stock and product.external_stock > 0
+        stock_label = "Hết hàng" if language == "vi" else "Out of stock"
+        button_text = f"{name} · {format_vnd(display_price)}"
+        if not in_stock:
+            button_text = f"🔴 {button_text} · {stock_label}"
         builder.button(
-            text=f"{name} · {format_vnd(display_price)}", callback_data=f"prod:{product.id}"
+            text=button_text,
+            callback_data=f"prod:{product.id}",
+            style=None if in_stock else "danger",
         )
     builder.adjust(1)
     builder.row(InlineKeyboardButton(text=tr(language, "back"), callback_data=back_callback))

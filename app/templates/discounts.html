@@ -6,7 +6,7 @@
 </section>
 
 <section class="panel form-panel">
-  <div class="panel-head"><div><span>QUANTITY DISCOUNT</span><h2>Giảm tự động khi mua số lượng lớn</h2></div><small>Mốc cao nhất phù hợp sẽ được dùng và cộng thêm với mã giảm giá nếu khách có nhập mã.</small></div>
+  <div class="panel-head"><div><span>QUANTITY DISCOUNT</span><h2>Giảm theo phần trăm</h2></div><small>Mốc cao nhất phù hợp sẽ được dùng và cộng thêm với mã giảm giá nếu khách có nhập mã.</small></div>
   <form method="post" action="/admin/quantity-discounts" class="quantity-tier-form">
     <input type="hidden" name="csrf" value="{{ csrf_token }}">
     <label class="quantity-tier-product">Sản phẩm<select name="product_id" required>{% for product in products %}<option value="{{ product.id }}" {{ 'selected' if product.id == selected_product_id else '' }}>#{{ product.id }} · {{ product.name_vi }} · tối đa {{ product.max_quantity }}</option>{% endfor %}</select><small>Mỗi lần lưu có thể tạo nhiều mốc cho cùng một sản phẩm.</small></label>
@@ -32,6 +32,33 @@
   </div>
 </template>
 
+<section class="panel form-panel">
+  <div class="panel-head"><div><span>FIXED QUANTITY DISCOUNT</span><h2>Giảm số tiền cố định trên mỗi tài khoản</h2></div><small>Ví dụ sản phẩm 30.000đ, mua từ 10 tài khoản giảm 1.000đ thì khách còn 29.000đ/1.</small></div>
+  <form method="post" action="/admin/quantity-discounts/fixed" class="quantity-tier-form">
+    <input type="hidden" name="csrf" value="{{ csrf_token }}">
+    <label class="quantity-tier-product">Sản phẩm<select name="product_id" required>{% for product in products %}<option value="{{ product.id }}" {{ 'selected' if product.id == selected_product_id else '' }}>#{{ product.id }} · {{ product.name_vi }} · giá {{ product.price|vnd }} · tối đa {{ product.max_quantity }}</option>{% endfor %}</select><small>Mỗi lần lưu có thể tạo nhiều mốc giảm tiền cho cùng một sản phẩm.</small></label>
+    <div class="quantity-tier-builder">
+      <div class="quantity-tier-builder-head"><div><strong>Các mốc muốn thêm</strong><small>Ví dụ: mua 10 giảm 1.000đ/1, mua 50 giảm 2.000đ/1.</small></div><button class="button secondary compact" type="button" id="add-fixed-quantity-tier">+ Thêm mốc</button></div>
+      <div id="fixed-quantity-tier-rows" class="quantity-tier-rows">
+        <div class="quantity-tier-row">
+          <label>Mua từ<input type="number" name="min_quantity" value="10" min="2" max="100" required><small>tài khoản</small></label>
+          <label>Giảm mỗi tài khoản<input type="number" name="discount_amount" value="1000" min="1" step="1000" required><small>VNĐ / 1 tài khoản</small></label>
+          <button class="button compact danger remove-quantity-tier" type="button" aria-label="Xóa mốc này">Xóa</button>
+        </div>
+      </div>
+    </div>
+    <button class="button primary quantity-tier-submit" type="submit">Lưu các mốc giảm tiền</button>
+  </form>
+</section>
+
+<template id="fixed-quantity-tier-template">
+  <div class="quantity-tier-row">
+    <label>Mua từ<input type="number" name="min_quantity" min="2" max="100" placeholder="50" required><small>tài khoản</small></label>
+    <label>Giảm mỗi tài khoản<input type="number" name="discount_amount" min="1" step="1000" placeholder="2000" required><small>VNĐ / 1 tài khoản</small></label>
+    <button class="button compact danger remove-quantity-tier" type="button" aria-label="Xóa mốc này">Xóa</button>
+  </div>
+</template>
+
 <section class="panel">
   <div class="panel-head"><div><span>QUANTITY TIERS</span><h2>Các mốc đang cấu hình</h2></div><small>Cùng một sản phẩm không thể có hai mốc số lượng giống nhau.</small></div>
   <div class="table-wrap"><table><thead><tr><th>Sản phẩm</th><th>Mốc áp dụng</th><th>Mức giảm</th><th>Trạng thái</th><th>Thao tác</th></tr></thead><tbody>
@@ -39,7 +66,7 @@
     <tr>
       <td><a class="text-link" href="/admin/products/{{ row.product.id }}">#{{ row.product.id }} · {{ row.product.name_vi }}</a><small>Giá hiện tại {{ row.product.price|vnd }}</small></td>
       <td><strong>Từ {{ tier.min_quantity }} sản phẩm</strong><small>Mốc #{{ tier.id }} · tạo {{ tier.created_at|localtime }}</small></td>
-      <td><strong>-{{ tier.discount_percent }}%</strong><small>Tự động, không cần nhập mã</small></td>
+      <td>{% if tier.discount_type == 'fixed' %}<strong>-{{ tier.discount_amount|vnd }}/1</strong><small>Còn {{ [row.product.price - tier.discount_amount, 1]|max|vnd }}/1 theo giá hiện tại</small>{% else %}<strong>-{{ tier.discount_percent }}%</strong><small>Tự động theo phần trăm</small>{% endif %}</td>
       <td><span class="status {{ 'on' if tier.active else 'off' }}">{{ 'Đang bật' if tier.active else 'Đã tắt' }}</span></td>
       <td><div class="row-actions"><form method="post" action="/admin/quantity-discounts/{{ tier.id }}/toggle"><input type="hidden" name="csrf" value="{{ csrf_token }}"><button class="button compact quiet">{{ 'Tắt' if tier.active else 'Bật' }}</button></form><form method="post" action="/admin/quantity-discounts/{{ tier.id }}/delete" onsubmit="return confirm('Xóa mốc ưu đãi này?')"><input type="hidden" name="csrf" value="{{ csrf_token }}"><button class="button compact danger">Xóa</button></form></div></td>
     </tr>
@@ -80,21 +107,25 @@
 </section>
 <script>
   (() => {
-    const rows = document.getElementById('quantity-tier-rows');
-    const template = document.getElementById('quantity-tier-template');
-    const addButton = document.getElementById('add-quantity-tier');
-    if (!rows || !template || !addButton) return;
-    addButton.addEventListener('click', () => {
-      if (rows.children.length >= 20) return;
-      rows.appendChild(template.content.cloneNode(true));
-      rows.lastElementChild?.querySelector('input')?.focus();
-    });
-    rows.addEventListener('click', (event) => {
-      const removeButton = event.target.closest('.remove-quantity-tier');
-      if (!removeButton) return;
-      const row = removeButton.closest('.quantity-tier-row');
-      if (rows.children.length > 1) row?.remove();
-    });
+    const setupBuilder = (rowsId, templateId, addButtonId) => {
+      const rows = document.getElementById(rowsId);
+      const template = document.getElementById(templateId);
+      const addButton = document.getElementById(addButtonId);
+      if (!rows || !template || !addButton) return;
+      addButton.addEventListener('click', () => {
+        if (rows.children.length >= 20) return;
+        rows.appendChild(template.content.cloneNode(true));
+        rows.lastElementChild?.querySelector('input')?.focus();
+      });
+      rows.addEventListener('click', (event) => {
+        const removeButton = event.target.closest('.remove-quantity-tier');
+        if (!removeButton) return;
+        const row = removeButton.closest('.quantity-tier-row');
+        if (rows.children.length > 1) row?.remove();
+      });
+    };
+    setupBuilder('quantity-tier-rows', 'quantity-tier-template', 'add-quantity-tier');
+    setupBuilder('fixed-quantity-tier-rows', 'fixed-quantity-tier-template', 'add-fixed-quantity-tier');
   })();
 </script>
 {% endblock %}

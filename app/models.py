@@ -120,6 +120,23 @@ class Product(Base):
     )
 
 
+class ProductSupplierState(Base):
+    __tablename__ = "product_supplier_states"
+
+    product_id: Mapped[int] = mapped_column(
+        ForeignKey("products.id", ondelete="CASCADE"), primary_key=True
+    )
+    provider: Mapped[str] = mapped_column(String(32), primary_key=True)
+    owner_balance: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    effective_stock: Mapped[int] = mapped_column(default=0, server_default="0")
+    topup_pending: Mapped[bool] = mapped_column(
+        Boolean, default=False, server_default="false"
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
+
+
 class FlashSaleCampaign(Base):
     __tablename__ = "flash_sale_campaigns"
 
@@ -303,7 +320,13 @@ class QuantityDiscount(Base):
         ForeignKey("products.id", ondelete="CASCADE"), index=True
     )
     min_quantity: Mapped[int]
-    discount_percent: Mapped[int]
+    discount_type: Mapped[str] = mapped_column(
+        String(20), default="percent", server_default="percent"
+    )
+    discount_percent: Mapped[int] = mapped_column(default=0, server_default="0")
+    discount_amount: Mapped[int] = mapped_column(
+        BigInteger, default=0, server_default="0"
+    )
     active: Mapped[bool] = mapped_column(Boolean, default=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()

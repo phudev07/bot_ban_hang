@@ -741,6 +741,8 @@ class ProductPricing:
     coupon: DiscountCode | None = None
     coupon_discount_per_unit: int = 0
     quantity_discount_percent: int = 0
+    quantity_discount_type: str | None = None
+    quantity_discount_value: int = 0
     quantity_discount_per_unit: int = 0
     flash_sale: FlashSaleCampaign | None = None
 
@@ -799,7 +801,9 @@ def price_supplier_plan(
                     min(coupon_discount, max(0, original_unit_price - 1)),
                 )
             raw_quantity_discount = (
-                original_unit_price * pricing.quantity_discount_percent // 100
+                pricing.quantity_discount_value
+                if pricing.quantity_discount_type == "fixed"
+                else original_unit_price * pricing.quantity_discount_percent // 100
             )
             quantity_discount = max(
                 0,
@@ -949,12 +953,26 @@ async def product_pricing(
         )
         .order_by(
             QuantityDiscount.min_quantity.desc(),
-            QuantityDiscount.discount_percent.desc(),
+            QuantityDiscount.id.desc(),
         )
         .limit(1)
     )
-    quantity_percent = tier.discount_percent if tier is not None else 0
-    raw_quantity_discount = product.price * quantity_percent // 100
+    quantity_type = tier.discount_type if tier is not None else None
+    quantity_percent = (
+        tier.discount_percent
+        if tier is not None and quantity_type != "fixed"
+        else 0
+    )
+    quantity_value = (
+        tier.discount_amount
+        if tier is not None and quantity_type == "fixed"
+        else quantity_percent
+    )
+    raw_quantity_discount = (
+        quantity_value
+        if quantity_type == "fixed"
+        else product.price * quantity_percent // 100
+    )
     quantity_discount = max(
         0,
         min(
@@ -970,6 +988,8 @@ async def product_pricing(
         coupon=coupon,
         coupon_discount_per_unit=coupon_discount,
         quantity_discount_percent=quantity_percent,
+        quantity_discount_type=quantity_type,
+        quantity_discount_value=quantity_value,
         quantity_discount_per_unit=quantity_discount,
     )
 
@@ -985,7 +1005,7 @@ async def active_quantity_discounts(
                 QuantityDiscount.product_id == product_id,
                 QuantityDiscount.active.is_(True),
             )
-            .order_by(QuantityDiscount.min_quantity, QuantityDiscount.discount_percent)
+            .order_by(QuantityDiscount.min_quantity, QuantityDiscount.id)
         )
     )
 
@@ -1000,6 +1020,8 @@ class PurchaseResult:
     discount_amount: int = 0
     coupon_code: str | None = None
     quantity_discount_percent: int = 0
+    quantity_discount_type: str | None = None
+    quantity_discount_value: int = 0
     flash_sale_id: int | None = None
 
     @property
@@ -1391,6 +1413,8 @@ async def _purchase_product(
                     discount_amount=total_discount,
                     coupon_code=pricing.coupon.code if pricing.coupon else None,
                     quantity_discount_percent=pricing.quantity_discount_percent,
+                    quantity_discount_type=pricing.quantity_discount_type,
+                    quantity_discount_value=pricing.quantity_discount_value,
                     flash_sale_id=(pricing.flash_sale.id if pricing.flash_sale else None),
                 )
             if user.balance < total_amount:
@@ -1401,6 +1425,8 @@ async def _purchase_product(
                     discount_amount=total_discount,
                     coupon_code=pricing.coupon.code if pricing.coupon else None,
                     quantity_discount_percent=pricing.quantity_discount_percent,
+                    quantity_discount_type=pricing.quantity_discount_type,
+                    quantity_discount_value=pricing.quantity_discount_value,
                     flash_sale_id=(pricing.flash_sale.id if pricing.flash_sale else None),
                 )
 
@@ -1476,6 +1502,8 @@ async def _purchase_product(
                         discount_amount=total_discount,
                         coupon_code=pricing.coupon.code if pricing.coupon else None,
                         quantity_discount_percent=pricing.quantity_discount_percent,
+                        quantity_discount_type=pricing.quantity_discount_type,
+                        quantity_discount_value=pricing.quantity_discount_value,
                     )
                 await notify_fulfillment_started(
                     on_fulfillment_started,
@@ -1751,6 +1779,8 @@ async def _purchase_product(
                     discount_amount=total_discount,
                     coupon_code=pricing.coupon.code if pricing.coupon else None,
                     quantity_discount_percent=pricing.quantity_discount_percent,
+                    quantity_discount_type=pricing.quantity_discount_type,
+                    quantity_discount_value=pricing.quantity_discount_value,
                 )
 
             items = list(
@@ -1832,6 +1862,8 @@ async def _purchase_product(
                 discount_amount=total_discount,
                 coupon_code=pricing.coupon.code if pricing.coupon else None,
                 quantity_discount_percent=pricing.quantity_discount_percent,
+                quantity_discount_type=pricing.quantity_discount_type,
+                quantity_discount_value=pricing.quantity_discount_value,
             )
 
 
@@ -3015,6 +3047,16 @@ async def active_products(session: AsyncSession, category_id: int | None = None)
             Product.product_type == "account",
         )
         .order_by(
+            case(
+                (
+                    or_(
+                        Product.force_out_of_stock.is_(True),
+                        Product.external_stock <= 0,
+                    ),
+                    1,
+                ),
+                else_=0,
+            ),
             case((gpt_product, 0), (google_product, 1), else_=2),
             Category.position,
             Product.id,

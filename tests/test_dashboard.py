@@ -1154,8 +1154,21 @@ def test_dashboard_login_catalog_inventory_and_balance(tmp_path) -> None:
             follow_redirects=False,
         )
         assert created_quantity_discount.status_code == 303
+        created_fixed_quantity_discount = client.post(
+            "/admin/quantity-discounts/fixed",
+            data={
+                "csrf": csrf,
+                "product_id": str(product_id),
+                "min_quantity": ["20", "40"],
+                "discount_amount": ["1000", "2000"],
+            },
+            follow_redirects=False,
+        )
+        assert created_fixed_quantity_discount.status_code == 303
         discounts_page = client.get("/admin/discounts")
         assert "+ Thêm mốc" in discounts_page.text
+        assert "Giảm số tiền cố định trên mỗi tài khoản" in discounts_page.text
+        assert "-1.000đ/1" in discounts_page.text
         quantity_discount_ids = [
             int(value)
             for value in re.findall(
@@ -1163,7 +1176,7 @@ def test_dashboard_login_catalog_inventory_and_balance(tmp_path) -> None:
                 discounts_page.text,
             )
         ]
-        assert len(quantity_discount_ids) == 2
+        assert len(quantity_discount_ids) == 4
         toggled_quantity_discount = client.post(
             f"/admin/quantity-discounts/{quantity_discount_ids[0]}/toggle",
             data={"csrf": csrf},

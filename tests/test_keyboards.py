@@ -2,6 +2,7 @@ from app.keyboards import (
     main_menu,
     order_history_menu,
     product_detail,
+    products_menu,
     purchase_payment_options,
     quick_access_keyboard,
     quantity_menu,
@@ -27,6 +28,27 @@ def test_out_of_stock_product_has_no_buy_button() -> None:
     callbacks = [button.callback_data for row in keyboard.inline_keyboard for button in row]
 
     assert callbacks == ["cat:2"]
+
+
+def test_out_of_stock_product_button_is_red_and_clearly_labelled() -> None:
+    available = make_product()
+    available.external_stock = 3
+    sold_out = Product(
+        id=11,
+        category_id=2,
+        name_vi="Hết hàng",
+        name_en="Sold out",
+        price=30_000,
+        external_stock=0,
+    )
+
+    keyboard = products_menu([available, sold_out], "vi", "back:menu")
+    available_button = keyboard.inline_keyboard[0][0]
+    sold_out_button = keyboard.inline_keyboard[1][0]
+
+    assert available_button.style is None
+    assert sold_out_button.style == "danger"
+    assert sold_out_button.text == "🔴 Hết hàng · 30.000đ · Hết hàng"
 
 
 def test_main_menu_exposes_warehouse_api_and_referrals() -> None:

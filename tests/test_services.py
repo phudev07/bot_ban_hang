@@ -105,6 +105,53 @@ def test_quick_buy_orders_all_gpt_products_before_google_products() -> None:
     asyncio.run(scenario())
 
 
+def test_quick_buy_moves_sold_out_products_below_available_products() -> None:
+    async def scenario() -> None:
+        engine, sessions = await make_database()
+        async with sessions() as session:
+            google = Category(name_vi="Gemini", name_en="Google", position=0)
+            gpt = Category(name_vi="ChatGPT", name_en="ChatGPT", position=1)
+            session.add_all([google, gpt])
+            await session.flush()
+            session.add_all(
+                [
+                    Product(
+                        category_id=gpt.id,
+                        name_vi="GPT còn hàng",
+                        name_en="GPT available",
+                        price=40_000,
+                        external_stock=2,
+                    ),
+                    Product(
+                        category_id=gpt.id,
+                        name_vi="GPT hết hàng",
+                        name_en="GPT sold out",
+                        price=40_000,
+                        external_stock=0,
+                    ),
+                    Product(
+                        category_id=google.id,
+                        name_vi="GG còn hàng",
+                        name_en="Google available",
+                        price=20_000,
+                        external_stock=5,
+                    ),
+                ]
+            )
+            await session.commit()
+
+        async with sessions() as session:
+            products = await active_products(session)
+            assert [product.name_vi for product in products] == [
+                "GPT còn hàng",
+                "GG còn hàng",
+                "GPT hết hàng",
+            ]
+        await engine.dispose()
+
+    asyncio.run(scenario())
+
+
 class FakeSupplier:
     def __init__(self, *, balance: int = 100_000, stock: int = 100) -> None:
         self.balance = balance
@@ -656,6 +703,70 @@ def test_quantity_discount_uses_highest_tier_and_stacks_with_coupon() -> None:
             assert all(order.amount == 40_000 for order in orders)
             assert all(order.discount_amount == 10_000 for order in orders)
             assert all(order.discount_code == "BULK5K" for order in orders)
+        await engine.dispose()
+
+    asyncio.run(scenario())
+
+
+def test_fixed_quantity_discount_reduces_each_account_by_configured_amount() -> None:
+    async def scenario() -> None:
+        engine, sessions = await make_database()
+        cipher = SecretCipher(Fernet.generate_key().decode())
+        async with sessions() as session:
+            category = Category(name_vi="Test", name_en="Test")
+            session.add(category)
+            await session.flush()
+            product = Product(
+                category_id=category.id,
+                name_vi="Tài khoản giảm tiền",
+                name_en="Fixed bulk discount",
+                price=30_000,
+                allow_quantity=True,
+                max_quantity=20,
+                external_stock=10,
+            )
+            user = User(telegram_id=7654321, full_name="Fixed buyer", balance=300_000)
+            session.add_all([product, user])
+            await session.flush()
+            session.add(
+                QuantityDiscount(
+                    product_id=product.id,
+                    min_quantity=10,
+                    discount_type="fixed",
+                    discount_amount=1_000,
+                )
+            )
+            session.add_all(
+                [
+                    InventoryItem(
+                        product_id=product.id,
+                        encrypted_secret=cipher.encrypt(f"fixed{index}:password"),
+                    )
+                    for index in range(1, 11)
+                ]
+            )
+            await session.commit()
+
+            pricing = await product_pricing(session, product, quantity=10)
+            assert pricing is not None
+            assert pricing.quantity_discount_type == "fixed"
+            assert pricing.quantity_discount_value == 1_000
+            assert pricing.final_unit_price == 29_000
+
+        result = await purchase_product(
+            sessions,
+            user.telegram_id,
+            product.id,
+            cipher,
+            quantity=10,
+        )
+
+        assert result.ok is True
+        assert result.total_amount == 290_000
+        assert result.discount_amount == 10_000
+        assert result.quantity_discount_type == "fixed"
+        assert result.quantity_discount_value == 1_000
+        assert all(order.amount == 29_000 for order in result.orders)
         await engine.dispose()
 
     asyncio.run(scenario())
