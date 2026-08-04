@@ -46,7 +46,7 @@ def test_out_of_stock_product_button_is_red_and_clearly_labelled() -> None:
     available_button = keyboard.inline_keyboard[0][0]
     sold_out_button = keyboard.inline_keyboard[1][0]
 
-    assert available_button.style is None
+    assert available_button.style == "success"
     assert sold_out_button.style == "danger"
     assert sold_out_button.text == "🔴 Hết hàng · 30.000đ · Hết hàng"
 
@@ -59,7 +59,7 @@ def test_local_inventory_menu_stock_overrides_stale_external_stock() -> None:
     keyboard = products_menu([product], "vi", "back:menu")
     button = keyboard.inline_keyboard[0][0]
 
-    assert button.style is None
+    assert button.style == "success"
     assert "Hết hàng" not in button.text
 
 

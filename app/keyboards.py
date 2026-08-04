@@ -197,7 +197,7 @@ def products_menu(
         builder.button(
             text=button_text,
             callback_data=f"prod:{product.id}",
-            style=None if in_stock else "danger",
+            style="success" if in_stock else "danger",
         )
     builder.adjust(1)
     builder.row(InlineKeyboardButton(text=tr(language, "back"), callback_data=back_callback))
