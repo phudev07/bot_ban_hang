@@ -42,7 +42,7 @@
       <div id="fixed-quantity-tier-rows" class="quantity-tier-rows">
         <div class="quantity-tier-row">
           <label>Mua từ<input type="number" name="min_quantity" value="10" min="2" max="100" required><small>tài khoản</small></label>
-          <label>Giảm mỗi tài khoản<input type="number" name="discount_amount" value="1000" min="1" step="1000" required><small>VNĐ / 1 tài khoản</small></label>
+          <label>Giảm mỗi tài khoản<input type="number" name="discount_amount" value="1000" min="1" step="1" required><small>VNĐ / 1 tài khoản</small></label>
           <button class="button compact danger remove-quantity-tier" type="button" aria-label="Xóa mốc này">Xóa</button>
         </div>
       </div>
@@ -54,7 +54,7 @@
 <template id="fixed-quantity-tier-template">
   <div class="quantity-tier-row">
     <label>Mua từ<input type="number" name="min_quantity" min="2" max="100" placeholder="50" required><small>tài khoản</small></label>
-    <label>Giảm mỗi tài khoản<input type="number" name="discount_amount" min="1" step="1000" placeholder="2000" required><small>VNĐ / 1 tài khoản</small></label>
+    <label>Giảm mỗi tài khoản<input type="number" name="discount_amount" min="1" step="1" placeholder="2000" required><small>VNĐ / 1 tài khoản</small></label>
     <button class="button compact danger remove-quantity-tier" type="button" aria-label="Xóa mốc này">Xóa</button>
   </div>
 </template>

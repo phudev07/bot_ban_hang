@@ -1168,6 +1168,7 @@ def test_dashboard_login_catalog_inventory_and_balance(tmp_path) -> None:
         discounts_page = client.get("/admin/discounts")
         assert "+ Thêm mốc" in discounts_page.text
         assert "Giảm số tiền cố định trên mỗi tài khoản" in discounts_page.text
+        assert 'name="discount_amount" value="1000" min="1" step="1"' in discounts_page.text
         assert "-1.000đ/1" in discounts_page.text
         quantity_discount_ids = [
             int(value)
