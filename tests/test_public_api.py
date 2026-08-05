@@ -28,7 +28,7 @@ from app.models import (
 )
 from app.partner_services import api_signature, ensure_api_client, rotate_api_secret
 from app.services import PurchaseResult
-from app.public_api import client_ip
+from app.public_api import client_ip, order_payload
 from app.utils import SecretCipher
 
 
@@ -57,6 +57,42 @@ class FakeRedis:
 
     async def aclose(self) -> None:
         return None
+
+
+def test_order_payload_uses_the_name_saved_at_purchase_time() -> None:
+    cipher = SecretCipher(Fernet.generate_key().decode())
+    product = Product(
+        id=77,
+        category_id=1,
+        name_vi="Tên sản phẩm hiện tại",
+        name_en="Current product name",
+        price=20_000,
+    )
+    item = InventoryItem(
+        id=88,
+        product_id=product.id,
+        encrypted_secret=cipher.encrypt("account|password"),
+    )
+    order = Order(
+        id=99,
+        user_id=123,
+        product_id=product.id,
+        product_name_vi="Tên lúc mua",
+        product_name_en="Name at purchase",
+        inventory_item_id=item.id,
+        amount=20_000,
+        discount_amount=0,
+        sales_channel="api",
+        status="completed",
+        created_at=datetime.now(UTC),
+        delivered_at=datetime.now(UTC),
+        product=product,
+        inventory_item=item,
+    )
+
+    payload = order_payload([order], cipher)
+
+    assert payload["product"] == {"id": 77, "name": "Tên lúc mua"}
 
 
 def request_with_headers(headers: dict[str, str]) -> Request:

@@ -1444,6 +1444,8 @@ async def _purchase_product(
                         order = Order(
                             user_id=user.telegram_id,
                             product_id=product.id,
+                            product_name_vi=product.name_vi,
+                            product_name_en=product.name_en,
                             inventory_item_id=item.id,
                             amount=sale_unit_price,
                             cost_amount=item.cost_amount,
@@ -1710,6 +1712,8 @@ async def _purchase_product(
                         order = Order(
                             user_id=user.telegram_id,
                             product_id=product.id,
+                            product_name_vi=product.name_vi,
+                            product_name_en=product.name_en,
                             inventory_item_id=item.id,
                             amount=unit_sale_price,
                             cost_amount=unit_cost,
@@ -1820,6 +1824,8 @@ async def _purchase_product(
                 order = Order(
                     user_id=user.telegram_id,
                     product_id=product.id,
+                    product_name_vi=product.name_vi,
+                    product_name_en=product.name_en,
                     inventory_item_id=item.id,
                     amount=pricing.final_unit_price,
                     cost_amount=item.cost_amount,
@@ -2834,6 +2840,8 @@ async def _process_sepay_payment(
                         order = Order(
                             user_id=user.telegram_id,
                             product_id=product.id,
+                            product_name_vi=product.name_vi,
+                            product_name_en=product.name_en,
                             inventory_item_id=item.id,
                             amount=item_sale_prices.get(
                                 item.id,

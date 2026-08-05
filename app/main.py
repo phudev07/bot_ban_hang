@@ -413,6 +413,74 @@ async def initialize_database(engine, session_factory, seed_demo_data: bool) -> 
         )
         await connection.execute(
             text(
+                "ALTER TABLE orders ADD COLUMN IF NOT EXISTS "
+                "product_name_vi VARCHAR(255) NULL"
+            )
+        )
+        await connection.execute(
+            text(
+                "ALTER TABLE orders ADD COLUMN IF NOT EXISTS "
+                "product_name_en VARCHAR(255) NULL"
+            )
+        )
+        await connection.execute(
+            text(
+                "UPDATE orders SET "
+                "product_name_vi = COALESCE(product_name_vi, CASE "
+                "WHEN product_id = 4 AND created_at < TIMESTAMPTZ '2026-07-20 20:32:24+00' "
+                "THEN '🤖GPT PLUS HÀNG MAIL ICLOUD UPI' "
+                "WHEN product_id = 4 THEN '🤖GPT PLUS HÀNG MAIL ICLOUD/HOTMAIL UPI' "
+                "WHEN product_id = 5 AND created_at < TIMESTAMPTZ '2026-07-20 20:32:24+00' "
+                "THEN 'CHAT GPT TRẮNG MAIL ICLOUD' "
+                "WHEN product_id = 5 THEN 'CHAT GPT TRẮNG MAIL ICLOUD/HOTMAIL' "
+                "WHEN product_id = 9 AND created_at < TIMESTAMPTZ '2026-07-19 12:32:13+00' "
+                "THEN 'CDK GG Pixel 1Y' "
+                "WHEN product_id = 9 THEN 'CDK GG Pixel 1 năm' "
+                "WHEN product_id = 10 AND created_at < TIMESTAMPTZ '2026-07-19 12:32:13+00' "
+                "THEN 'Link GG Pro Jio 18M' "
+                "WHEN product_id = 10 THEN 'Link GG Pro Jio 18tháng' "
+                "WHEN product_id = 11 AND created_at < TIMESTAMPTZ '2026-07-29 16:33:00+00' "
+                "THEN 'BHF GPT PLUS GMAIL APPLE PAY' "
+                "WHEN product_id = 11 THEN 'GPT PLUS GMAIL APPLE PAY BH 20D' "
+                "WHEN product_id = 14 THEN 'claude max 20 kbh' "
+                "WHEN product_id = 15 AND created_at < TIMESTAMPTZ '2026-07-29 16:33:00+00' "
+                "THEN 'GPT apple bh 7d' "
+                "WHEN product_id = 15 AND created_at < TIMESTAMPTZ '2026-08-03 08:31:39+00' "
+                "THEN 'GPT PLUS GMAIL APPLE PAY BH 5D' "
+                "WHEN product_id = 15 THEN 'GPT PLUS GMAIL APPLE PAY BH 10D' "
+                "WHEN product_id = 17 AND created_at < TIMESTAMPTZ '2026-08-05 08:34:16+00' "
+                "THEN 'GPT PLUS APPLE PAY KBH' "
+                "WHEN product_id = 17 THEN '🤖GPT PLUS APPLE PAY KBH' END), "
+                "product_name_en = COALESCE(product_name_en, CASE "
+                "WHEN product_id = 4 THEN 'ChatGPT Plus iCloud mail account' "
+                "WHEN product_id = 5 THEN 'New ChatGPT iCloud mail account' "
+                "WHEN product_id = 9 THEN 'Google Pro Pixel 1 Year CDK' "
+                "WHEN product_id = 10 THEN 'Google Pro Jio 18M Link' "
+                "WHEN product_id = 11 THEN 'BHF ChatGPT Plus Gmail Apple Pay' "
+                "WHEN product_id = 14 THEN 'claudemax20' "
+                "WHEN product_id = 15 AND created_at < TIMESTAMPTZ '2026-07-29 16:33:00+00' "
+                "THEN 'gpt apple bh 7d' "
+                "WHEN product_id = 15 AND created_at < TIMESTAMPTZ '2026-08-03 08:31:39+00' "
+                "THEN 'gpt apple bh 5d' "
+                "WHEN product_id = 15 THEN 'GPT PLUS GMAIL APPLE PAY BH 10D' "
+                "WHEN product_id = 17 AND created_at < TIMESTAMPTZ '2026-08-05 08:34:16+00' "
+                "THEN 'GPT PLUS APPLE PAY KBH' "
+                "WHEN product_id = 17 THEN '🤖GPT PLUS APPLE PAY KBH' END) "
+                "WHERE product_id IN (4, 5, 9, 10, 11, 14, 15, 17) "
+                "AND (product_name_vi IS NULL OR product_name_en IS NULL)"
+            )
+        )
+        await connection.execute(
+            text(
+                "UPDATE orders SET "
+                "product_name_vi = COALESCE(orders.product_name_vi, products.name_vi), "
+                "product_name_en = COALESCE(orders.product_name_en, products.name_en) "
+                "FROM products WHERE products.id = orders.product_id "
+                "AND (orders.product_name_vi IS NULL OR orders.product_name_en IS NULL)"
+            )
+        )
+        await connection.execute(
+            text(
                 "ALTER TABLE api_clients ADD COLUMN IF NOT EXISTS "
                 "admin_blocked BOOLEAN NOT NULL DEFAULT FALSE"
             )

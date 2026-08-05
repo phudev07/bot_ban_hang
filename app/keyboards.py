@@ -387,9 +387,9 @@ def order_history_menu(orders: list[Order], language: str) -> InlineKeyboardMark
     for grouped_orders in list(groups.values())[:10]:
         representative = min(grouped_orders, key=lambda item: item.id)
         name = sanitize_customer_text(
-            representative.product.name_en
+            representative.display_name_en
             if language == "en"
-            else representative.product.name_vi
+            else representative.display_name_vi
         )
         quantity = len(grouped_orders)
         quantity_label = "tài khoản" if language == "vi" else "items"

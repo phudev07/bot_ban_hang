@@ -184,7 +184,7 @@ def order_payload(
         "channel": representative.sales_channel,
         "product": {
             "id": representative.product.id,
-            "name": sanitize_customer_text(representative.product.name_vi),
+            "name": sanitize_customer_text(representative.display_name_vi),
         },
         "quantity": len(orders),
         "unit_price": representative.amount,
@@ -682,7 +682,7 @@ def create_public_api_router(
                 "channel": "api",
                 "product": {
                     "id": result.orders[0].product.id,
-                    "name": sanitize_customer_text(result.orders[0].product.name_vi),
+                    "name": sanitize_customer_text(result.orders[0].display_name_vi),
                 },
                 "quantity": len(result.orders),
                 "unit_price": result.orders[0].amount,

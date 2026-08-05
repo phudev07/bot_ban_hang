@@ -464,6 +464,13 @@ def test_purchase_is_atomic_and_delivers_stock() -> None:
             result = await purchase_product(sessions, user.telegram_id, product.id, cipher)
             assert result.ok is True
             assert result.secret == "account:password"
+            assert result.orders[0].product_name_vi == "Item"
+            assert result.orders[0].product_name_en == "Item"
+
+            product.name_vi = "Renamed item"
+            product.name_en = "Renamed item"
+            assert result.orders[0].display_name_vi == "Item"
+            assert result.orders[0].display_name_en == "Item"
 
             await session.refresh(user)
             await session.refresh(item)
@@ -1569,6 +1576,8 @@ def test_gpt_plus_combines_supplier_stock_and_prices_each_source_tier() -> None:
         assert [order.cost_amount for order in result.orders].count(30_000) == 1
         assert [order.supplier_provider for order in result.orders].count("lehai") == 10
         assert [order.supplier_provider for order in result.orders].count("sumistore") == 1
+        assert all(order.product_name_vi == "GPT Plus" for order in result.orders)
+        assert all(order.product_name_en == "GPT Plus" for order in result.orders)
         async with sessions() as session:
             product = await session.get(Product, product_id)
             assert product is not None
@@ -1988,6 +1997,8 @@ def test_gpt_plus_qr_uses_other_supplier_when_current_price_is_unchanged() -> No
             assert user is not None and user.balance == 0
             assert len(orders) == 2
             assert sum(order.amount for order in orders) == 60_000
+            assert all(order.product_name_vi == "GPT Plus" for order in orders)
+            assert all(order.product_name_en == "GPT Plus" for order in orders)
         await engine.dispose()
 
     asyncio.run(scenario())

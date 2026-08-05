@@ -164,3 +164,40 @@ def test_order_history_groups_items_under_one_shop_order_code() -> None:
 
     assert first_button.callback_data == "orderdetail:11"
     assert first_button.text == "BORDER123 · Tài khoản · 2 tài khoản"
+
+
+def test_order_history_keeps_the_name_saved_at_purchase_time() -> None:
+    product = make_product()
+    order = Order(
+        id=21,
+        user_id=123,
+        product_id=product.id,
+        product_name_vi="Tên lúc khách mua",
+        product_name_en="Name at purchase",
+        inventory_item_id=21,
+        amount=20_000,
+        product=product,
+    )
+    product.name_vi = "Tên mới của sản phẩm"
+    product.name_en = "New product name"
+
+    vi_button = order_history_menu([order], "vi").inline_keyboard[0][0]
+    en_button = order_history_menu([order], "en").inline_keyboard[0][0]
+
+    assert "Tên lúc khách mua" in vi_button.text
+    assert "Name at purchase" in en_button.text
+
+
+def test_legacy_order_name_falls_back_to_the_current_product() -> None:
+    product = make_product()
+    order = Order(
+        id=22,
+        user_id=123,
+        product_id=product.id,
+        inventory_item_id=22,
+        amount=20_000,
+        product=product,
+    )
+
+    assert order.display_name_vi == product.name_vi
+    assert order.display_name_en == product.name_en

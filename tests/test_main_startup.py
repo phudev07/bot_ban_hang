@@ -30,6 +30,15 @@ def test_startup_cost_backfill_does_not_reprice_manual_inventory_orders() -> Non
     assert "orders.supplier_provider = 'sumistore'" in source
 
 
+def test_startup_backfills_immutable_order_product_names() -> None:
+    source = inspect.getsource(initialize_database)
+    assert "product_name_vi VARCHAR(255) NULL" in source
+    assert "product_name_en VARCHAR(255) NULL" in source
+    assert "2026-07-20 20:32:24+00" in source
+    assert "2026-08-05 08:34:16+00" in source
+    assert "COALESCE(orders.product_name_vi, products.name_vi)" in source
+
+
 def test_wait_for_server_started_waits_for_ready_flag() -> None:
     async def scenario() -> None:
         class FakeServer:

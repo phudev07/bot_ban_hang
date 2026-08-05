@@ -284,6 +284,8 @@ def group_order_rows(rows, limit: int | None = None) -> list[dict[str, object]]:
                 "created_at": order.created_at,
                 "delivered_at": order.delivered_at,
                 "product": product,
+                "product_name_vi": order.product_name_vi or product.name_vi,
+                "product_name_en": order.product_name_en or product.name_en,
                 "user": user,
                 "item_ids": [],
             }
@@ -4258,6 +4260,7 @@ def create_dashboard_router(
                 cast(User.telegram_id, String).ilike(needle),
                 User.full_name.ilike(needle),
                 User.username.ilike(username_needle),
+                Order.product_name_vi.ilike(needle),
                 Product.name_vi.ilike(needle),
             )
         if status in {"completed", "pending", "failed"}:

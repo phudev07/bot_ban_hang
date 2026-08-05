@@ -278,7 +278,7 @@ def create_router(
         order_ids = [order.id for order in orders]
         shop_order_code = orders[0].shop_order_code
         product_name = sanitize_customer_text(
-            orders[0].product.name_en if user.language == "en" else orders[0].product.name_vi
+            orders[0].display_name_en if user.language == "en" else orders[0].display_name_vi
         )
         secrets = [cipher.decrypt(order.inventory_item.encrypted_secret) for order in orders]
         total_amount = sum(order.amount for order in orders)
@@ -975,9 +975,9 @@ def create_router(
             return result.message
         if result.orders and result.secrets:
             product_name = sanitize_customer_text(
-                result.orders[0].product.name_en
+                result.orders[0].display_name_en
                 if user.language == "en"
-                else result.orders[0].product.name_vi
+                else result.orders[0].display_name_vi
             )
             order_ids = [order.id for order in result.orders]
             text = delivery_text(

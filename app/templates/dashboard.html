@@ -109,7 +109,7 @@
   <section class="panel">
     <div class="panel-head"><div><span>LIVE ORDERS</span><h2>Đơn mới nhất</h2></div><a href="/admin/orders">Xem tất cả →</a></div>
     <div class="stack-list order-feed">
-      {% for row in recent_orders %}<article><div><strong>{{ row.shop_order_code }} · {{ row.product.name_vi }}</strong><small>{{ row.user.full_name }} · {{ row.quantity }} tài khoản · {{ row.created_at|localtime }}</small></div><span><b>{{ row.amount|vnd }}</b><small>Lãi {{ (row.amount - row.cost_amount)|vnd }}</small></span></article>
+      {% for row in recent_orders %}<article><div><strong>{{ row.shop_order_code }} · {{ row.product_name_vi }}</strong><small>{{ row.user.full_name }} · {{ row.quantity }} tài khoản · {{ row.created_at|localtime }}</small></div><span><b>{{ row.amount|vnd }}</b><small>Lãi {{ (row.amount - row.cost_amount)|vnd }}</small></span></article>
       {% else %}<p class="empty">Chưa có đơn hàng.</p>{% endfor %}
     </div>
   </section>

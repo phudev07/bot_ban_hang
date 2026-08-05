@@ -411,6 +411,8 @@ class Order(Base):
     id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
     user_id: Mapped[int] = mapped_column(ForeignKey("users.telegram_id"), index=True)
     product_id: Mapped[int] = mapped_column(ForeignKey("products.id"))
+    product_name_vi: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    product_name_en: Mapped[str | None] = mapped_column(String(255), nullable=True)
     inventory_item_id: Mapped[int] = mapped_column(ForeignKey("inventory_items.id"), unique=True)
     amount: Mapped[int] = mapped_column(BigInteger)
     cost_amount: Mapped[int] = mapped_column(BigInteger, default=0)
@@ -446,6 +448,14 @@ class Order(Base):
     @property
     def shop_order_code(self) -> str:
         return self.batch_code or f"O{self.id}"
+
+    @property
+    def display_name_vi(self) -> str:
+        return self.product_name_vi or self.product.name_vi
+
+    @property
+    def display_name_en(self) -> str:
+        return self.product_name_en or self.product.name_en
 
 
 class Deposit(Base):

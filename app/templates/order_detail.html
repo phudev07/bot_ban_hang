@@ -7,7 +7,7 @@
 </div>
 
 <section class="order-hero">
-  <div><span>SUPPORT CASE</span><h2>Đơn {{ order.shop_order_code }}</h2><p>{{ product.name_vi }} · {{ order.quantity }} tài khoản · doanh thu {{ order.amount|vnd }} · lợi nhuận {{ (order.amount - order.cost_amount)|vnd }}</p></div>
+  <div><span>SUPPORT CASE</span><h2>Đơn {{ order.shop_order_code }}</h2><p>{{ order.product_name_vi }} · {{ order.quantity }} tài khoản · doanh thu {{ order.amount|vnd }} · lợi nhuận {{ (order.amount - order.cost_amount)|vnd }}</p></div>
   <div class="order-state"><span class="status on">{{ order.status }}</span><small>Tạo {{ order.created_at|localtime }}</small><small>Giao {{ order.delivered_at|localtime }}</small></div>
 </section>
 
@@ -31,7 +31,7 @@
       <div><dt>Hoa hồng giới thiệu</dt><dd>{{ referral_reward.commission_amount|vnd if referral_reward else '—' }}</dd></div>
       <div><dt>Lợi nhuận ròng</dt><dd class="profit-text">{{ (order.amount - order.cost_amount - (referral_reward.commission_amount if referral_reward else 0))|vnd }}</dd></div>
       <div><dt>Mã giảm giá</dt><dd>{{ order.discount_code or '—' }}{% if order.discount_amount %} · -{{ order.discount_amount|vnd }}{% endif %}</dd></div>
-      <div><dt>Sản phẩm</dt><dd>#{{ product.id }} · {{ product.name_vi }}</dd></div>
+      <div><dt>Sản phẩm</dt><dd>#{{ product.id }} · {{ order.product_name_vi }}</dd></div>
       <div><dt>Thời gian tạo</dt><dd>{{ order.created_at|localtime }}</dd></div>
       <div><dt>Thời gian giao</dt><dd>{{ order.delivered_at|localtime }}</dd></div>
     </dl>

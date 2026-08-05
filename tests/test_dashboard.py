@@ -2506,6 +2506,8 @@ def test_dashboard_groups_multi_item_purchase_as_one_order(tmp_path) -> None:
                     Order(
                         user_id=user.telegram_id,
                         product_id=product.id,
+                        product_name_vi="Tên sản phẩm lúc mua",
+                        product_name_en="Product name at purchase",
                         inventory_item_id=item.id,
                         amount=20_000,
                         cost_amount=15_000,
@@ -2548,9 +2550,13 @@ def test_dashboard_groups_multi_item_purchase_as_one_order(tmp_path) -> None:
         assert "Mã API <code>API-ORDER-999</code>" in orders_page.text
         assert "2 tài khoản" in orders_page.text
         assert "40.000đ" in orders_page.text
+        assert "Tên sản phẩm lúc mua" in orders_page.text
         assert re.search(r'<span class="status wait">Lê Hải</span>', orders_page.text)
         assert "B-SHOP-123" in client.get(
             "/admin/orders", params={"q": "@groupedbuyer"}
+        ).text
+        assert "B-SHOP-123" in client.get(
+            "/admin/orders", params={"q": "Tên sản phẩm lúc mua"}
         ).text
         assert "B-SHOP-123" in client.get("/admin/orders?source=lehai").text
         assert "B-SHOP-123" not in client.get("/admin/orders?source=sumistore").text
@@ -2563,6 +2569,7 @@ def test_dashboard_groups_multi_item_purchase_as_one_order(tmp_path) -> None:
         assert "Mã đơn API" in detail.text
         assert "API-ORDER-999" in detail.text
         assert "Nguồn hàng</dt><dd>Lê Hải" in detail.text
+        assert "Tên sản phẩm lúc mua" in detail.text
         assert "account-one:secret" in detail.text
         assert "account-two:secret" in detail.text
 
