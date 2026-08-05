@@ -11,7 +11,7 @@ from app.wallet_ledger import apply_wallet_change
 
 
 ACTIVE_SMS_STATUSES = ("requesting", "pending", "unknown")
-AMBIGUOUS_RENT_ERRORS = {"PROVIDER_UNAVAILABLE", "INVALID_RESPONSE"}
+AMBIGUOUS_RENT_ERRORS = {"INVALID_RESPONSE"}
 
 
 def _as_utc(value: datetime | None) -> datetime | None:
@@ -86,6 +86,10 @@ class SmsReviewAlert:
 
 
 def _is_ambiguous_rent_error(code: str) -> bool:
+    # A provider connection failure does not return an order ID or phone
+    # number, so the shop treats it as a failed rental and refunds the user.
+    if code == "PROVIDER_UNAVAILABLE":
+        return False
     if code in AMBIGUOUS_RENT_ERRORS:
         return True
     # RentSim uses HTTP 500 when the rent request itself fails before an

@@ -297,7 +297,7 @@ def test_sms_provider_failure_refunds_reserved_wallet_balance() -> None:
     asyncio.run(scenario())
 
 
-def test_ambiguous_provider_failure_holds_balance_for_review() -> None:
+def test_provider_unavailable_refunds_wallet_instead_of_opening_review() -> None:
     async def scenario() -> None:
         engine, sessions = await make_database()
         client = FakeRentSim()
@@ -312,18 +312,18 @@ def test_ambiguous_provider_failure_holds_balance_for_review() -> None:
             client,  # type: ignore[arg-type]
         )
         assert result.ok is False
-        assert result.message == "provider_result_unknown"
-        assert result.status == "unknown"
+        assert result.message == "provider_unavailable"
+        assert result.status == "refunded"
         assert result.provider_balance_before == 50_000
-        assert result.provider_balance_after == 49_000
+        assert result.provider_balance_after is None
 
-        blocked = await rent_sms_number(
+        cooldown = await rent_sms_number(
             sessions,
             3051,
             client,  # type: ignore[arg-type]
-            now=datetime.now(UTC) + timedelta(minutes=10),
+            now=datetime.now(UTC) + timedelta(seconds=1),
         )
-        assert blocked.message == "provider_result_unknown"
+        assert cooldown.message == "cooldown"
         assert client.rent_count == 1
         async with sessions() as session:
             user = await session.get(User, 3051)
@@ -331,10 +331,12 @@ def test_ambiguous_provider_failure_holds_balance_for_review() -> None:
             adjustments = int(
                 await session.scalar(select(func.count(BalanceAdjustment.id))) or 0
             )
-            assert user is not None and user.balance == 3_000
-            assert rental is not None and rental.status == "unknown"
-            assert rental.provider_balance_after == 49_000
-            assert adjustments == 0
+            assert user is not None and user.balance == 5_000
+            assert rental is not None and rental.status == "refunded"
+            assert rental.provider_order_id is None
+            assert rental.phone_number is None
+            assert adjustments == 1
+        assert await pending_sms_review_alerts(sessions) == []
         await engine.dispose()
 
     asyncio.run(scenario())

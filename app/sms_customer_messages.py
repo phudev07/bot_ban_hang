@@ -78,7 +78,10 @@ def rental_failure_text(
             ),
             "blocked": "Your account is blocked. Please contact support.",
             "invalid_key": "SMS rental is temporarily unavailable. Please try again later.",
-            "provider_unavailable": "SMS rental is temporarily unavailable. Please try again later.",
+            "provider_unavailable": (
+                "SMS rental is temporarily unavailable. Your full rental amount has been "
+                "refunded. Please try again after 60 seconds."
+            ),
             "provider_result_unknown": (
                 f"The rental result is unclear. {format_vnd(sale_amount)} is temporarily "
                 "held for review; it has not been marked as successful or refunded yet."
@@ -108,7 +111,10 @@ def rental_failure_text(
             ),
             "blocked": "Tài khoản đang bị khóa. Hãy liên hệ hỗ trợ.",
             "invalid_key": "Dịch vụ thuê số đang tạm gián đoạn. Vui lòng thử lại sau.",
-            "provider_unavailable": "Dịch vụ thuê số đang tạm gián đoạn. Vui lòng thử lại sau.",
+            "provider_unavailable": (
+                "Dịch vụ thuê số đang tạm gián đoạn. Toàn bộ tiền thuê đã được hoàn vào ví. "
+                "Bạn thử thuê lại sau 60 giây."
+            ),
             "provider_result_unknown": (
                 f"Kết quả thuê số chưa xác định. Khoản {format_vnd(sale_amount)} đang được "
                 "tạm giữ để đối soát, chưa tính là thuê thành công và chưa tự động hoàn. "

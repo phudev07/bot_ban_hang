@@ -38,7 +38,7 @@ def assert_upstream_details_hidden(text: str) -> None:
         ("cooldown", ""),
         ("blocked", ""),
         ("invalid_key", "refunded"),
-        ("provider_unavailable", "unknown"),
+        ("provider_unavailable", "refunded"),
         ("provider_result_unknown", "unknown"),
         ("provider_error_refunded", "refunded"),
         ("https://rentsim.net/provider_http_500?server=kh2", "refunded"),
