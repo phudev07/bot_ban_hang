@@ -19,6 +19,7 @@ from app.dashboard import create_dashboard_router
 from app.dashboard_security import LoginRateLimiter
 from app.deposit_notifications import send_deposit_notification
 from app.delivery import delivery_keyboard, delivery_text
+from app.haji_suppliers import HajiClient
 from app.keyboards import main_menu
 from app.lehai_suppliers import LeHaiPremiumClient
 from app.models import ApiRequestAudit
@@ -60,6 +61,7 @@ def create_api(
     rentsim_client: RentSimClient | None = None,
     canboso_client: CanbosoClient | None = None,
     nce_client: NceClient | None = None,
+    haji_client: HajiClient | None = None,
 ) -> FastAPI:
     owned_api_redis = api_redis is None
     api_redis_client = api_redis or Redis.from_url(settings.redis_url, decode_responses=True)
@@ -222,6 +224,7 @@ def create_api(
                 bot,
                 canboso_client=canboso_client,
                 nce_client=nce_client,
+                haji_client=haji_client,
             )
         )
 
@@ -340,6 +343,7 @@ def create_api(
                 lehai_client=lehai_client,
                 canboso_client=canboso_client,
                 nce_client=nce_client,
+                haji_client=haji_client,
             )
         finally:
             if fulfillment_message is not None:

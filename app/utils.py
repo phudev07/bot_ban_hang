@@ -85,15 +85,15 @@ def safe_html(value: object) -> str:
 # descriptions are editable data, so redact provider names/URLs at every public
 # delivery boundary instead of relying on each caller to remember the policy.
 _SUPPLIER_URL_RE = re.compile(
-    r"https?://[^\s<>\"']*(?:sumistore|lehaipremium|canboso|api\.dichvuright|rentsim|sentsim)[^\s<>\"']*",
+    r"https?://[^\s<>\"']*(?:sumistore|lehaipremium|canboso|api\.dichvuright|api\.haji|rentsim|sentsim)[^\s<>\"']*",
     re.IGNORECASE,
 )
 _SUPPLIER_DOMAIN_RE = re.compile(
-    r"\b(?:api\.)?(?:sumistore\.me|lehaipremium\.me|canboso\.com|rentsim\.net|sentsim\.[a-z]{2,})\b|\bapi\.dichvuright\.ai\b",
+    r"\b(?:api\.)?(?:sumistore\.me|lehaipremium\.me|canboso\.com|haji\.in\.net|rentsim\.net|sentsim\.[a-z]{2,})\b|\bapi\.(?:dichvuright\.ai|haji\.in\.net)\b",
     re.IGNORECASE,
 )
 _SUPPLIER_NAME_RE = re.compile(
-    r"(?<![\w])(?:sumistore|sumi|canboso|nce|l[eê]\s*h(?:ải|ai)(?:\s*premium)?|lehai(?:premium)?|"
+    r"(?<![\w])(?:sumistore|sumi|canboso|nce|haji|l[eê]\s*h(?:ải|ai)(?:\s*premium)?|lehai(?:premium)?|"
     r"rent\s*sim|rentsim|sentsim)(?![\w])",
     re.IGNORECASE,
 )

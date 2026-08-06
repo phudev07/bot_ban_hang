@@ -100,7 +100,7 @@ and binds port 8080 only to localhost. Caddy is the public reverse proxy.
   can show both Sumi and Le Hai.
 - Supplier cost is saved at delivery time. Dashboard profit is revenue minus cost minus
   referral commission.
-- Sumi, Le Hai, Canboso, NCE Codex/Claude, and RentSim keys live only in production `.env`.
+- Sumi, Le Hai, Canboso, NCE Codex/Claude, Haji, and RentSim keys live only in production `.env`.
 - Warehouse API partners receive shop product IDs and shop selling prices, never supplier
   keys, supplier URLs, supplier product IDs, supplier order IDs, or supplier cost.
 - Warehouse API only sells active account products. SMS rental is excluded.
@@ -316,6 +316,21 @@ The Buyer API base URL is `https://api.dichvuright.ai`. The customer-facing gate
 is `https://gateway.dichvuright.ai`; never point supplier catalog or purchase calls at
 the gateway host.
 
+Enable or rotate the Haji dealer API key from the Windows clipboard. The provider currently
+issues both `dl_` and `sk-` formats, so verify the clipboard with the read-only `/api/v2/me`
+endpoint before writing it. The helper rejects other clipboard content:
+
+```powershell
+Get-Clipboard | ssh -i "$HOME\.ssh\codex_vps" root@160.191.243.91 `
+  "cd /opt/telegram-sepay-shop && python deploy/set_haji_key.py .env"
+
+ssh -i "$HOME\.ssh\codex_vps" root@160.191.243.91 `
+  "cd /opt/telegram-sepay-shop && docker compose up -d --force-recreate app"
+```
+
+Use `GET /api/v2/me` and `GET /api/v2/catalog` for verification. Do not call
+`POST /api/v2/orders` as a smoke test because it creates a real paid order.
+
 ## 11. Caddy and Cloudflare
 
 Repository configuration: `deploy/Caddyfile`.
@@ -491,6 +506,7 @@ user ID, deposit code, log ID, screenshot, or exact time window.
 | Product purchase and wallet flow | `app/services.py`, `app/wallet_ledger.py` |
 | Sumi integration | `app/suppliers.py`, `app/supplier_recovery.py` |
 | Le Hai integration | `app/lehai_suppliers.py` |
+| Haji Netflix/GPT GCash/GPT K12 integration | `app/haji_suppliers.py` |
 | RentSim/SMS | `app/rentsim.py`, `app/sms_rentals.py` |
 | Telegram handlers | `app/handlers.py`, `app/keyboards.py` |
 | Admin dashboard | `app/dashboard.py`, `app/templates/` |

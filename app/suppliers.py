@@ -23,7 +23,7 @@ from app.stock_alerts import apply_supplier_stock
 
 logger = logging.getLogger(__name__)
 
-EXTERNAL_FULFILLMENT_SOURCES = ("sumistore", "lehai", "canboso", "nce")
+EXTERNAL_FULFILLMENT_SOURCES = ("sumistore", "lehai", "canboso", "nce", "haji")
 SELLABLE_FULFILLMENT_SOURCES = ("local", *EXTERNAL_FULFILLMENT_SOURCES)
 SUMISTORE_ALTERNATIVE_PRODUCTS: dict[str, tuple[str, str]] = {
     # The same GPT Plus account is available from both supplier wallets.
@@ -244,6 +244,8 @@ def product_supplier_api_enabled(product: Product, provider: str) -> bool:
         return getattr(product, "canboso_api_enabled", True) is not False
     if provider == "nce":
         return True
+    if provider == "haji":
+        return True
     return False
 
 
@@ -260,7 +262,13 @@ def enabled_supplier_providers(product: Product) -> frozenset[str]:
 
 def supplier_route_sort_key(route: SupplierRoute) -> tuple[int, int, str]:
     # Equal-cost GPT prefers Sumi; equal-cost GG 18M prefers Canboso over Le Hai.
-    provider_priority = {"sumistore": 0, "canboso": 1, "lehai": 2, "nce": 3}
+    provider_priority = {
+        "sumistore": 0,
+        "canboso": 1,
+        "lehai": 2,
+        "nce": 3,
+        "haji": 4,
+    }
     return (
         max(0, int(route.snapshot.unit_price)),
         provider_priority.get(route.provider, 99),
@@ -347,6 +355,7 @@ async def fetch_product_supplier_routes(
     lehai_client: ExternalSupplierClient | None,
     canboso_client: ExternalSupplierClient | None = None,
     nce_client: ExternalSupplierClient | None = None,
+    haji_client: ExternalSupplierClient | None = None,
     *,
     enabled_providers: Collection[str] | None = None,
 ) -> SupplierRouteFetch:
@@ -356,6 +365,7 @@ async def fetch_product_supplier_routes(
         "lehai": lehai_client,
         "canboso": canboso_client,
         "nce": nce_client,
+        "haji": haji_client,
     }
     specs = [
         (provider, route_product_id, client)

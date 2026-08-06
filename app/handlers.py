@@ -23,6 +23,7 @@ from app.flash_sales import (
     active_flash_sale_prices,
     flash_sale_remaining,
 )
+from app.haji_suppliers import HajiClient
 from app.keyboards import (
     back_menu,
     categories_menu,
@@ -267,6 +268,7 @@ def create_router(
     rentsim_client: RentSimClient | None = None,
     canboso_client: ExternalSupplierClient | None = None,
     nce_client: NceClient | None = None,
+    haji_client: HajiClient | None = None,
 ) -> Router:
     router = Router(name="customer")
     warehouse_docs_url = (
@@ -905,6 +907,7 @@ def create_router(
             lehai_client=lehai_client,
             canboso_client=canboso_client,
             nce_client=nce_client,
+            haji_client=haji_client,
             refresh_external=True,
             refresh_max_age_seconds=settings.supplier_ui_cache_seconds,
         )
@@ -1010,6 +1013,7 @@ def create_router(
                 lehai_client=lehai_client,
                 canboso_client=canboso_client,
                 nce_client=nce_client,
+                haji_client=haji_client,
                 coupon_id=coupon_id,
                 referral_commission_percent=settings.referral_commission_percent,
                 on_fulfillment_started=(
@@ -1229,6 +1233,7 @@ def create_router(
             lehai_client=lehai_client,
             canboso_client=canboso_client,
             nce_client=nce_client,
+            haji_client=haji_client,
             refresh_external=True,
             refresh_max_age_seconds=settings.supplier_ui_cache_seconds,
         )
@@ -1306,6 +1311,7 @@ def create_router(
             lehai_client=lehai_client,
             canboso_client=canboso_client,
             nce_client=nce_client,
+            haji_client=haji_client,
             refresh_external=True,
             refresh_max_age_seconds=settings.supplier_ui_cache_seconds,
         )
@@ -1388,6 +1394,7 @@ def create_router(
             lehai_client=lehai_client,
             canboso_client=canboso_client,
             nce_client=nce_client,
+            haji_client=haji_client,
             refresh_external=True,
             refresh_max_age_seconds=settings.supplier_ui_cache_seconds,
         )
@@ -1496,6 +1503,7 @@ def create_router(
             lehai_client=lehai_client,
             canboso_client=canboso_client,
             nce_client=nce_client,
+            haji_client=haji_client,
             refresh_external=True,
             refresh_max_age_seconds=settings.supplier_ui_cache_seconds,
         )
@@ -1646,6 +1654,7 @@ def create_router(
                 lehai_client=lehai_client,
                 canboso_client=canboso_client,
                 nce_client=nce_client,
+                haji_client=haji_client,
                 refresh_external=True,
                 refresh_max_age_seconds=settings.supplier_ui_cache_seconds,
             )
@@ -1687,6 +1696,7 @@ def create_router(
             lehai_client,
             canboso_client=canboso_client,
             nce_client=nce_client,
+            haji_client=haji_client,
             local_stock=local_stock,
         )
         if supplier_quote is not None and not supplier_quote.available:

@@ -15,6 +15,8 @@ SUPPLIER_MARKERS = (
     "rent sim",
     "sentsim",
     "canboso",
+    "haji",
+    "api.haji.in.net",
     "api.dichvuright.ai",
     "provider_http",
     "supplier_http",
@@ -33,7 +35,8 @@ def test_customer_text_redacts_all_supplier_identities_and_source_markers() -> N
     text = sanitize_customer_text(
         "SumiStore / Sumi / Lê Hải Premium / lehai / RentSim / Sentsim / Canboso / NCE "
         "https://api.lehaipremium.me/api SP-GEF55PBV provider_http_500 "
-        "https://api.dichvuright.ai/api/telegram-buyer/products"
+        "https://api.dichvuright.ai/api/telegram-buyer/products "
+        "Haji https://api.haji.in.net/api/v2/catalog"
     )
 
     assert_no_supplier_markers(text)

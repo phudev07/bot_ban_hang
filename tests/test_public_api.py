@@ -209,6 +209,19 @@ def test_warehouse_api_purchases_from_shared_wallet_and_is_idempotent(tmp_path) 
             )
             session.add(sms_product)
             await session.flush()
+            haji_product = Product(
+                category_id=category.id,
+                name_vi="Netflix 4K Premium",
+                name_en="Netflix 4K Premium",
+                price=25_000,
+                product_type="account",
+                fulfillment_source="haji",
+                supplier_product_id="netflix_4k",
+                external_stock=10,
+                active=True,
+            )
+            session.add(haji_product)
+            await session.flush()
             session.add_all(
                 [
                     InventoryItem(
@@ -231,13 +244,21 @@ def test_warehouse_api_purchases_from_shared_wallet_and_is_idempotent(tmp_path) 
             cipher,
             product.id,
             sms_product.id,
+            haji_product.id,
             api_client.api_id,
             api_secret,
         )
 
-    engine, sessions, cipher, product_id, sms_product_id, api_id, api_secret = asyncio.run(
-        setup_database()
-    )
+    (
+        engine,
+        sessions,
+        cipher,
+        product_id,
+        sms_product_id,
+        haji_product_id,
+        api_id,
+        api_secret,
+    ) = asyncio.run(setup_database())
     assert api_secret is not None
     settings = Settings(
         _env_file=None,
@@ -294,7 +315,12 @@ def test_warehouse_api_purchases_from_shared_wallet_and_is_idempotent(tmp_path) 
         assert products.json()["products"][0]["stock"] == 2
         assert products.json()["products"][0]["flash_sale_id"] is None
 
-        for path in (f"/v1/products/{sms_product_id}", f"/v1/stock/{sms_product_id}"):
+        for path in (
+            f"/v1/products/{sms_product_id}",
+            f"/v1/stock/{sms_product_id}",
+            f"/v1/products/{haji_product_id}",
+            f"/v1/stock/{haji_product_id}",
+        ):
             blocked_stock = client.get(
                 path,
                 headers=signed_headers(api_id, api_secret, "GET", path),
@@ -320,6 +346,25 @@ def test_warehouse_api_purchases_from_shared_wallet_and_is_idempotent(tmp_path) 
         )
         assert blocked_order.status_code == 404
         assert blocked_order.json()["detail"]["code"] == "PRODUCT_NOT_FOUND"
+
+        haji_blocked_body = json.dumps(
+            {"product_id": haji_product_id, "quantity": 1, "max_unit_price": 25_000},
+            separators=(",", ":"),
+        ).encode()
+        haji_blocked_order = client.post(
+            "/v1/orders",
+            content=haji_blocked_body,
+            headers=signed_headers(
+                api_id,
+                api_secret,
+                "POST",
+                "/v1/orders",
+                haji_blocked_body,
+                idempotency_key="HAJI-ORDER-BLOCKED-01",
+            ),
+        )
+        assert haji_blocked_order.status_code == 404
+        assert haji_blocked_order.json()["detail"]["code"] == "PRODUCT_NOT_FOUND"
 
         missing_price_body = json.dumps(
             {"product_id": product_id, "quantity": 1},

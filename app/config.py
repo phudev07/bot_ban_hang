@@ -95,6 +95,14 @@ class Settings(BaseSettings):
     nce_sync_seconds: int = 60
     nce_audit_seconds: int = 30
 
+    haji_enabled: bool = False
+    haji_base_url: str = "https://api.haji.in.net"
+    haji_api_key: SecretStr = SecretStr("")
+    haji_markup: int = 5_000
+    haji_timeout_seconds: float = 15
+    haji_sync_seconds: int = 60
+    haji_audit_seconds: int = 30
+
     rentsim_enabled: bool = False
     rentsim_base_url: str = "http://rentsim.net:8080"
     rentsim_api_key: SecretStr = SecretStr("")
@@ -198,6 +206,16 @@ class Settings(BaseSettings):
             raise ValueError("Codex and Claude API sync interval must be at least 15 seconds")
         if self.nce_audit_seconds < 10:
             raise ValueError("Codex and Claude API audit interval must be at least 10 seconds")
+        if self.haji_enabled and not self.haji_api_key.get_secret_value():
+            raise ValueError("Haji dealer API key is missing")
+        if self.haji_enabled and not self.haji_base_url.strip():
+            raise ValueError("Haji API base URL is missing")
+        if self.haji_markup < 0 or self.haji_timeout_seconds <= 0:
+            raise ValueError("Haji price or timeout configuration is invalid")
+        if self.haji_sync_seconds < 15:
+            raise ValueError("Haji sync interval must be at least 15 seconds")
+        if self.haji_audit_seconds < 10:
+            raise ValueError("Haji audit interval must be at least 10 seconds")
         if self.rentsim_enabled and not self.rentsim_api_key.get_secret_value():
             raise ValueError("RentSim is enabled but API key is missing")
         if (

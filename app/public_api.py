@@ -378,7 +378,11 @@ def create_public_api_router(
     async def products(principal: ApiPrincipal = Depends(authenticate)) -> dict[str, object]:
         async with session_factory() as session:
             rows = await active_products(session)
-            rows = [product for product in rows if product.fulfillment_source != "nce"]
+            rows = [
+                product
+                for product in rows
+                if product.fulfillment_source not in {"nce", "haji"}
+            ]
             flash_sales = await active_flash_sale_campaigns(
                 session, [product.id for product in rows]
             )
@@ -431,7 +435,7 @@ def create_public_api_router(
                 or not product.active
                 or product.archived_at is not None
                 or product.product_type != "account"
-                or product.fulfillment_source == "nce"
+                or product.fulfillment_source in {"nce", "haji"}
                 or product.fulfillment_source not in SELLABLE_FULFILLMENT_SOURCES
             ):
                 raise api_error(404, "PRODUCT_NOT_FOUND", "Product does not exist")
@@ -494,6 +498,7 @@ def create_public_api_router(
                         Product.archived_at.is_(None),
                         Product.product_type == "account",
                         Product.fulfillment_source.in_(SELLABLE_FULFILLMENT_SOURCES),
+                        Product.fulfillment_source.not_in(("nce", "haji")),
                     )
                 )
                 if product_exists is None:

@@ -25,6 +25,12 @@ from app.canboso_suppliers import create_canboso_client
 from app.config import get_settings
 from app.database import Base, DatabaseSessionMiddleware, create_database
 from app.handlers import create_router
+from app.haji_suppliers import (
+    HajiClient,
+    create_haji_client,
+    ensure_haji_products,
+    sync_haji_products,
+)
 from app.keyboards import sms_waiting_menu
 from app.lehai_suppliers import (
     LeHaiPremiumClient,
@@ -1038,6 +1044,22 @@ async def nce_sync_worker(
         await asyncio.sleep(max(15, interval_seconds))
 
 
+async def haji_sync_worker(
+    session_factory,
+    client: HajiClient,
+    interval_seconds: int,
+    markup: int,
+) -> None:
+    while True:
+        try:
+            await sync_haji_products(session_factory, client, markup=markup)
+        except Exception:
+            logging.getLogger(__name__).exception(
+                "Could not synchronize Netflix and GPT supplier products"
+            )
+        await asyncio.sleep(max(15, interval_seconds))
+
+
 async def notify_unresolved_supplier_alerts(
     session_factory,
     bot: Bot,
@@ -1324,6 +1346,12 @@ async def main() -> None:
     canboso_client = create_canboso_client(settings)
     nce_client = create_nce_client(settings)
     await ensure_nce_products(session_factory, nce_client)
+    haji_client = create_haji_client(settings)
+    await ensure_haji_products(
+        session_factory,
+        haji_client,
+        markup=settings.haji_markup,
+    )
     rentsim_client = create_rentsim_client(settings)
 
     cipher = SecretCipher(settings.inventory_encryption_key.get_secret_value())
@@ -1369,6 +1397,7 @@ async def main() -> None:
             rentsim_client,
             canboso_client=canboso_client,
             nce_client=nce_client,
+            haji_client=haji_client,
         )
     )
 
@@ -1384,6 +1413,7 @@ async def main() -> None:
         rentsim_client=rentsim_client,
         canboso_client=canboso_client,
         nce_client=nce_client,
+        haji_client=haji_client,
     )
     server = uvicorn.Server(
         uvicorn.Config(
@@ -1557,6 +1587,33 @@ async def main() -> None:
         if nce_client is not None
         else None
     )
+    haji_sync_task = (
+        asyncio.create_task(
+            haji_sync_worker(
+                session_factory,
+                haji_client,
+                settings.haji_sync_seconds,
+                settings.haji_markup,
+            )
+        )
+        if haji_client is not None
+        else None
+    )
+    haji_audit_task = (
+        asyncio.create_task(
+            supplier_audit_worker(
+                session_factory,
+                haji_client,
+                bot,
+                settings.admin_ids,
+                settings.haji_audit_seconds,
+                provider="haji",
+                provider_label="Haji",
+            )
+        )
+        if haji_client is not None
+        else None
+    )
     rentsim_task = (
         asyncio.create_task(
             rentsim_otp_worker(
@@ -1631,6 +1688,14 @@ async def main() -> None:
             nce_audit_task.cancel()
             with contextlib.suppress(asyncio.CancelledError):
                 await nce_audit_task
+        if haji_sync_task is not None:
+            haji_sync_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await haji_sync_task
+        if haji_audit_task is not None:
+            haji_audit_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await haji_audit_task
         if rentsim_task is not None:
             rentsim_task.cancel()
             with contextlib.suppress(asyncio.CancelledError):
@@ -1646,6 +1711,7 @@ async def main() -> None:
             lehai_client,
             canboso_client,
             nce_client,
+            haji_client,
             rentsim_client,
         ):
             if external_client is not None:

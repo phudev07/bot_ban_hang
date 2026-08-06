@@ -24,6 +24,7 @@ from sqlalchemy.orm import aliased
 
 from app.canboso_suppliers import CanbosoClient
 from app.config import Settings
+from app.haji_suppliers import HajiClient
 from app.inventory_dedup import filter_duplicate_inventory
 from app.lehai_suppliers import LeHaiPremiumClient
 from app.models import (
@@ -105,6 +106,7 @@ SUPPLIER_PROVIDER_LABELS = {
     "lehai": "Lê Hải",
     "canboso": "Canboso",
     "nce": "API Codex & Claude",
+    "haji": "Haji",
 }
 
 WALLET_KIND_LABELS = {
@@ -236,6 +238,8 @@ def order_supplier_provider(order: Order) -> str:
         return "canboso"
     if code.startswith("NCE-"):
         return "nce"
+    if code.startswith("HAJI-"):
+        return "haji"
     return "local"
 
 
@@ -249,6 +253,7 @@ def order_supplier_provider_expression():
         (Order.supplier_order_code.like("LHP-%"), "lehai"),
         (Order.supplier_order_code.like("CBS-%"), "canboso"),
         (Order.supplier_order_code.like("NCE-%"), "nce"),
+        (Order.supplier_order_code.like("HAJI-%"), "haji"),
         else_="local",
     )
 
@@ -256,7 +261,7 @@ def order_supplier_provider_expression():
 def order_supplier_label(providers: set[str]) -> str:
     ordered = [
         provider
-        for provider in ("sumistore", "canboso", "lehai", "nce", "local")
+        for provider in ("sumistore", "canboso", "lehai", "nce", "haji", "local")
         if provider in providers
     ]
     return " + ".join(
@@ -679,6 +684,7 @@ def create_dashboard_router(
     *,
     canboso_client: CanbosoClient | None = None,
     nce_client: NceClient | None = None,
+    haji_client: HajiClient | None = None,
 ) -> APIRouter:
     router = APIRouter()
     route_cache: dict[tuple[str, ...], tuple[float, SupplierRouteFetch]] = {}
@@ -692,6 +698,7 @@ def create_dashboard_router(
             and lehai_client is None
             and canboso_client is None
             and nce_client is None
+            and haji_client is None
         ):
             return None
         if not product.supplier_product_id:
@@ -719,6 +726,7 @@ def create_dashboard_router(
                 lehai_client,
                 canboso_client,
                 nce_client,
+                haji_client,
                 enabled_providers=enabled_providers,
             )
             route_cache[cache_key] = (now, fetched)
@@ -1857,6 +1865,7 @@ def create_dashboard_router(
                     lehai_client,
                     canboso_client,
                     nce_client,
+                    haji_client,
                 )
             active_campaign = await session.scalar(
                 select(FlashSaleCampaign)
@@ -3136,6 +3145,7 @@ def create_dashboard_router(
                 lehai_client,
                 canboso_client,
                 nce_client,
+                haji_client,
             )
             if normalized_source != "local"
             else ()
@@ -3249,6 +3259,7 @@ def create_dashboard_router(
                                 lehai_client,
                                 canboso_client,
                                 nce_client,
+                                haji_client,
                                 enabled_providers=enabled_supplier_providers(product),
                             )
                             selected_route = next(
@@ -3305,6 +3316,7 @@ def create_dashboard_router(
                                 lehai_client,
                                 canboso_client,
                                 nce_client,
+                                haji_client,
                             )
                             if external_client is None:
                                 await session.rollback()
@@ -5300,12 +5312,14 @@ def create_dashboard_router(
             "lehai": lehai_client,
             "canboso": canboso_client,
             "nce": nce_client,
+            "haji": haji_client,
         }
         provider_labels = {
             PROVIDER: "Sumi",
             "lehai": "Lê Hải Premium",
             "canboso": "Canboso",
             "nce": "API Codex & Claude",
+            "haji": "Haji",
         }
         selected_provider = provider if provider in provider_clients else PROVIDER
         provider_label = provider_labels[selected_provider]
@@ -5445,12 +5459,14 @@ def create_dashboard_router(
             "lehai": lehai_client,
             "canboso": canboso_client,
             "nce": nce_client,
+            "haji": haji_client,
         }
         provider_labels = {
             PROVIDER: "Sumi",
             "lehai": "Lê Hải Premium",
             "canboso": "Canboso",
             "nce": "API Codex & Claude",
+            "haji": "Haji",
         }
         selected_provider = provider if provider in provider_clients else PROVIDER
         provider_label = provider_labels[selected_provider]
