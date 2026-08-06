@@ -105,7 +105,7 @@ SUPPLIER_PROVIDER_LABELS = {
     "sumistore": "Sumi",
     "lehai": "Lê Hải",
     "canboso": "Canboso",
-    "nce": "API Codex & Claude",
+    "nce": "Codex/Claude (lịch sử API)",
     "haji": "Haji",
 }
 
@@ -5317,7 +5317,7 @@ def create_dashboard_router(
             PROVIDER: "Sumi",
             "lehai": "Lê Hải Premium",
             "canboso": "Canboso",
-            "nce": "API Codex & Claude",
+            "nce": "Codex/Claude (lịch sử API)",
             "haji": "Haji",
         }
         selected_provider = provider if provider in provider_clients else PROVIDER
@@ -5464,7 +5464,7 @@ def create_dashboard_router(
             PROVIDER: "Sumi",
             "lehai": "Lê Hải Premium",
             "canboso": "Canboso",
-            "nce": "API Codex & Claude",
+            "nce": "Codex/Claude (lịch sử API)",
             "haji": "Haji",
         }
         selected_provider = provider if provider in provider_clients else PROVIDER
