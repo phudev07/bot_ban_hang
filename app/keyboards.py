@@ -271,6 +271,19 @@ def product_detail(
                 [InlineKeyboardButton(text=coupon_label, callback_data=f"coupon:{product.id}")]
             )
     family = nce_family_from_product(product)
+    if family is not None:
+        rows.append(
+            [
+                InlineKeyboardButton(
+                    text=(
+                        "📘 Hướng dẫn kích hoạt & sử dụng"
+                        if language == "vi"
+                        else "📘 Activation & setup guide"
+                    ),
+                    url="https://token.vietshare.site/codex-claude",
+                )
+            ]
+        )
     back_callback = (
         f"nce-family:{product.category_id}:{family}"
         if family is not None

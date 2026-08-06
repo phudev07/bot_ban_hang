@@ -144,6 +144,23 @@ def test_product_detail_offers_product_specific_discount_code() -> None:
     assert "coupon:10" in callbacks
 
 
+def test_codex_product_detail_links_to_the_public_setup_guide() -> None:
+    product = make_product()
+    product.name_vi = "API CODEX - 50M token"
+    product.name_en = "CODEX API - 50M tokens"
+
+    keyboard = product_detail(product, "vi", stock=3)
+    guide_buttons = [
+        button
+        for row in keyboard.inline_keyboard
+        for button in row
+        if button.url == "https://token.vietshare.site/codex-claude"
+    ]
+
+    assert len(guide_buttons) == 1
+    assert "Hướng dẫn" in guide_buttons[0].text
+
+
 def test_order_history_groups_items_under_one_shop_order_code() -> None:
     product = make_product()
     orders = [

@@ -10,7 +10,7 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Request
-from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
 from pydantic import BaseModel, ConfigDict, Field
 from redis.asyncio import Redis
@@ -45,6 +45,10 @@ from app.utils import SecretCipher, sanitize_customer_text
 
 templates = Jinja2Templates(directory=Path(__file__).parent / "templates")
 logger = logging.getLogger(__name__)
+CODEX_SETUP_PATH = Path(__file__).parent / "static" / "VietShare-Codex-Setup.exe"
+CODEX_ACTIVATION_URL = "https://gateway.dichvuright.ai/redeem"
+CODEX_GATEWAY_URL = "https://gateway.dichvuright.ai/v1"
+CODEX_MODELS = ("cx/gpt-5.6-sol", "cx/gpt-5.5")
 API_PROCESSING_RECOVERY_AFTER = timedelta(minutes=15)
 API_ID_PATTERN = re.compile(r"^VS[0-9A-F]{16}$")
 API_SIGNATURE_PATTERN = re.compile(r"^[0-9a-fA-F]{64}$")
@@ -149,6 +153,41 @@ def public_order_failure_code(message: str) -> str:
 
 def create_public_api_docs_router(settings: Settings) -> APIRouter:
     router = APIRouter(tags=["shop-api-docs"])
+
+    @router.get("/codex-claude", response_class=HTMLResponse)
+    @router.get("/codex-claude/", response_class=HTMLResponse, include_in_schema=False)
+    async def codex_claude_guide(request: Request) -> HTMLResponse:
+        setup_hash = (
+            hashlib.sha256(CODEX_SETUP_PATH.read_bytes()).hexdigest()
+            if CODEX_SETUP_PATH.is_file()
+            else ""
+        )
+        response = templates.TemplateResponse(
+            request,
+            "codex_claude_guide.html",
+            {
+                "activation_url": CODEX_ACTIVATION_URL,
+                "gateway_url": CODEX_GATEWAY_URL,
+                "models": CODEX_MODELS,
+                "setup_hash": setup_hash,
+            },
+        )
+        response.headers["Cache-Control"] = "public, max-age=300"
+        return response
+
+    @router.get("/codex-setup.exe", response_class=FileResponse)
+    async def download_codex_setup() -> FileResponse:
+        if not CODEX_SETUP_PATH.is_file():
+            raise HTTPException(status_code=404, detail="Setup tool is unavailable")
+        return FileResponse(
+            CODEX_SETUP_PATH,
+            media_type="application/vnd.microsoft.portable-executable",
+            filename="VietShare-Codex-Setup.exe",
+            headers={
+                "Cache-Control": "public, max-age=300",
+                "X-Content-Type-Options": "nosniff",
+            },
+        )
 
     @router.get("/docs", response_class=HTMLResponse)
     @router.get("/docs/", response_class=HTMLResponse, include_in_schema=False)
