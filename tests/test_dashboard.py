@@ -36,6 +36,7 @@ from app.models import (
     User,
     WalletTransaction,
 )
+from app.price_alerts import apply_supplier_price
 from app.services import active_products, purchase_product
 from app.suppliers import SupplierError, SupplierPurchase, SupplierSnapshot
 from app.utils import SecretCipher
@@ -622,6 +623,31 @@ def test_admin_can_disable_each_gpt_plus_api_source(tmp_path) -> None:
         products_page = client.get("/admin/products")
         assert re.search(r"Lê Hải:\s*<strong>Tắt</strong>", products_page.text)
 
+        price_only = client.post(
+            f"/admin/products/{product_id}",
+            data=product_form(
+                csrf,
+                price="34.000",
+                supplier_markup="5.000",
+                sumistore_api_enabled="1",
+            ),
+            follow_redirects=False,
+        )
+        assert price_only.status_code == 303
+
+        async def verify_price_only_updates_markup() -> None:
+            async with sessions() as session:
+                product = await session.get(Product, product_id)
+                assert product is not None
+                assert product.supplier_price == 25_000
+                assert product.price == 34_000
+                assert product.supplier_markup == 9_000
+                await apply_supplier_price(session, product, 25_000)
+                await session.commit()
+                assert product.price == 34_000
+
+        asyncio.run(verify_price_only_updates_markup())
+
         both_off_form = product_form(csrf, price="32.000", supplier_markup="99.000")
         both_off_form.pop("supplier_markup")
         both_off = client.post(
@@ -639,7 +665,7 @@ def test_admin_can_disable_each_gpt_plus_api_source(tmp_path) -> None:
                 assert product.lehai_api_enabled is False
                 assert product.external_stock == 1
                 assert product.price == 32_000
-                assert product.supplier_markup == 5_000
+                assert product.supplier_markup == 9_000
 
         asyncio.run(verify_both_off())
         products_page = client.get("/admin/products")
@@ -670,6 +696,7 @@ def test_admin_can_disable_each_gpt_plus_api_source(tmp_path) -> None:
                 assert product.sumistore_api_enabled is True
                 assert product.lehai_api_enabled is False
                 assert product.supplier_markup == 7_000
+                assert product.price == 32_000
 
         asyncio.run(verify_enabled_again())
 

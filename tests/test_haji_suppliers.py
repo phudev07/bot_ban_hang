@@ -295,6 +295,72 @@ def test_haji_products_are_imported_into_netflix_and_existing_gpt_categories() -
     asyncio.run(scenario())
 
 
+def test_haji_catalog_sync_preserves_admin_product_edits() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/api/v2/catalog":
+            return httpx.Response(200, json=catalog_payload())
+        if request.url.path == "/api/v2/me":
+            return httpx.Response(200, json={"ok": True, "data": {"balance": 100_000}})
+        raise AssertionError(f"Unexpected request: {request.method} {request.url}")
+
+    async def scenario() -> None:
+        engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+        async with engine.begin() as connection:
+            await connection.run_sync(Base.metadata.create_all)
+        sessions = async_sessionmaker(engine, expire_on_commit=False)
+        async with sessions() as session:
+            category = Category(name_vi="Gian hang tuy chinh", name_en="Custom category")
+            session.add(category)
+            await session.flush()
+            product = Product(
+                category_id=category.id,
+                name_vi="Ten admin da sua",
+                name_en="Admin custom name",
+                description_vi="Mo ta admin da sua",
+                description_en="Admin custom description",
+                price=27_000,
+                product_type="account",
+                allow_quantity=False,
+                max_quantity=3,
+                fulfillment_source="haji",
+                supplier_product_id="netflix_4k",
+                supplier_markup=7_000,
+                supplier_price=20_000,
+                external_stock=4,
+                active=False,
+            )
+            session.add(product)
+            await session.commit()
+            category_id = category.id
+            product_id = product.id
+
+        client = HajiClient(
+            "https://api.haji.in.net",
+            "dl_test_key_123456789",
+            transport=httpx.MockTransport(handler),
+        )
+        await ensure_haji_products(sessions, client, markup=5_000)
+
+        async with sessions() as session:
+            product = await session.get(Product, product_id)
+            assert product is not None
+            assert product.category_id == category_id
+            assert product.name_vi == "Ten admin da sua"
+            assert product.name_en == "Admin custom name"
+            assert product.description_vi == "Mo ta admin da sua"
+            assert product.description_en == "Admin custom description"
+            assert product.price == 27_000
+            assert product.supplier_markup == 7_000
+            assert product.allow_quantity is False
+            assert product.max_quantity == 3
+            assert product.active is False
+
+        await client.aclose()
+        await engine.dispose()
+
+    asyncio.run(scenario())
+
+
 class HajiBuyingSupplier:
     provider = "haji"
 

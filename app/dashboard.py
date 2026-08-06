@@ -1731,6 +1731,9 @@ def create_dashboard_router(
                 return RedirectResponse("/admin/products", status_code=303)
             old_source = product.fulfillment_source
             old_supplier_id = product.supplier_product_id
+            old_price = int(product.price)
+            old_markup = int(product.supplier_markup)
+            old_supplier_price = product.supplier_price
             if (
                 old_source in EXTERNAL_FULFILLMENT_SOURCES
                 and old_supplier_id
@@ -1747,7 +1750,6 @@ def create_dashboard_router(
             product.category_id = category_id
             product.name_vi = normalized_name
             product.name_en = name_en.strip() or normalized_name
-            product.price = parsed_price
             product.description_vi = description_vi.strip()
             product.description_en = description_en.strip() or description_vi.strip()
             product.product_type = normalized_type
@@ -1798,8 +1800,35 @@ def create_dashboard_router(
             new_enabled = enabled_supplier_providers(product)
             if normalized_source == "local":
                 product.supplier_markup = 0
-            elif new_enabled and parsed_markup is not None:
-                product.supplier_markup = parsed_markup
+                product.price = parsed_price
+            elif not new_enabled:
+                # With every API route disabled, this is the direct local-stock price.
+                # Retain the previous markup so it can be reused when an API is enabled.
+                product.price = parsed_price
+            elif parsed_markup is not None:
+                markup_changed = parsed_markup != old_markup
+                price_changed = parsed_price != old_price
+                pricing_base = old_supplier_price
+                if pricing_base is None and old_price > old_markup:
+                    pricing_base = old_price - old_markup
+
+                if markup_changed:
+                    product.supplier_markup = parsed_markup
+                    product.price = (
+                        int(pricing_base) + parsed_markup
+                        if pricing_base is not None and not product.price_lock_enabled
+                        else parsed_price
+                    )
+                elif price_changed and pricing_base is not None:
+                    # Persist an edited sale price as markup, otherwise the next
+                    # supplier refresh would calculate and restore the old price.
+                    product.supplier_markup = max(0, parsed_price - int(pricing_base))
+                    product.price = parsed_price
+                else:
+                    product.supplier_markup = parsed_markup
+                    product.price = parsed_price
+            else:
+                product.price = parsed_price
             if normalized_source == "local":
                 product.supplier_price = None
                 product.external_stock = 0
@@ -1874,7 +1903,7 @@ def create_dashboard_router(
                 )
                 .with_for_update()
             )
-            if active_campaign is not None and active_campaign.sale_price >= parsed_price:
+            if active_campaign is not None and active_campaign.sale_price >= product.price:
                 active_campaign.status = "price_invalid"
                 active_campaign.ended_at = datetime.now(UTC)
                 if active_campaign.notification_status in {"pending", "sending"}:

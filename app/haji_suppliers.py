@@ -390,7 +390,6 @@ async def ensure_haji_products(
         )
         if client is None:
             for product in existing:
-                product.active = False
                 product.external_stock = 0
             await session.commit()
             return
@@ -406,7 +405,6 @@ async def ensure_haji_products(
         live_ids = {product.product_id for product in products}
         for product in existing:
             if product.supplier_product_id not in live_ids:
-                product.active = False
                 product.external_stock = 0
 
         for source in products:
@@ -439,15 +437,8 @@ async def ensure_haji_products(
                     )
                 )
                 continue
-            product.category_id = category.id
-            product.name_vi = source.name
-            product.name_en = source.name
-            product.description_vi = description_vi
-            product.description_en = description_en
-            product.product_type = "account"
-            product.allow_quantity = True
-            product.max_quantity = 100
-            product.active = True
+            # Supplier catalog data initializes new rows only. Existing product
+            # presentation and visibility belong to the admin and must survive syncs.
         await session.commit()
 
 
