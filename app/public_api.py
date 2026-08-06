@@ -45,10 +45,17 @@ from app.utils import SecretCipher, sanitize_customer_text
 
 templates = Jinja2Templates(directory=Path(__file__).parent / "templates")
 logger = logging.getLogger(__name__)
-CODEX_SETUP_PATH = Path(__file__).parent / "static" / "VietShare-Codex-Setup.exe"
+CODEX_SETUP_PATH = Path(__file__).parent / "static" / "VietShare-Codex-Claude-Setup.zip"
 CODEX_ACTIVATION_URL = "https://gateway.dichvuright.ai/redeem"
 CODEX_GATEWAY_URL = "https://gateway.dichvuright.ai/v1"
 CODEX_MODELS = ("cx/gpt-5.6-sol", "cx/gpt-5.5")
+CLAUDE_GATEWAY_URL = "https://gateway.dichvuright.ai"
+CLAUDE_MODELS = (
+    "claude-opus-5",
+    "claude-sonnet-5",
+    "claude-haiku-4-5",
+    "claude-fable-5",
+)
 API_PROCESSING_RECOVERY_AFTER = timedelta(minutes=15)
 API_ID_PATTERN = re.compile(r"^VS[0-9A-F]{16}$")
 API_SIGNATURE_PATTERN = re.compile(r"^[0-9a-fA-F]{64}$")
@@ -157,11 +164,6 @@ def create_public_api_docs_router(settings: Settings) -> APIRouter:
     @router.get("/codex-claude", response_class=HTMLResponse)
     @router.get("/codex-claude/", response_class=HTMLResponse, include_in_schema=False)
     async def codex_claude_guide(request: Request) -> HTMLResponse:
-        setup_hash = (
-            hashlib.sha256(CODEX_SETUP_PATH.read_bytes()).hexdigest()
-            if CODEX_SETUP_PATH.is_file()
-            else ""
-        )
         response = templates.TemplateResponse(
             request,
             "codex_claude_guide.html",
@@ -169,25 +171,30 @@ def create_public_api_docs_router(settings: Settings) -> APIRouter:
                 "activation_url": CODEX_ACTIVATION_URL,
                 "gateway_url": CODEX_GATEWAY_URL,
                 "models": CODEX_MODELS,
-                "setup_hash": setup_hash,
+                "claude_gateway_url": CLAUDE_GATEWAY_URL,
+                "claude_models": CLAUDE_MODELS,
             },
         )
         response.headers["Cache-Control"] = "public, max-age=300"
         return response
 
-    @router.get("/codex-setup.exe", response_class=FileResponse)
+    @router.get("/codex-setup.zip", response_class=FileResponse)
     async def download_codex_setup() -> FileResponse:
         if not CODEX_SETUP_PATH.is_file():
             raise HTTPException(status_code=404, detail="Setup tool is unavailable")
         return FileResponse(
             CODEX_SETUP_PATH,
-            media_type="application/vnd.microsoft.portable-executable",
-            filename="VietShare-Codex-Setup.exe",
+            media_type="application/zip",
+            filename="VietShare-Codex-Claude-Setup.zip",
             headers={
                 "Cache-Control": "public, max-age=300",
                 "X-Content-Type-Options": "nosniff",
             },
         )
+
+    @router.get("/codex-setup.exe", include_in_schema=False)
+    async def download_codex_setup_legacy() -> RedirectResponse:
+        return RedirectResponse("/codex-setup.zip", status_code=307)
 
     @router.get("/docs", response_class=HTMLResponse)
     @router.get("/docs/", response_class=HTMLResponse, include_in_schema=False)

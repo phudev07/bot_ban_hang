@@ -119,7 +119,10 @@ def test_warehouse_api_origin_is_cloudflare_only_and_body_is_bounded() -> None:
     assert "@direct_origin not remote_ip" in token_site
     assert "respond @direct_origin 403" in token_site
     assert "max_size 64KB" in token_site
-    assert "path /codex-claude /codex-claude/ /codex-setup.exe" in token_site
+    assert (
+        "path /codex-claude /codex-claude/ /codex-setup.exe /codex-setup.zip"
+        in token_site
+    )
 
 
 def test_client_ip_trusts_cloudflare_header_only_from_cloudflare() -> None:
@@ -313,17 +316,30 @@ def test_warehouse_api_purchases_from_shared_wallet_and_is_idempotent(tmp_path) 
         assert "https://gateway.dichvuright.ai/v1" in codex_guide.text
         assert "cx/gpt-5.6-sol" in codex_guide.text
         assert "cx/gpt-5.5" in codex_guide.text
+        assert "claude-opus-5" in codex_guide.text
+        assert "claude-sonnet-5" in codex_guide.text
+        assert "claude-haiku-4-5" in codex_guide.text
+        assert "claude-fable-5" in codex_guide.text
+        assert "C:\\Users\\Tên máy\\.claude\\settings.json" in codex_guide.text
+        assert "ANTHROPIC_AUTH_TOKEN" in codex_guide.text
+        assert "ANTHROPIC_DEFAULT_FABLE_MODEL" in codex_guide.text
         assert "requires_openai_auth = true" in codex_guide.text
         assert "default_subagent_model" in codex_guide.text
         assert "[agents.subagent]" not in codex_guide.text
+        assert "SHA256" not in codex_guide.text
+        assert "SmartScreen" not in codex_guide.text
 
-        codex_setup = client.get("/codex-setup.exe")
+        codex_setup = client.get("/codex-setup.zip")
         assert codex_setup.status_code == 200
-        assert codex_setup.content.startswith(b"MZ")
-        assert codex_setup.headers["content-type"].startswith(
-            "application/vnd.microsoft.portable-executable"
-        )
-        assert "VietShare-Codex-Setup.exe" in codex_setup.headers["content-disposition"]
+        assert codex_setup.content.startswith(b"PK")
+        assert codex_setup.headers["content-type"].startswith("application/zip")
+        assert "VietShare-Codex-Claude-Setup.zip" in codex_setup.headers[
+            "content-disposition"
+        ]
+
+        old_setup_url = client.get("/codex-setup.exe", follow_redirects=False)
+        assert old_setup_url.status_code == 307
+        assert old_setup_url.headers["location"] == "/codex-setup.zip"
 
         docs_redirect = client.get("/v1/docs", follow_redirects=False)
         assert docs_redirect.status_code == 307

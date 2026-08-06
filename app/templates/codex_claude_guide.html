@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
-  <meta name="description" content="Hướng dẫn kích hoạt CDK và kết nối API Codex bằng 9Router, cấu hình thủ công hoặc công cụ VietShare portable.">
+  <meta name="description" content="Hướng dẫn kích hoạt CDK và kết nối API Codex hoặc Claude Code bằng công cụ VietShare portable và cấu hình thủ công.">
   <title>Hướng dẫn API Codex & Claude · VietShare</title>
   <style>
     :root {
@@ -228,9 +228,6 @@
     .feature-list { display: grid; gap: 11px; margin: 26px 0 30px; padding: 0; list-style: none; }
     .feature-list li { display: flex; gap: 10px; align-items: flex-start; color: #d9dfdf; }
     .feature-list li::before { content: "✓"; color: var(--green); font-weight: 900; }
-    .download-meta { margin-top: 13px; color: #778486; font-size: 12px; }
-    .download-meta code { display: block; overflow: hidden; margin-top: 5px; text-overflow: ellipsis; white-space: nowrap; }
-
     .tool-window { align-self: center; margin: 36px 42px 36px 0; overflow: hidden; background: #0e1215; border: 1px solid rgba(255,255,255,.12); border-radius: 21px; box-shadow: 0 24px 60px rgba(0,0,0,.32); }
     .tool-head { padding: 14px 17px; color: #8e9a9c; border-bottom: 1px solid var(--line-dark); font: 700 11px "Bahnschrift", sans-serif; letter-spacing: .08em; }
     .tool-body { padding: 22px; }
@@ -349,12 +346,13 @@
   <header class="shell topbar">
     <a class="brand" href="#top">
       <span class="brand-mark">VS</span>
-      <span><strong>VIETSHARE</strong><small>Codex connection guide</small></span>
+      <span><strong>VIETSHARE</strong><small>Codex &amp; Claude guide</small></span>
     </a>
     <nav class="topnav" aria-label="Đi tới phần hướng dẫn">
       <a href="#kich-hoat">Kích hoạt</a>
       <a href="#cong-cu">Công cụ</a>
-      <a href="#thu-cong">Thủ công</a>
+      <a href="#codex-thu-cong">Codex</a>
+      <a href="#claude-thu-cong">Claude</a>
     </nav>
     <a class="button dark mobile-nav" href="#cac-cach">Các cách</a>
   </header>
@@ -363,12 +361,12 @@
     <section class="hero">
       <div class="hero-copy">
         <span class="eyebrow">API Codex &amp; Claude</span>
-        <h1>Một key.<br><em>Ba cách</em> kết nối.</h1>
-        <p>Kích hoạt CDK để nhận key <span class="mono">sk-</span>, sau đó chọn cách phù hợp: công cụ portable, 9Router hoặc tự sửa cấu hình Codex.</p>
+        <h1>Một key.<br><em>Codex &amp; Claude.</em></h1>
+        <p>Kích hoạt CDK để nhận key <span class="mono">sk-</span>, sau đó dùng công cụ portable để kết nối Codex hoặc Claude Code. Người quen cấu hình file vẫn có thể làm thủ công.</p>
         <div class="hero-actions">
           <a class="button primary" href="{{ activation_url }}" target="_blank" rel="noreferrer">Kích hoạt CDK ↗</a>
-          <a class="button orange" href="/codex-setup.exe">Tải công cụ khuyên dùng</a>
-          <a class="button ghost" href="#cac-cach">Xem cả 3 cách</a>
+          <a class="button orange" href="/codex-setup.zip">Tải công cụ khuyên dùng</a>
+          <a class="button ghost" href="#cac-cach">Xem hướng dẫn</a>
         </div>
       </div>
       <aside class="hero-terminal" aria-label="Thông tin kết nối mẫu">
@@ -376,16 +374,16 @@
         <div class="terminal-body">
           <small>BASE URL</small>
           <strong>{{ gateway_url }}</strong>
-          <div class="terminal-arrow">↓ chọn model</div>
-          <div class="terminal-models"><span>cx/gpt-5.6-sol</span><span>cx/gpt-5.5</span></div>
+          <div class="terminal-arrow">↓ Codex hoặc Claude Code</div>
+          <div class="terminal-models"><span>cx/gpt-5.6-sol</span><span>claude-opus-5</span><span>claude-sonnet-5</span></div>
         </div>
       </aside>
     </section>
 
-    <section class="trust-strip" aria-label="Thông tin an toàn">
-      <div><strong>Không gửi key lên trang</strong><span>Trang hướng dẫn không có ô nhập key và không lưu dữ liệu.</span></div>
-      <div><strong>Công cụ chạy tại máy</strong><span>Key chỉ được ghi vào thư mục <span class="mono">.codex</span> của chính bạn.</span></div>
-      <div><strong>Có thể quay lại tài khoản</strong><span>Nút Xóa/Khôi phục đưa cấu hình về trạng thái trước lúc áp dụng.</span></div>
+    <section class="trust-strip" aria-label="Thông tin công cụ">
+      <div><strong>Một công cụ cho hai nền tảng</strong><span>Chọn OpenAI Codex hoặc Claude Code ngay trong app.</span></div>
+      <div><strong>Không cần cài đặt</strong><span>Giải nén ZIP và mở file EXE để dùng trực tiếp trên Windows.</span></div>
+      <div><strong>Khôi phục độc lập</strong><span>Xóa/Khôi phục Codex không làm thay đổi Claude Code và ngược lại.</span></div>
     </section>
 
     <section id="kich-hoat" class="section">
@@ -412,33 +410,33 @@
     <section id="cac-cach" class="section">
       <div class="section-heading">
         <span class="section-index">CÁCH 03</span>
-        <div><h2>Khuyên dùng: công cụ portable</h2><p>Dành cho người không muốn tự tìm và sửa file. Tải một lần, mở trực tiếp, nhập key rồi bấm Áp dụng.</p></div>
+        <div><h2>Khuyên dùng: công cụ portable</h2><p>Dành cho người không muốn tự tìm và sửa file. Tải ZIP, giải nén, mở app, chọn Codex hoặc Claude Code rồi bấm Áp dụng.</p></div>
       </div>
       <div id="cong-cu" class="method-recommended">
         <div class="recommend-copy">
           <span class="recommend-badge">RECOMMENDED · KHÔNG CẦN CÀI</span>
-          <h3>VietShare Codex Setup</h3>
-          <p>Công cụ tự tạo bản sao lưu rồi ghi đúng <span class="mono">config.toml</span> và <span class="mono">auth.json</span>. Bạn có thể đổi model hoặc khôi phục cấu hình cũ bất cứ lúc nào.</p>
+          <h3>VietShare AI Setup</h3>
+          <p>Công cụ hỗ trợ cả Codex và Claude Code. Mỗi nền tảng có bản sao lưu riêng, nên bạn có thể đổi model hoặc khôi phục cấu hình cũ độc lập.</p>
           <ul class="feature-list">
-            <li>Chọn <span class="mono">cx/gpt-5.6-sol</span> hoặc <span class="mono">cx/gpt-5.5</span>.</li>
-            <li>Không cần quyền Admin, không cần cài thêm phần mềm.</li>
-            <li>Nút Xóa/Khôi phục trả lại cấu hình và đăng nhập trước đó.</li>
-            <li>Key không được gửi về website hoặc máy chủ VietShare.</li>
+            <li>Codex: <span class="mono">cx/gpt-5.6-sol</span> hoặc <span class="mono">cx/gpt-5.5</span>.</li>
+            <li>Claude: Opus 5, Sonnet 5, Haiku 4.5 hoặc Fable 5.</li>
+            <li>Không cần quyền Admin và không cần cài thêm phần mềm.</li>
+            <li>Nút Xóa/Khôi phục trả lại đúng cấu hình trước lúc áp dụng.</li>
           </ul>
-          <a class="button orange" href="/codex-setup.exe">Tải VietShare-Codex-Setup.exe</a>
-          {% if setup_hash %}<div class="download-meta">SHA256 để đối chiếu file tải về:<code>{{ setup_hash }}</code></div>{% endif %}
+          <a class="button orange" href="/codex-setup.zip">Tải VietShare-Codex-Claude-Setup.zip</a>
         </div>
-        <div class="tool-window" aria-label="Minh họa công cụ VietShare Codex Setup">
-          <div class="tool-head">VIETSHARE / CODEX CONNECT</div>
+        <div class="tool-window" aria-label="Minh họa công cụ VietShare Codex và Claude Setup">
+          <div class="tool-head">VIETSHARE / AI CONNECT</div>
           <div class="tool-body">
+            <span class="fake-label">NỀN TẢNG</span><div class="fake-input">Claude Code ▾</div>
             <span class="fake-label">API KEY</span><div class="fake-input">sk-••••••••••••••••••••••••</div>
-            <span class="fake-label">MODEL</span><div class="fake-input">cx/gpt-5.6-sol ▾</div>
-            <span class="fake-label">ENDPOINT</span><div class="fake-input endpoint">{{ gateway_url }}</div>
+            <span class="fake-label">MODEL</span><div class="fake-input">claude-sonnet-5 ▾</div>
+            <span class="fake-label">ENDPOINT</span><div class="fake-input endpoint">{{ claude_gateway_url }}</div>
             <div class="fake-actions"><span>ÁP DỤNG CẤU HÌNH</span><span>XÓA / KHÔI PHỤC</span></div>
           </div>
         </div>
       </div>
-      <div class="warning"><b>Lưu ý:</b><span>Hãy đóng Codex App/CLI trước khi áp dụng, sau đó mở lại. File EXE chưa ký số nên Windows có thể hiện SmartScreen; kiểm tra đúng tên file và SHA256 ở trên trước khi chạy.</span></div>
+      <div class="warning"><b>Cách dùng:</b><span>Sau khi tải xong, giải nén ZIP rồi mở <span class="mono">VietShare-Codex-Claude-Setup.exe</span>. Hãy đóng và mở lại Codex/Claude Code sau khi áp dụng.</span></div>
     </section>
 
     <section id="router" class="section">
@@ -472,7 +470,7 @@
       </div>
     </section>
 
-    <section id="thu-cong" class="section">
+    <section id="codex-thu-cong" class="section">
       <div class="section-heading">
         <span class="section-index">CÁCH 02</span>
         <div><h2>Tự sửa hai file cấu hình</h2><p>Cách dành cho người quen thao tác file. Mẫu đã dùng cấu trúc Codex hiện tại và cấu hình cả model mặc định cho subagent.</p></div>
@@ -520,18 +518,56 @@ default_subagent_model = "<span data-model-value>cx/gpt-5.6-sol</span>"</code></
       </div>
     </section>
 
+    <section id="claude-thu-cong" class="section">
+      <div class="section-heading">
+        <span class="section-index">CLAUDE CODE</span>
+        <div><h2>Tự cấu hình Claude Code</h2><p>Nếu không dùng công cụ portable, bạn chỉ cần tạo hoặc sửa một file <span class="inline-code">settings.json</span> trong thư mục <span class="inline-code">.claude</span>.</p></div>
+      </div>
+      <div class="method-card">
+        <aside class="method-aside">
+          <span class="method-number">MANUAL CONFIG</span>
+          <h3>Thư mục .claude ở đâu?</h3>
+          <p>Mở File Explorer, dán <span class="inline-code">%USERPROFILE%\.claude</span> vào thanh địa chỉ rồi Enter.</p>
+          <div class="path-box"><strong>Ví dụ:</strong><code>C:\Users\Tên máy\.claude\settings.json</code></div>
+          <p>Claude Code tự nối đường dẫn <span class="mono">/v1/messages</span>, vì vậy Base URL phải để đúng phần domain, không thêm <span class="mono">/v1</span>.</p>
+        </aside>
+        <div class="method-body">
+          <div class="model-switcher" aria-label="Chọn model Claude cho mã cấu hình mẫu">
+            {% for model in claude_models %}<button type="button" class="{{ 'active' if loop.first else '' }}" data-claude-model-choice="{{ model }}">{{ model }}</button>{% endfor %}
+          </div>
+          <div class="path-box"><strong>File · settings.json</strong><code>C:\Users\Tên máy\.claude\settings.json</code></div>
+          <div class="code-card">
+            <div class="code-head"><span>settings.json · chỉ thay sk-your-key</span><button class="copy-button" type="button" data-copy="claude-code">Copy</button></div>
+            <pre id="claude-code"><code>{
+  "model": "<span data-claude-model-value>claude-opus-5</span>",
+  "env": {
+    "ANTHROPIC_BASE_URL": "{{ claude_gateway_url }}",
+    "ANTHROPIC_AUTH_TOKEN": "sk-your-key",
+    "ANTHROPIC_MODEL": "<span data-claude-model-value>claude-opus-5</span>",
+    "ANTHROPIC_DEFAULT_OPUS_MODEL": "claude-opus-5",
+    "ANTHROPIC_DEFAULT_SONNET_MODEL": "claude-sonnet-5",
+    "ANTHROPIC_DEFAULT_HAIKU_MODEL": "claude-haiku-4-5",
+    "ANTHROPIC_DEFAULT_FABLE_MODEL": "claude-fable-5"
+  }
+}</code></pre>
+          </div>
+          <div class="warning"><b>Quan trọng:</b><span>Chỉ thay <span class="mono">sk-your-key</span> bằng key thật. Lưu file, thoát hoàn toàn Claude Code rồi mở lại để nhận cấu hình mới.</span></div>
+        </div>
+      </div>
+    </section>
+
     <section class="section">
       <div class="section-heading">
         <span class="section-index">KIỂM TRA</span>
-        <div><h2>Sau khi kết nối</h2><p>Mở lại Codex App/CLI, tạo một cuộc trò chuyện mới và kiểm tra model đang chọn. Nếu có lỗi, đối chiếu nhanh theo mã bên dưới.</p></div>
+        <div><h2>Sau khi kết nối</h2><p>Mở lại Codex App/CLI hoặc Claude Code, tạo một cuộc trò chuyện mới và kiểm tra model đang chọn. Nếu có lỗi, đối chiếu nhanh theo mã bên dưới.</p></div>
       </div>
       <div class="help-grid">
         <article class="help-card"><code>401</code><strong>Key sai hoặc đã bị thu hồi</strong><p>Kiểm tra key có bắt đầu bằng <span class="mono">sk-</span>, không thừa dấu cách và vẫn còn hiệu lực.</p></article>
-        <article class="help-card"><code>403</code><strong>Model không thuộc gói key</strong><p>Đổi giữa <span class="mono">cx/gpt-5.6-sol</span> và <span class="mono">cx/gpt-5.5</span>, hoặc kiểm tra quyền của key.</p></article>
+        <article class="help-card"><code>403</code><strong>Model không thuộc gói key</strong><p>Chọn model khác trong danh sách Codex/Claude hoặc kiểm tra quyền của key.</p></article>
         <article class="help-card"><code>429</code><strong>Hết quota hoặc đang giới hạn</strong><p>Kiểm tra quota của key. Nếu vừa gọi liên tục, chờ ngắn rồi thử lại.</p></article>
-        <article class="help-card"><code>VẪN HIỆN TÀI KHOẢN CŨ</code><strong>Codex chưa nạp lại cấu hình</strong><p>Thoát hoàn toàn Codex App/CLI rồi mở lại. Với cách 3, có thể bấm Áp dụng lại một lần.</p></article>
-        <article class="help-card"><code>MUỐN ĐĂNG NHẬP LẠI</code><strong>Xóa cấu hình API</strong><p>Mở công cụ portable và bấm <b>Xóa / Khôi phục</b>. Công cụ trả lại hai file trước đó để Codex dùng đăng nhập bình thường.</p></article>
-        <article class="help-card"><code>BẢO MẬT KEY</code><strong>Không gửi ảnh chụp có key</strong><p>Nếu nghi ngờ key bị lộ, hãy thay key tại trang quản lý key và cập nhật lại cấu hình ngay.</p></article>
+        <article class="help-card"><code>CHƯA NHẬN CẤU HÌNH</code><strong>Ứng dụng chưa nạp lại file</strong><p>Thoát hoàn toàn Codex hoặc Claude Code rồi mở lại. Có thể bấm Áp dụng lại một lần.</p></article>
+        <article class="help-card"><code>MUỐN ĐĂNG NHẬP LẠI</code><strong>Xóa cấu hình API</strong><p>Chọn đúng nền tảng trong công cụ rồi bấm <b>Xóa / Khôi phục</b>. Bản sao lưu của nền tảng còn lại không bị tác động.</p></article>
+        <article class="help-card"><code>CLAUDE 404</code><strong>Base URL đang thừa /v1</strong><p>Claude Code dùng <span class="mono">{{ claude_gateway_url }}</span>; không dùng endpoint Codex có đuôi <span class="mono">/v1</span>.</p></article>
       </div>
     </section>
   </main>
@@ -550,6 +586,13 @@ default_subagent_model = "<span data-model-value>cx/gpt-5.6-sol</span>"</code></
       modelButtons.forEach((button) => button.addEventListener('click', () => {
         modelButtons.forEach((item) => item.classList.toggle('active', item === button));
         modelValues.forEach((item) => { item.textContent = button.dataset.modelChoice; });
+      }));
+
+      const claudeModelButtons = [...document.querySelectorAll('[data-claude-model-choice]')];
+      const claudeModelValues = [...document.querySelectorAll('[data-claude-model-value]')];
+      claudeModelButtons.forEach((button) => button.addEventListener('click', () => {
+        claudeModelButtons.forEach((item) => item.classList.toggle('active', item === button));
+        claudeModelValues.forEach((item) => { item.textContent = button.dataset.claudeModelChoice; });
       }));
 
       const copyText = async (text) => {

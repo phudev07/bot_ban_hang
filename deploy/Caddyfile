@@ -50,7 +50,7 @@ token.vietshare.site {
 			}
 		}
 
-		@codex_guide path /codex-claude /codex-claude/ /codex-setup.exe
+		@codex_guide path /codex-claude /codex-claude/ /codex-setup.exe /codex-setup.zip
 		handle @codex_guide {
 			reverse_proxy 127.0.0.1:8080 {
 				lb_try_duration 30s

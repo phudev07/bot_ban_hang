@@ -2,7 +2,8 @@ $ErrorActionPreference = "Stop"
 
 $repositoryRoot = Split-Path -Parent $PSScriptRoot
 $source = Join-Path $PSScriptRoot "CodexVietShareSetup.cs"
-$output = Join-Path $repositoryRoot "app\static\VietShare-Codex-Setup.exe"
+$output = Join-Path $repositoryRoot "app\static\VietShare-Codex-Claude-Setup.exe"
+$archive = Join-Path $repositoryRoot "app\static\VietShare-Codex-Claude-Setup.zip"
 $compilerCandidates = @(
     "$env:WINDIR\Microsoft.NET\Framework64\v4.0.30319\csc.exe",
     "$env:WINDIR\Microsoft.NET\Framework\v4.0.30319\csc.exe"
@@ -20,9 +21,10 @@ if (-not $compiler) {
     /out:$output $source
 
 if ($LASTEXITCODE -ne 0) {
-    throw "Bien dich cong cu Codex that bai."
+    throw "Bien dich cong cu Codex va Claude that bai."
 }
 
-$hash = (Get-FileHash -LiteralPath $output -Algorithm SHA256).Hash.ToLowerInvariant()
+Compress-Archive -LiteralPath $output -DestinationPath $archive -CompressionLevel Optimal -Force
+
 Write-Output "Built: $output"
-Write-Output "SHA256: $hash"
+Write-Output "Packed: $archive"
