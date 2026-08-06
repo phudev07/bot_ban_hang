@@ -14,6 +14,8 @@ SUPPLIER_MARKERS = (
     "rentsim",
     "rent sim",
     "sentsim",
+    "canboso",
+    "api.dichvuright.ai",
     "provider_http",
     "supplier_http",
     "api.lehaipremium",
@@ -29,14 +31,25 @@ def assert_no_supplier_markers(text: str) -> None:
 
 def test_customer_text_redacts_all_supplier_identities_and_source_markers() -> None:
     text = sanitize_customer_text(
-        "SumiStore / Sumi / Lê Hải Premium / lehai / RentSim / Sentsim "
-        "https://api.lehaipremium.me/api SP-GEF55PBV provider_http_500"
+        "SumiStore / Sumi / Lê Hải Premium / lehai / RentSim / Sentsim / Canboso / NCE "
+        "https://api.lehaipremium.me/api SP-GEF55PBV provider_http_500 "
+        "https://api.dichvuright.ai/api/telegram-buyer/products"
     )
 
     assert_no_supplier_markers(text)
     assert "nguồn hàng" in text
     assert "mã sản phẩm" in text
     assert "lỗi hệ thống" in text
+
+
+def test_customer_gateway_url_is_kept_but_buyer_api_url_is_hidden() -> None:
+    text = sanitize_customer_text(
+        "Dùng https://gateway.dichvuright.ai, không lộ "
+        "https://api.dichvuright.ai/api/telegram-buyer/products"
+    )
+
+    assert "https://gateway.dichvuright.ai" in text
+    assert "api.dichvuright.ai" not in text
 
 
 def test_delivery_messages_redact_supplier_name_in_product_name() -> None:

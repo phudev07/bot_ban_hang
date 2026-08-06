@@ -100,7 +100,7 @@ and binds port 8080 only to localhost. Caddy is the public reverse proxy.
   can show both Sumi and Le Hai.
 - Supplier cost is saved at delivery time. Dashboard profit is revenue minus cost minus
   referral commission.
-- Sumi, Le Hai, Canboso, and RentSim keys live only in production `.env`.
+- Sumi, Le Hai, Canboso, NCE Codex/Claude, and RentSim keys live only in production `.env`.
 - Warehouse API partners receive shop product IDs and shop selling prices, never supplier
   keys, supplier URLs, supplier product IDs, supplier order IDs, or supplier cost.
 - Warehouse API only sells active account products. SMS rental is excluded.
@@ -300,6 +300,21 @@ ssh -i "$HOME\.ssh\codex_vps" root@160.191.243.91 `
 
 After any key rotation, check app logs and use only balance/catalog endpoints. Do not place
 a real supplier order merely to verify a key.
+
+Enable or rotate the Codex/Claude Buyer API key from the Windows clipboard without
+printing it or placing it in shell history:
+
+```powershell
+Get-Clipboard | ssh -i "$HOME\.ssh\codex_vps" root@160.191.243.91 `
+  "cd /opt/telegram-sepay-shop && python deploy/set_nce_key.py .env"
+
+ssh -i "$HOME\.ssh\codex_vps" root@160.191.243.91 `
+  "cd /opt/telegram-sepay-shop && docker compose up -d --force-recreate app"
+```
+
+The Buyer API base URL is `https://api.dichvuright.ai`. The customer-facing gateway
+is `https://gateway.dichvuright.ai`; never point supplier catalog or purchase calls at
+the gateway host.
 
 ## 11. Caddy and Cloudflare
 

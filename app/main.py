@@ -37,6 +37,12 @@ from app.inventory_dedup import (
     backfill_inventory_fingerprints,
 )
 from app.models import ApiRequestAudit, Category, Product
+from app.nce_suppliers import (
+    NceClient,
+    create_nce_client,
+    ensure_nce_products,
+    sync_nce_products,
+)
 from app.payment_expiry import payment_expiry_worker
 from app.rate_limit import BotSpamProtectionMiddleware
 from app.rentsim import RentSimClient, create_rentsim_client
@@ -402,7 +408,7 @@ async def initialize_database(engine, session_factory, seed_demo_data: bool) -> 
                 "supplier_available_stock_initialized = TRUE "
                 "WHERE supplier_available_stock_initialized = FALSE "
                 "AND supplier_synced_at IS NOT NULL "
-                "AND fulfillment_source IN ('sumistore', 'lehai', 'canboso')"
+                "AND fulfillment_source IN ('sumistore', 'lehai', 'canboso', 'nce')"
             )
         )
         await connection.execute(
@@ -722,13 +728,14 @@ async def initialize_database(engine, session_factory, seed_demo_data: bool) -> 
                 "UPDATE inventory_items AS item SET supplier_provider = COALESCE("
                 "(SELECT tx.provider FROM supplier_balance_transactions AS tx "
                 "WHERE tx.supplier_order_code = item.supplier_order_code "
-                "AND tx.provider IN ('sumistore', 'lehai', 'canboso') ORDER BY tx.id DESC LIMIT 1), "
+                "AND tx.provider IN ('sumistore', 'lehai', 'canboso', 'nce') ORDER BY tx.id DESC LIMIT 1), "
                 "(SELECT attempt.provider FROM supplier_purchase_attempts AS attempt "
                 "WHERE attempt.supplier_order_code = item.supplier_order_code "
-                "AND attempt.provider IN ('sumistore', 'lehai', 'canboso') "
+                "AND attempt.provider IN ('sumistore', 'lehai', 'canboso', 'nce') "
                 "ORDER BY attempt.id DESC LIMIT 1), "
                 "CASE WHEN item.supplier_order_code LIKE 'API-TELE-%' THEN 'sumistore' "
-                "WHEN item.supplier_order_code LIKE 'LHP-%' THEN 'lehai' END) "
+                "WHEN item.supplier_order_code LIKE 'LHP-%' THEN 'lehai' "
+                "WHEN item.supplier_order_code LIKE 'NCE-%' THEN 'nce' END) "
                 "WHERE item.supplier_provider IS NULL "
                 "AND item.supplier_order_code IS NOT NULL"
             )
@@ -740,14 +747,15 @@ async def initialize_database(engine, session_factory, seed_demo_data: bool) -> 
                 "WHERE item.id = shop_order.inventory_item_id), "
                 "(SELECT tx.provider FROM supplier_balance_transactions AS tx "
                 "WHERE tx.supplier_order_code = shop_order.supplier_order_code "
-                "AND tx.provider IN ('sumistore', 'lehai', 'canboso') ORDER BY tx.id DESC LIMIT 1), "
+                "AND tx.provider IN ('sumistore', 'lehai', 'canboso', 'nce') ORDER BY tx.id DESC LIMIT 1), "
                 "(SELECT attempt.provider FROM supplier_purchase_attempts AS attempt "
                 "WHERE attempt.supplier_order_code = shop_order.supplier_order_code "
-                "AND attempt.provider IN ('sumistore', 'lehai', 'canboso') "
+                "AND attempt.provider IN ('sumistore', 'lehai', 'canboso', 'nce') "
                 "ORDER BY attempt.id DESC LIMIT 1), "
                 "CASE WHEN shop_order.supplier_order_code LIKE 'API-TELE-%' "
                 "THEN 'sumistore' WHEN shop_order.supplier_order_code LIKE 'LHP-%' "
-                "THEN 'lehai' END) WHERE shop_order.supplier_provider IS NULL "
+                "THEN 'lehai' WHEN shop_order.supplier_order_code LIKE 'NCE-%' "
+                "THEN 'nce' END) WHERE shop_order.supplier_provider IS NULL "
                 "AND (shop_order.supplier_order_code IS NOT NULL OR EXISTS ("
                 "SELECT 1 FROM inventory_items AS source_item "
                 "WHERE source_item.id = shop_order.inventory_item_id "
@@ -1011,6 +1019,21 @@ async def lehai_sync_worker(
         except Exception:
             logging.getLogger(__name__).exception(
                 "Could not synchronize Le Hai Premium products"
+            )
+        await asyncio.sleep(max(15, interval_seconds))
+
+
+async def nce_sync_worker(
+    session_factory,
+    client: NceClient,
+    interval_seconds: int,
+) -> None:
+    while True:
+        try:
+            await sync_nce_products(session_factory, client)
+        except Exception:
+            logging.getLogger(__name__).exception(
+                "Could not synchronize Codex and Claude API products"
             )
         await asyncio.sleep(max(15, interval_seconds))
 
@@ -1299,6 +1322,8 @@ async def main() -> None:
     await ensure_lehai_products(session_factory, settings)
     lehai_client = create_lehai_client(settings)
     canboso_client = create_canboso_client(settings)
+    nce_client = create_nce_client(settings)
+    await ensure_nce_products(session_factory, nce_client)
     rentsim_client = create_rentsim_client(settings)
 
     cipher = SecretCipher(settings.inventory_encryption_key.get_secret_value())
@@ -1343,6 +1368,7 @@ async def main() -> None:
             lehai_client,
             rentsim_client,
             canboso_client=canboso_client,
+            nce_client=nce_client,
         )
     )
 
@@ -1357,6 +1383,7 @@ async def main() -> None:
         lehai_client=lehai_client,
         rentsim_client=rentsim_client,
         canboso_client=canboso_client,
+        nce_client=nce_client,
     )
     server = uvicorn.Server(
         uvicorn.Config(
@@ -1504,6 +1531,32 @@ async def main() -> None:
         if canboso_client is not None
         else None
     )
+    nce_sync_task = (
+        asyncio.create_task(
+            nce_sync_worker(
+                session_factory,
+                nce_client,
+                settings.nce_sync_seconds,
+            )
+        )
+        if nce_client is not None
+        else None
+    )
+    nce_audit_task = (
+        asyncio.create_task(
+            supplier_audit_worker(
+                session_factory,
+                nce_client,
+                bot,
+                settings.admin_ids,
+                settings.nce_audit_seconds,
+                provider="nce",
+                provider_label="API Codex & Claude",
+            )
+        )
+        if nce_client is not None
+        else None
+    )
     rentsim_task = (
         asyncio.create_task(
             rentsim_otp_worker(
@@ -1570,6 +1623,14 @@ async def main() -> None:
             canboso_audit_task.cancel()
             with contextlib.suppress(asyncio.CancelledError):
                 await canboso_audit_task
+        if nce_sync_task is not None:
+            nce_sync_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await nce_sync_task
+        if nce_audit_task is not None:
+            nce_audit_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await nce_audit_task
         if rentsim_task is not None:
             rentsim_task.cancel()
             with contextlib.suppress(asyncio.CancelledError):
@@ -1584,6 +1645,7 @@ async def main() -> None:
             supplier_client,
             lehai_client,
             canboso_client,
+            nce_client,
             rentsim_client,
         ):
             if external_client is not None:

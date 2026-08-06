@@ -22,6 +22,7 @@ SUPPLIER_ALERT_GRACE_PERIODS = {
     "sumistore": timedelta(hours=24),
     "lehai": timedelta(hours=48),
     "canboso": timedelta(hours=24),
+    "nce": timedelta(hours=24),
 }
 
 
@@ -226,6 +227,7 @@ def record_supplier_purchase(
         PROVIDER: "Sumi",
         "lehai": "Lê Hải Premium",
         "canboso": "Canboso",
+        "nce": "API Codex & Claude",
     }.get(provider, "nhà cung cấp")
     transaction = SupplierBalanceTransaction(
         provider=provider,

@@ -87,6 +87,14 @@ class Settings(BaseSettings):
     canboso_sync_seconds: int = 60
     canboso_audit_seconds: int = 30
 
+    nce_enabled: bool = False
+    nce_base_url: str = "https://api.dichvuright.ai"
+    nce_api_prefix: str = "/api/telegram-buyer"
+    nce_api_key: SecretStr = SecretStr("")
+    nce_timeout_seconds: float = 15
+    nce_sync_seconds: int = 60
+    nce_audit_seconds: int = 30
+
     rentsim_enabled: bool = False
     rentsim_base_url: str = "http://rentsim.net:8080"
     rentsim_api_key: SecretStr = SecretStr("")
@@ -180,6 +188,16 @@ class Settings(BaseSettings):
             raise ValueError("Canboso sync interval must be at least 15 seconds")
         if self.canboso_audit_seconds < 10:
             raise ValueError("Canboso audit interval must be at least 10 seconds")
+        if self.nce_enabled and not self.nce_api_key.get_secret_value():
+            raise ValueError("Codex and Claude API supplier key is missing")
+        if self.nce_enabled and not self.nce_base_url.strip():
+            raise ValueError("Codex and Claude API supplier base URL is missing")
+        if self.nce_timeout_seconds <= 0:
+            raise ValueError("Codex and Claude API supplier timeout is invalid")
+        if self.nce_sync_seconds < 15:
+            raise ValueError("Codex and Claude API sync interval must be at least 15 seconds")
+        if self.nce_audit_seconds < 10:
+            raise ValueError("Codex and Claude API audit interval must be at least 10 seconds")
         if self.rentsim_enabled and not self.rentsim_api_key.get_secret_value():
             raise ValueError("RentSim is enabled but API key is missing")
         if (

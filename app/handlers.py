@@ -30,11 +30,13 @@ from app.keyboards import (
     deposit_amounts,
     language_menu,
     main_menu,
+    nce_family_menu,
     order_history_menu,
     product_detail,
     products_menu,
     purchase_payment_options,
     quick_access_keyboard,
+    quick_buy_groups_menu,
     quantity_menu,
     referral_menu,
     sms_rental_menu,
@@ -44,6 +46,7 @@ from app.keyboards import (
 )
 from app.lehai_suppliers import LeHaiPremiumClient
 from app.models import ApiClient, Product, QuantityDiscount, User
+from app.nce_suppliers import NceClient, nce_family_from_product
 from app.partner_services import ensure_api_client, referral_stats, rotate_api_secret
 from app.payment_expiry import register_deposit_message
 from app.product_tutorials import send_purchase_tutorials
@@ -235,6 +238,7 @@ async def send_home_with_navigation(
     settings: Settings,
     *,
     sms_enabled: bool,
+    nce_enabled: bool = False,
 ) -> None:
     quick_access_text = (
         "⌨️ Phím thao tác nhanh đã sẵn sàng."
@@ -247,7 +251,11 @@ async def send_home_with_navigation(
     )
     await message.answer(
         home_text(user, settings),
-        reply_markup=main_menu(user.language, sms_enabled=sms_enabled),
+        reply_markup=main_menu(
+            user.language,
+            sms_enabled=sms_enabled,
+            nce_enabled=nce_enabled,
+        ),
         disable_web_page_preview=True,
     )
 
@@ -259,6 +267,7 @@ def create_router(
     lehai_client: LeHaiPremiumClient | None = None,
     rentsim_client: RentSimClient | None = None,
     canboso_client: ExternalSupplierClient | None = None,
+    nce_client: NceClient | None = None,
 ) -> Router:
     router = Router(name="customer")
     warehouse_docs_url = (
@@ -317,20 +326,12 @@ def create_router(
 
     async def send_quick_buy(message: Message, session: AsyncSession) -> None:
         user = await get_or_create_user(message, session)
-        products = await active_products(session)
-        flash_prices = await active_flash_sale_prices(
-            session, [product.id for product in products]
-        )
         text = "⚡ <b>Mua nhanh</b>" if user.language == "vi" else "⚡ <b>Quick buy</b>"
-        if not products:
-            text = "Kho chưa có mặt hàng." if user.language == "vi" else "No products yet."
         await message.answer(
             text,
-            reply_markup=products_menu(
-                products,
+            reply_markup=quick_buy_groups_menu(
                 user.language,
-                "back:menu",
-                flash_prices,
+                nce_enabled=nce_client is not None,
             ),
         )
 
@@ -372,6 +373,7 @@ def create_router(
             user,
             settings,
             sms_enabled=rentsim_client is not None,
+            nce_enabled=nce_client is not None,
         )
 
     @router.message(Command("muanhanh"))
@@ -392,7 +394,11 @@ def create_router(
         user = await get_or_create_user(message, session)
         await message.answer(
             home_text(user, settings),
-            reply_markup=main_menu(user.language, sms_enabled=rentsim_client is not None),
+            reply_markup=main_menu(
+                user.language,
+                sms_enabled=rentsim_client is not None,
+                nce_enabled=nce_client is not None,
+            ),
             disable_web_page_preview=True,
         )
 
@@ -483,7 +489,11 @@ def create_router(
             await edit_or_send_text(
                 callback.message,
                 home_text(user, settings),
-                reply_markup=main_menu(user.language, sms_enabled=rentsim_client is not None),
+                reply_markup=main_menu(
+                    user.language,
+                    sms_enabled=rentsim_client is not None,
+                    nce_enabled=nce_client is not None,
+                ),
                 disable_web_page_preview=True,
             )
         await callback.answer()
@@ -514,6 +524,19 @@ def create_router(
         flash_prices = await active_flash_sale_prices(
             session, [product.id for product in products]
         )
+        if products and all(product.fulfillment_source == "nce" for product in products):
+            text = (
+                "⚡ <b>Chọn loại API</b>"
+                if user.language == "vi"
+                else "⚡ <b>Choose an API family</b>"
+            )
+            if callback.message:
+                await callback.message.edit_text(
+                    text,
+                    reply_markup=nce_family_menu(category_id, user.language, products),
+                )
+            await callback.answer()
+            return
         text = "📦 <b>Chọn mặt hàng</b>" if user.language == "vi" else "📦 <b>Choose a product</b>"
         if not products:
             text = (
@@ -536,20 +559,119 @@ def create_router(
     @router.callback_query(F.data == "menu:quick")
     async def quick_buy(callback: CallbackQuery, session: AsyncSession) -> None:
         user = await get_or_create_user(callback, session)
-        products = await active_products(session)
-        flash_prices = await active_flash_sale_prices(
-            session, [product.id for product in products]
-        )
         text = "⚡ <b>Mua nhanh</b>" if user.language == "vi" else "⚡ <b>Quick buy</b>"
-        if not products:
-            text = "Kho chưa có mặt hàng." if user.language == "vi" else "No products yet."
+        if callback.message:
+            await callback.message.edit_text(
+                text,
+                reply_markup=quick_buy_groups_menu(
+                    user.language,
+                    nce_enabled=nce_client is not None,
+                ),
+            )
+        await callback.answer()
+
+    async def show_quick_group(
+        callback: CallbackQuery,
+        session: AsyncSession,
+        group: str,
+    ) -> None:
+        user = await get_or_create_user(callback, session)
+        products = await active_products(session)
+        if group == "nce":
+            nce_products = [
+                product for product in products if product.fulfillment_source == "nce"
+            ]
+            if callback.message:
+                if nce_products:
+                    await callback.message.edit_text(
+                        "⚡ <b>Chọn loại API</b>"
+                        if user.language == "vi"
+                        else "⚡ <b>Choose an API family</b>",
+                        reply_markup=nce_family_menu(
+                            nce_products[0].category_id,
+                            user.language,
+                            nce_products,
+                        ),
+                    )
+                else:
+                    await callback.message.edit_text(
+                        "Các gói API đang tạm hết hàng."
+                        if user.language == "vi"
+                        else "API packages are temporarily unavailable.",
+                        reply_markup=quick_buy_groups_menu(
+                            user.language,
+                            nce_enabled=nce_client is not None,
+                        ),
+                    )
+            await callback.answer()
+            return
+
+        def is_gg18m(product: Product) -> bool:
+            name = f"{product.name_vi} {product.name_en}".lower()
+            return "18m" in name and any(
+                marker in name for marker in ("gg", "google", "gemini", "jio")
+            )
+
+        if group == "gg18m":
+            selected = [product for product in products if is_gg18m(product)]
+        else:
+            selected = [
+                product
+                for product in products
+                if product.fulfillment_source != "nce"
+                and not is_gg18m(product)
+                and "gpt" in f"{product.name_vi} {product.name_en}".lower()
+            ]
+        flash_prices = await active_flash_sale_prices(
+            session, [product.id for product in selected]
+        )
+        text = (
+            "🤖 <b>Tài khoản GPT</b>"
+            if group == "gpt" and user.language == "vi"
+            else "🤖 <b>GPT accounts</b>"
+            if group == "gpt"
+            else "💎 <b>GG Pro 18M</b>"
+        )
         if callback.message:
             await callback.message.edit_text(
                 text,
                 reply_markup=products_menu(
+                    selected,
+                    user.language,
+                    "menu:quick",
+                    flash_prices,
+                ),
+            )
+        await callback.answer()
+
+    @router.callback_query(F.data.startswith("quick:"))
+    async def quick_group(callback: CallbackQuery, session: AsyncSession) -> None:
+        await show_quick_group(callback, session, callback.data.split(":", 1)[1])
+
+    @router.callback_query(F.data == "menu:nce")
+    async def show_nce_menu(callback: CallbackQuery, session: AsyncSession) -> None:
+        await show_quick_group(callback, session, "nce")
+
+    @router.callback_query(F.data.startswith("nce-family:"))
+    async def show_nce_family(callback: CallbackQuery, session: AsyncSession) -> None:
+        user = await get_or_create_user(callback, session)
+        _, category_text, family = callback.data.split(":", 2)
+        category_id = int(category_text)
+        products = [
+            product
+            for product in await active_products(session, category_id)
+            if nce_family_from_product(product) == family
+        ]
+        flash_prices = await active_flash_sale_prices(
+            session, [product.id for product in products]
+        )
+        if callback.message:
+            await callback.message.edit_text(
+                f"⚡ <b>{family.upper()} API</b>",
+                reply_markup=products_menu(
                     products,
                     user.language,
-                    "back:menu",
+                    f"cat:{category_id}",
                     flash_prices,
                 ),
             )
@@ -766,6 +888,7 @@ def create_router(
             supplier_client,
             lehai_client=lehai_client,
             canboso_client=canboso_client,
+            nce_client=nce_client,
             refresh_external=True,
             refresh_max_age_seconds=settings.supplier_ui_cache_seconds,
         )
@@ -870,6 +993,7 @@ def create_router(
                 supplier_client,
                 lehai_client=lehai_client,
                 canboso_client=canboso_client,
+                nce_client=nce_client,
                 coupon_id=coupon_id,
                 referral_commission_percent=settings.referral_commission_percent,
                 on_fulfillment_started=(
@@ -1088,6 +1212,7 @@ def create_router(
             supplier_client,
             lehai_client=lehai_client,
             canboso_client=canboso_client,
+            nce_client=nce_client,
             refresh_external=True,
             refresh_max_age_seconds=settings.supplier_ui_cache_seconds,
         )
@@ -1164,6 +1289,7 @@ def create_router(
             supplier_client,
             lehai_client=lehai_client,
             canboso_client=canboso_client,
+            nce_client=nce_client,
             refresh_external=True,
             refresh_max_age_seconds=settings.supplier_ui_cache_seconds,
         )
@@ -1245,6 +1371,7 @@ def create_router(
             supplier_client,
             lehai_client=lehai_client,
             canboso_client=canboso_client,
+            nce_client=nce_client,
             refresh_external=True,
             refresh_max_age_seconds=settings.supplier_ui_cache_seconds,
         )
@@ -1352,6 +1479,7 @@ def create_router(
             supplier_client,
             lehai_client=lehai_client,
             canboso_client=canboso_client,
+            nce_client=nce_client,
             refresh_external=True,
             refresh_max_age_seconds=settings.supplier_ui_cache_seconds,
         )
@@ -1501,6 +1629,7 @@ def create_router(
                 supplier_client,
                 lehai_client=lehai_client,
                 canboso_client=canboso_client,
+                nce_client=nce_client,
                 refresh_external=True,
                 refresh_max_age_seconds=settings.supplier_ui_cache_seconds,
             )
@@ -1541,6 +1670,7 @@ def create_router(
             supplier_client,
             lehai_client,
             canboso_client=canboso_client,
+            nce_client=nce_client,
             local_stock=local_stock,
         )
         if supplier_quote is not None and not supplier_quote.available:
@@ -2173,7 +2303,11 @@ def create_router(
         if callback.message:
             await callback.message.edit_text(
                 home_text(user, settings),
-                reply_markup=main_menu(user.language, sms_enabled=rentsim_client is not None),
+                reply_markup=main_menu(
+                    user.language,
+                    sms_enabled=rentsim_client is not None,
+                    nce_enabled=nce_client is not None,
+                ),
                 disable_web_page_preview=True,
             )
         await callback.answer("Đã đổi ngôn ngữ" if language == "vi" else "Language changed")
@@ -2197,7 +2331,11 @@ def create_router(
             await bot.send_message(
                 callback.message.chat.id,
                 home_text(user, settings),
-                reply_markup=main_menu(user.language, sms_enabled=rentsim_client is not None),
+                reply_markup=main_menu(
+                    user.language,
+                    sms_enabled=rentsim_client is not None,
+                    nce_enabled=nce_client is not None,
+                ),
                 disable_web_page_preview=True,
             )
             return

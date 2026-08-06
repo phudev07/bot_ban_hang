@@ -9,6 +9,7 @@ from urllib.parse import quote
 
 from app.i18n import tr
 from app.models import Category, Order, Product
+from app.nce_suppliers import nce_family_from_product
 from app.utils import format_vnd, sanitize_customer_text
 
 
@@ -29,7 +30,12 @@ def quick_access_keyboard(language: str) -> ReplyKeyboardMarkup:
     )
 
 
-def main_menu(language: str, *, sms_enabled: bool = False) -> InlineKeyboardMarkup:
+def main_menu(
+    language: str,
+    *,
+    sms_enabled: bool = False,
+    nce_enabled: bool = False,
+) -> InlineKeyboardMarkup:
     builder = InlineKeyboardBuilder()
     builder.row(
         InlineKeyboardButton(text=tr(language, "quick"), callback_data="menu:quick"),
@@ -41,6 +47,13 @@ def main_menu(language: str, *, sms_enabled: bool = False) -> InlineKeyboardMark
     )
     if sms_enabled:
         builder.row(InlineKeyboardButton(text=tr(language, "sms"), callback_data="menu:sms"))
+    if nce_enabled:
+        builder.row(
+            InlineKeyboardButton(
+                text=tr(language, "nce_api"),
+                callback_data="menu:nce",
+            )
+        )
     builder.row(
         InlineKeyboardButton(text=tr(language, "orders"), callback_data="menu:orders"),
         InlineKeyboardButton(text=tr(language, "profile"), callback_data="menu:profile"),
@@ -169,10 +182,72 @@ def categories_menu(categories: list[Category], language: str) -> InlineKeyboard
     builder = InlineKeyboardBuilder()
     for category in categories:
         name = sanitize_customer_text(category.name_en if language == "en" else category.name_vi)
+        normalized = f"{category.name_vi} {category.name_en}".lower()
+        if "codex" in normalized and "claude" in normalized:
+            name = tr(language, "nce_api")
+        elif "gemini" in normalized or "veo3" in normalized:
+            name = "💎 GG Pro 18M"
+        elif "gpt" in normalized or "chatgpt" in normalized:
+            name = "🤖 Tài khoản GPT" if language == "vi" else "🤖 GPT accounts"
         builder.button(text=name, callback_data=f"cat:{category.id}")
     builder.adjust(1)
     builder.row(InlineKeyboardButton(text=tr(language, "back"), callback_data="back:menu"))
     return builder.as_markup()
+
+
+def quick_buy_groups_menu(language: str, *, nce_enabled: bool) -> InlineKeyboardMarkup:
+    rows = [
+        [
+            InlineKeyboardButton(
+                text="🤖 Tài khoản GPT" if language == "vi" else "🤖 GPT accounts",
+                callback_data="quick:gpt",
+            )
+        ],
+        [
+            InlineKeyboardButton(
+                text="💎 GG Pro 18M",
+                callback_data="quick:gg18m",
+            )
+        ],
+    ]
+    if nce_enabled:
+        rows.append(
+            [
+                InlineKeyboardButton(
+                    text=tr(language, "nce_api"),
+                    callback_data="quick:nce",
+                )
+            ]
+        )
+    rows.append([InlineKeyboardButton(text=tr(language, "back"), callback_data="back:menu")])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+def nce_family_menu(category_id: int, language: str, products: list[Product]) -> InlineKeyboardMarkup:
+    families = {nce_family_from_product(product) for product in products}
+    rows: list[list[InlineKeyboardButton]] = []
+    if "codex" in families:
+        rows.append(
+            [
+                InlineKeyboardButton(
+                    text="🧩 Codex API",
+                    callback_data=f"nce-family:{category_id}:codex",
+                )
+            ]
+        )
+    if "claude" in families:
+        rows.append(
+            [
+                InlineKeyboardButton(
+                    text="🟠 Claude API",
+                    callback_data=f"nce-family:{category_id}:claude",
+                )
+            ]
+        )
+    rows.append(
+        [InlineKeyboardButton(text=tr(language, "back"), callback_data="menu:products")]
+    )
+    return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
 def products_menu(
@@ -223,10 +298,16 @@ def product_detail(
             rows.append(
                 [InlineKeyboardButton(text=coupon_label, callback_data=f"coupon:{product.id}")]
             )
+    family = nce_family_from_product(product)
+    back_callback = (
+        f"nce-family:{product.category_id}:{family}"
+        if family is not None
+        else f"cat:{product.category_id}"
+    )
     rows.append(
         [
             InlineKeyboardButton(
-                text=tr(language, "back"), callback_data=f"cat:{product.category_id}"
+                text=tr(language, "back"), callback_data=back_callback
             )
         ]
     )

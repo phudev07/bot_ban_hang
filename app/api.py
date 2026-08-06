@@ -22,6 +22,7 @@ from app.delivery import delivery_keyboard, delivery_text
 from app.keyboards import main_menu
 from app.lehai_suppliers import LeHaiPremiumClient
 from app.models import ApiRequestAudit
+from app.nce_suppliers import NceClient
 from app.public_api import client_ip, create_public_api_docs_router, create_public_api_router
 from app.product_tutorials import send_purchase_tutorials
 from app.rate_limit import FixedWindowRateLimiter, RateLimitDecision, RateLimitRule
@@ -58,6 +59,7 @@ def create_api(
     lehai_client: LeHaiPremiumClient | None = None,
     rentsim_client: RentSimClient | None = None,
     canboso_client: CanbosoClient | None = None,
+    nce_client: NceClient | None = None,
 ) -> FastAPI:
     owned_api_redis = api_redis is None
     api_redis_client = api_redis or Redis.from_url(settings.redis_url, decode_responses=True)
@@ -219,6 +221,7 @@ def create_api(
                 rentsim_client,
                 bot,
                 canboso_client=canboso_client,
+                nce_client=nce_client,
             )
         )
 
@@ -336,6 +339,7 @@ def create_api(
                 show_fulfillment_started,
                 lehai_client=lehai_client,
                 canboso_client=canboso_client,
+                nce_client=nce_client,
             )
         finally:
             if fulfillment_message is not None:
@@ -395,6 +399,7 @@ def create_api(
                     reply_markup=main_menu(
                         result.language,
                         sms_enabled=rentsim_client is not None,
+                        nce_enabled=nce_client is not None,
                     ),
                 )
             except Exception:
@@ -460,6 +465,7 @@ def create_api(
                     reply_markup=main_menu(
                         result.language,
                         sms_enabled=rentsim_client is not None,
+                        nce_enabled=nce_client is not None,
                     ),
                 )
             except Exception:
@@ -507,6 +513,7 @@ def create_api(
                     reply_markup=main_menu(
                         result.language,
                         sms_enabled=rentsim_client is not None,
+                        nce_enabled=nce_client is not None,
                     ),
                 )
             except Exception:
