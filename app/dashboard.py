@@ -55,7 +55,6 @@ from app.models import (
     User,
     WalletTransaction,
 )
-from app.nce_suppliers import NceClient
 from app.partner_services import normalize_allowed_ips
 from app.rentsim import RentSimClient
 from app.services import (
@@ -73,6 +72,7 @@ from app.stock_alerts import queue_inventory_stock_alert, stock_alert_mode
 from app.supplier_audit import PROVIDER, reconcile_supplier_balance, record_supplier_purchase
 from app.suppliers import (
     EXTERNAL_FULFILLMENT_SOURCES,
+    ExternalSupplierClient,
     SELLABLE_FULFILLMENT_SOURCES,
     SumistoreClient,
     SupplierError,
@@ -683,7 +683,7 @@ def create_dashboard_router(
     bot: Bot | None = None,
     *,
     canboso_client: CanbosoClient | None = None,
-    nce_client: NceClient | None = None,
+    nce_client: ExternalSupplierClient | None = None,
     haji_client: HajiClient | None = None,
 ) -> APIRouter:
     router = APIRouter()
@@ -1425,10 +1425,9 @@ def create_dashboard_router(
                 "stock_alert_mode": stock_alert_mode(product),
                 "unit_cost": (
                     int(average_cost or 0)
-                    if product.price_lock_enabled
+                    if product.fulfillment_source == "local"
+                    or product.price_lock_enabled
                     else int(product.supplier_price or 0)
-                    if product.fulfillment_source in EXTERNAL_FULFILLMENT_SOURCES
-                    else 0
                 ),
                 "unit_profit": (
                     product.price
@@ -1438,7 +1437,7 @@ def create_dashboard_router(
                         else int(product.supplier_price or 0)
                     )
                     if product.fulfillment_source in EXTERNAL_FULFILLMENT_SOURCES
-                    else product.price
+                    else product.price - int(average_cost or 0)
                 ),
             }
             for product, category, stock, average_cost, coupon_count in rows

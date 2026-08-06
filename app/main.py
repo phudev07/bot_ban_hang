@@ -43,12 +43,7 @@ from app.inventory_dedup import (
     backfill_inventory_fingerprints,
 )
 from app.models import ApiRequestAudit, Category, Product
-from app.nce_suppliers import (
-    NceClient,
-    create_nce_client,
-    ensure_nce_products,
-    sync_nce_products,
-)
+from app.nce_suppliers import ensure_nce_local_products
 from app.payment_expiry import payment_expiry_worker
 from app.rate_limit import BotSpamProtectionMiddleware
 from app.rentsim import RentSimClient, create_rentsim_client
@@ -1029,21 +1024,6 @@ async def lehai_sync_worker(
         await asyncio.sleep(max(15, interval_seconds))
 
 
-async def nce_sync_worker(
-    session_factory,
-    client: NceClient,
-    interval_seconds: int,
-) -> None:
-    while True:
-        try:
-            await sync_nce_products(session_factory, client)
-        except Exception:
-            logging.getLogger(__name__).exception(
-                "Could not synchronize Codex and Claude API products"
-            )
-        await asyncio.sleep(max(15, interval_seconds))
-
-
 async def haji_sync_worker(
     session_factory,
     client: HajiClient,
@@ -1344,8 +1324,8 @@ async def main() -> None:
     await ensure_lehai_products(session_factory, settings)
     lehai_client = create_lehai_client(settings)
     canboso_client = create_canboso_client(settings)
-    nce_client = create_nce_client(settings)
-    await ensure_nce_products(session_factory, nce_client)
+    await ensure_nce_local_products(session_factory)
+    nce_client = None
     haji_client = create_haji_client(settings)
     await ensure_haji_products(
         session_factory,
@@ -1561,32 +1541,6 @@ async def main() -> None:
         if canboso_client is not None
         else None
     )
-    nce_sync_task = (
-        asyncio.create_task(
-            nce_sync_worker(
-                session_factory,
-                nce_client,
-                settings.nce_sync_seconds,
-            )
-        )
-        if nce_client is not None
-        else None
-    )
-    nce_audit_task = (
-        asyncio.create_task(
-            supplier_audit_worker(
-                session_factory,
-                nce_client,
-                bot,
-                settings.admin_ids,
-                settings.nce_audit_seconds,
-                provider="nce",
-                provider_label="API Codex & Claude",
-            )
-        )
-        if nce_client is not None
-        else None
-    )
     haji_sync_task = (
         asyncio.create_task(
             haji_sync_worker(
@@ -1680,14 +1634,6 @@ async def main() -> None:
             canboso_audit_task.cancel()
             with contextlib.suppress(asyncio.CancelledError):
                 await canboso_audit_task
-        if nce_sync_task is not None:
-            nce_sync_task.cancel()
-            with contextlib.suppress(asyncio.CancelledError):
-                await nce_sync_task
-        if nce_audit_task is not None:
-            nce_audit_task.cancel()
-            with contextlib.suppress(asyncio.CancelledError):
-                await nce_audit_task
         if haji_sync_task is not None:
             haji_sync_task.cancel()
             with contextlib.suppress(asyncio.CancelledError):

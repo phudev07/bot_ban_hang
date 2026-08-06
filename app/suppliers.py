@@ -23,7 +23,7 @@ from app.stock_alerts import apply_supplier_stock
 
 logger = logging.getLogger(__name__)
 
-EXTERNAL_FULFILLMENT_SOURCES = ("sumistore", "lehai", "canboso", "nce", "haji")
+EXTERNAL_FULFILLMENT_SOURCES = ("sumistore", "lehai", "canboso", "haji")
 SELLABLE_FULFILLMENT_SOURCES = ("local", *EXTERNAL_FULFILLMENT_SOURCES)
 SUMISTORE_ALTERNATIVE_PRODUCTS: dict[str, tuple[str, str]] = {
     # The same GPT Plus account is available from both supplier wallets.
@@ -242,8 +242,6 @@ def product_supplier_api_enabled(product: Product, provider: str) -> bool:
         return getattr(product, "lehai_api_enabled", True) is not False
     if provider == "canboso":
         return getattr(product, "canboso_api_enabled", True) is not False
-    if provider == "nce":
-        return True
     if provider == "haji":
         return True
     return False

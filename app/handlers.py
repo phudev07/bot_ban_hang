@@ -46,7 +46,7 @@ from app.keyboards import (
 )
 from app.lehai_suppliers import LeHaiPremiumClient
 from app.models import ApiClient, Product, QuantityDiscount, User
-from app.nce_suppliers import NceClient, nce_family_from_product
+from app.nce_suppliers import nce_family_from_product
 from app.partner_services import ensure_api_client, referral_stats, rotate_api_secret
 from app.payment_expiry import register_deposit_message
 from app.product_tutorials import send_purchase_tutorials
@@ -267,7 +267,7 @@ def create_router(
     lehai_client: LeHaiPremiumClient | None = None,
     rentsim_client: RentSimClient | None = None,
     canboso_client: ExternalSupplierClient | None = None,
-    nce_client: NceClient | None = None,
+    nce_client: ExternalSupplierClient | None = None,
     haji_client: HajiClient | None = None,
 ) -> Router:
     router = Router(name="customer")
@@ -382,7 +382,7 @@ def create_router(
             user,
             settings,
             sms_enabled=rentsim_client is not None,
-            nce_enabled=nce_client is not None,
+            nce_enabled=True,
         )
 
     @router.message(Command("muanhanh"))
@@ -406,7 +406,7 @@ def create_router(
             reply_markup=main_menu(
                 user.language,
                 sms_enabled=rentsim_client is not None,
-                nce_enabled=nce_client is not None,
+                nce_enabled=True,
             ),
             disable_web_page_preview=True,
         )
@@ -501,7 +501,7 @@ def create_router(
                 reply_markup=main_menu(
                     user.language,
                     sms_enabled=rentsim_client is not None,
-                    nce_enabled=nce_client is not None,
+                    nce_enabled=True,
                 ),
                 disable_web_page_preview=True,
             )
@@ -533,7 +533,9 @@ def create_router(
         flash_prices = await active_flash_sale_prices(
             session, [product.id for product in products]
         )
-        if products and all(product.fulfillment_source == "nce" for product in products):
+        if products and all(
+            nce_family_from_product(product) is not None for product in products
+        ):
             text = (
                 "⚡ <b>Chọn loại API</b>"
                 if user.language == "vi"
@@ -596,7 +598,9 @@ def create_router(
         products = await active_products(session)
         if group == "nce":
             nce_products = [
-                product for product in products if product.fulfillment_source == "nce"
+                product
+                for product in products
+                if nce_family_from_product(product) is not None
             ]
             if callback.message:
                 if nce_products:
@@ -618,7 +622,7 @@ def create_router(
                         reply_markup=main_menu(
                             user.language,
                             sms_enabled=rentsim_client is not None,
-                            nce_enabled=nce_client is not None,
+                            nce_enabled=True,
                         ),
                     )
             await callback.answer()
@@ -636,7 +640,7 @@ def create_router(
             selected = [
                 product
                 for product in products
-                if product.fulfillment_source != "nce"
+                if nce_family_from_product(product) is None
                 and not is_gg18m(product)
                 and "gpt" in f"{product.name_vi} {product.name_en}".lower()
             ]
@@ -2332,7 +2336,7 @@ def create_router(
                 reply_markup=main_menu(
                     user.language,
                     sms_enabled=rentsim_client is not None,
-                    nce_enabled=nce_client is not None,
+                    nce_enabled=True,
                 ),
                 disable_web_page_preview=True,
             )
@@ -2360,7 +2364,7 @@ def create_router(
                 reply_markup=main_menu(
                     user.language,
                     sms_enabled=rentsim_client is not None,
-                    nce_enabled=nce_client is not None,
+                    nce_enabled=True,
                 ),
                 disable_web_page_preview=True,
             )

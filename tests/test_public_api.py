@@ -222,6 +222,17 @@ def test_warehouse_api_purchases_from_shared_wallet_and_is_idempotent(tmp_path) 
             )
             session.add(haji_product)
             await session.flush()
+            nce_product = Product(
+                category_id=category.id,
+                name_vi="API CODEX - 50M token",
+                name_en="CODEX API - 50M tokens",
+                price=40_000,
+                product_type="account",
+                fulfillment_source="local",
+                active=True,
+            )
+            session.add(nce_product)
+            await session.flush()
             session.add_all(
                 [
                     InventoryItem(
@@ -245,6 +256,7 @@ def test_warehouse_api_purchases_from_shared_wallet_and_is_idempotent(tmp_path) 
             product.id,
             sms_product.id,
             haji_product.id,
+            nce_product.id,
             api_client.api_id,
             api_secret,
         )
@@ -256,6 +268,7 @@ def test_warehouse_api_purchases_from_shared_wallet_and_is_idempotent(tmp_path) 
         product_id,
         sms_product_id,
         haji_product_id,
+        nce_product_id,
         api_id,
         api_secret,
     ) = asyncio.run(setup_database())
@@ -320,6 +333,8 @@ def test_warehouse_api_purchases_from_shared_wallet_and_is_idempotent(tmp_path) 
             f"/v1/stock/{sms_product_id}",
             f"/v1/products/{haji_product_id}",
             f"/v1/stock/{haji_product_id}",
+            f"/v1/products/{nce_product_id}",
+            f"/v1/stock/{nce_product_id}",
         ):
             blocked_stock = client.get(
                 path,
@@ -365,6 +380,25 @@ def test_warehouse_api_purchases_from_shared_wallet_and_is_idempotent(tmp_path) 
         )
         assert haji_blocked_order.status_code == 404
         assert haji_blocked_order.json()["detail"]["code"] == "PRODUCT_NOT_FOUND"
+
+        nce_blocked_body = json.dumps(
+            {"product_id": nce_product_id, "quantity": 1, "max_unit_price": 40_000},
+            separators=(",", ":"),
+        ).encode()
+        nce_blocked_order = client.post(
+            "/v1/orders",
+            content=nce_blocked_body,
+            headers=signed_headers(
+                api_id,
+                api_secret,
+                "POST",
+                "/v1/orders",
+                nce_blocked_body,
+                idempotency_key="NCE-ORDER-BLOCKED-01",
+            ),
+        )
+        assert nce_blocked_order.status_code == 404
+        assert nce_blocked_order.json()["detail"]["code"] == "PRODUCT_NOT_FOUND"
 
         missing_price_body = json.dumps(
             {"product_id": product_id, "quantity": 1},

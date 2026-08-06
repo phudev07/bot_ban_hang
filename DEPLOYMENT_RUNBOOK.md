@@ -100,7 +100,9 @@ and binds port 8080 only to localhost. Caddy is the public reverse proxy.
   can show both Sumi and Le Hai.
 - Supplier cost is saved at delivery time. Dashboard profit is revenue minus cost minus
   referral commission.
-- Sumi, Le Hai, Canboso, NCE Codex/Claude, Haji, and RentSim keys live only in production `.env`.
+- Sumi, Le Hai, Canboso, Haji, and RentSim keys live only in production `.env`.
+- Codex/Claude packages use encrypted CDKs imported through the admin inventory page.
+  They do not call a supplier API, poll supplier stock, or reconcile a supplier balance.
 - Warehouse API partners receive shop product IDs and shop selling prices, never supplier
   keys, supplier URLs, supplier product IDs, supplier order IDs, or supplier cost.
 - Warehouse API only sells active account products. SMS rental is excluded.
@@ -301,20 +303,9 @@ ssh -i "$HOME\.ssh\codex_vps" root@160.191.243.91 `
 After any key rotation, check app logs and use only balance/catalog endpoints. Do not place
 a real supplier order merely to verify a key.
 
-Enable or rotate the Codex/Claude Buyer API key from the Windows clipboard without
-printing it or placing it in shell history:
-
-```powershell
-Get-Clipboard | ssh -i "$HOME\.ssh\codex_vps" root@160.191.243.91 `
-  "cd /opt/telegram-sepay-shop && python3 deploy/set_nce_key.py .env"
-
-ssh -i "$HOME\.ssh\codex_vps" root@160.191.243.91 `
-  "cd /opt/telegram-sepay-shop && docker compose up -d --force-recreate app"
-```
-
-The Buyer API base URL is `https://api.dichvuright.ai`. The customer-facing gateway
-is `https://gateway.dichvuright.ai`; never point supplier catalog or purchase calls at
-the gateway host.
+Codex/Claude stock is managed at `/admin/inventory`. Select the exact token package,
+enter one CDK per line, and save the actual unit cost for profit reporting. Empty local
+stock means out of stock; there is no supplier fallback.
 
 Enable or rotate the Haji dealer API key from the Windows clipboard. The provider currently
 issues both `dl_` and `sk-` formats, so verify the clipboard with the read-only `/api/v2/me`
@@ -506,6 +497,7 @@ user ID, deposit code, log ID, screenshot, or exact time window.
 | Product purchase and wallet flow | `app/services.py`, `app/wallet_ledger.py` |
 | Sumi integration | `app/suppliers.py`, `app/supplier_recovery.py` |
 | Le Hai integration | `app/lehai_suppliers.py` |
+| Codex/Claude local CDK products | `app/nce_suppliers.py`, `app/templates/inventory.html` |
 | Haji Netflix/GPT GCash/GPT K12 integration | `app/haji_suppliers.py` |
 | RentSim/SMS | `app/rentsim.py`, `app/sms_rentals.py` |
 | Telegram handlers | `app/handlers.py`, `app/keyboards.py` |

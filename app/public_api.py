@@ -36,6 +36,7 @@ from app.models import (
     User,
 )
 from app.partner_services import api_signature
+from app.nce_suppliers import nce_family_from_product
 from app.services import active_products, available_stock, purchase_product
 from app.suppliers import ExternalSupplierClient, SumistoreClient
 from app.suppliers import EXTERNAL_FULFILLMENT_SOURCES, SELLABLE_FULFILLMENT_SOURCES
@@ -381,7 +382,8 @@ def create_public_api_router(
             rows = [
                 product
                 for product in rows
-                if product.fulfillment_source not in {"nce", "haji"}
+                if product.fulfillment_source != "haji"
+                and nce_family_from_product(product) is None
             ]
             flash_sales = await active_flash_sale_campaigns(
                 session, [product.id for product in rows]
@@ -435,7 +437,8 @@ def create_public_api_router(
                 or not product.active
                 or product.archived_at is not None
                 or product.product_type != "account"
-                or product.fulfillment_source in {"nce", "haji"}
+                or product.fulfillment_source == "haji"
+                or nce_family_from_product(product) is not None
                 or product.fulfillment_source not in SELLABLE_FULFILLMENT_SOURCES
             ):
                 raise api_error(404, "PRODUCT_NOT_FOUND", "Product does not exist")
@@ -492,16 +495,19 @@ def create_public_api_router(
             )
             if existing_request is None:
                 product_exists = await session.scalar(
-                    select(Product.id).where(
+                    select(Product).where(
                         Product.id == body.product_id,
                         Product.active.is_(True),
                         Product.archived_at.is_(None),
                         Product.product_type == "account",
                         Product.fulfillment_source.in_(SELLABLE_FULFILLMENT_SOURCES),
-                        Product.fulfillment_source.not_in(("nce", "haji")),
+                        Product.fulfillment_source != "haji",
                     )
                 )
-                if product_exists is None:
+                if (
+                    product_exists is None
+                    or nce_family_from_product(product_exists) is not None
+                ):
                     raise api_error(404, "PRODUCT_NOT_FOUND", "Product does not exist")
             session.add(order_request)
             try:

@@ -23,13 +23,12 @@ from app.haji_suppliers import HajiClient
 from app.keyboards import main_menu
 from app.lehai_suppliers import LeHaiPremiumClient
 from app.models import ApiRequestAudit
-from app.nce_suppliers import NceClient
 from app.public_api import client_ip, create_public_api_docs_router, create_public_api_router
 from app.product_tutorials import send_purchase_tutorials
 from app.rate_limit import FixedWindowRateLimiter, RateLimitDecision, RateLimitRule
 from app.rentsim import RentSimClient
 from app.services import process_sepay_payment
-from app.suppliers import SumistoreClient
+from app.suppliers import ExternalSupplierClient, SumistoreClient
 from app.utils import SecretCipher, format_vnd, verify_sepay_hmac
 
 
@@ -60,7 +59,7 @@ def create_api(
     lehai_client: LeHaiPremiumClient | None = None,
     rentsim_client: RentSimClient | None = None,
     canboso_client: CanbosoClient | None = None,
-    nce_client: NceClient | None = None,
+    nce_client: ExternalSupplierClient | None = None,
     haji_client: HajiClient | None = None,
 ) -> FastAPI:
     owned_api_redis = api_redis is None
@@ -403,7 +402,7 @@ def create_api(
                     reply_markup=main_menu(
                         result.language,
                         sms_enabled=rentsim_client is not None,
-                        nce_enabled=nce_client is not None,
+                        nce_enabled=True,
                     ),
                 )
             except Exception:
@@ -469,7 +468,7 @@ def create_api(
                     reply_markup=main_menu(
                         result.language,
                         sms_enabled=rentsim_client is not None,
-                        nce_enabled=nce_client is not None,
+                        nce_enabled=True,
                     ),
                 )
             except Exception:
@@ -517,7 +516,7 @@ def create_api(
                     reply_markup=main_menu(
                         result.language,
                         sms_enabled=rentsim_client is not None,
-                        nce_enabled=nce_client is not None,
+                        nce_enabled=True,
                     ),
                 )
             except Exception:
