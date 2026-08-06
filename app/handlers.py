@@ -36,7 +36,6 @@ from app.keyboards import (
     products_menu,
     purchase_payment_options,
     quick_access_keyboard,
-    quick_buy_groups_menu,
     quantity_menu,
     referral_menu,
     sms_rental_menu,
@@ -326,12 +325,20 @@ def create_router(
 
     async def send_quick_buy(message: Message, session: AsyncSession) -> None:
         user = await get_or_create_user(message, session)
+        products = await active_products(session)
+        flash_prices = await active_flash_sale_prices(
+            session, [product.id for product in products]
+        )
         text = "⚡ <b>Mua nhanh</b>" if user.language == "vi" else "⚡ <b>Quick buy</b>"
+        if not products:
+            text = "Kho chưa có mặt hàng." if user.language == "vi" else "No products yet."
         await message.answer(
             text,
-            reply_markup=quick_buy_groups_menu(
+            reply_markup=products_menu(
+                products,
                 user.language,
-                nce_enabled=nce_client is not None,
+                "back:menu",
+                flash_prices,
             ),
         )
 
@@ -559,13 +566,21 @@ def create_router(
     @router.callback_query(F.data == "menu:quick")
     async def quick_buy(callback: CallbackQuery, session: AsyncSession) -> None:
         user = await get_or_create_user(callback, session)
+        products = await active_products(session)
+        flash_prices = await active_flash_sale_prices(
+            session, [product.id for product in products]
+        )
         text = "⚡ <b>Mua nhanh</b>" if user.language == "vi" else "⚡ <b>Quick buy</b>"
+        if not products:
+            text = "Kho chưa có mặt hàng." if user.language == "vi" else "No products yet."
         if callback.message:
             await callback.message.edit_text(
                 text,
-                reply_markup=quick_buy_groups_menu(
+                reply_markup=products_menu(
+                    products,
                     user.language,
-                    nce_enabled=nce_client is not None,
+                    "back:menu",
+                    flash_prices,
                 ),
             )
         await callback.answer()
@@ -598,8 +613,9 @@ def create_router(
                         "Các gói API đang tạm hết hàng."
                         if user.language == "vi"
                         else "API packages are temporarily unavailable.",
-                        reply_markup=quick_buy_groups_menu(
+                        reply_markup=main_menu(
                             user.language,
+                            sms_enabled=rentsim_client is not None,
                             nce_enabled=nce_client is not None,
                         ),
                     )

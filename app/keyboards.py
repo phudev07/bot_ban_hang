@@ -195,34 +195,6 @@ def categories_menu(categories: list[Category], language: str) -> InlineKeyboard
     return builder.as_markup()
 
 
-def quick_buy_groups_menu(language: str, *, nce_enabled: bool) -> InlineKeyboardMarkup:
-    rows = [
-        [
-            InlineKeyboardButton(
-                text="🤖 Tài khoản GPT" if language == "vi" else "🤖 GPT accounts",
-                callback_data="quick:gpt",
-            )
-        ],
-        [
-            InlineKeyboardButton(
-                text="💎 GG Pro 18M",
-                callback_data="quick:gg18m",
-            )
-        ],
-    ]
-    if nce_enabled:
-        rows.append(
-            [
-                InlineKeyboardButton(
-                    text=tr(language, "nce_api"),
-                    callback_data="quick:nce",
-                )
-            ]
-        )
-    rows.append([InlineKeyboardButton(text=tr(language, "back"), callback_data="back:menu")])
-    return InlineKeyboardMarkup(inline_keyboard=rows)
-
-
 def nce_family_menu(category_id: int, language: str, products: list[Product]) -> InlineKeyboardMarkup:
     families = {nce_family_from_product(product) for product in products}
     rows: list[list[InlineKeyboardButton]] = []

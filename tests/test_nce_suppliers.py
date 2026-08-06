@@ -7,7 +7,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from app.database import Base
-from app.keyboards import main_menu, nce_family_menu, quick_buy_groups_menu
+from app.keyboards import main_menu, nce_family_menu, products_menu
 from app.models import Category, Order, Product, SupplierBalanceTransaction, User
 from app.nce_suppliers import NceClient, ensure_nce_products
 from app.services import purchase_product
@@ -283,13 +283,7 @@ def test_nce_wallet_purchase_records_cost_and_provider() -> None:
     asyncio.run(scenario())
 
 
-def test_nce_navigation_has_three_quick_groups_and_family_buttons() -> None:
-    quick = quick_buy_groups_menu("vi", nce_enabled=True)
-    quick_callbacks = [
-        button.callback_data for row in quick.inline_keyboard for button in row
-    ]
-    assert quick_callbacks[:3] == ["quick:gpt", "quick:gg18m", "quick:nce"]
-
+def test_nce_navigation_keeps_quick_buy_flat_and_family_buttons() -> None:
     main = main_menu("vi", sms_enabled=True, nce_enabled=True)
     rows = [[button.callback_data for button in row] for row in main.inline_keyboard]
     assert ["menu:sms"] in rows
@@ -315,6 +309,13 @@ def test_nce_navigation_has_three_quick_groups_and_family_buttons() -> None:
             supplier_product_id="1",
         ),
     ]
+    quick = products_menu(products, "vi", "back:menu")
+    quick_callbacks = [
+        button.callback_data for row in quick.inline_keyboard for button in row
+    ]
+    assert quick_callbacks == ["prod:1", "prod:2", "back:menu"]
+    assert not any(callback.startswith("quick:") for callback in quick_callbacks)
+
     family = nce_family_menu(3, "vi", products)
     family_callbacks = [
         button.callback_data for row in family.inline_keyboard for button in row
