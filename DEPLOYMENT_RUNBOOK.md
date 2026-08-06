@@ -292,7 +292,7 @@ clipboard, then pipe it through SSH:
 
 ```powershell
 Get-Clipboard | ssh -i "$HOME\.ssh\codex_vps" root@160.191.243.91 `
-  "cd /opt/telegram-sepay-shop && python deploy/set_lehai_key.py .env"
+  "cd /opt/telegram-sepay-shop && python3 deploy/set_lehai_key.py .env"
 
 ssh -i "$HOME\.ssh\codex_vps" root@160.191.243.91 `
   "cd /opt/telegram-sepay-shop && docker compose up -d --force-recreate app"
@@ -306,7 +306,7 @@ printing it or placing it in shell history:
 
 ```powershell
 Get-Clipboard | ssh -i "$HOME\.ssh\codex_vps" root@160.191.243.91 `
-  "cd /opt/telegram-sepay-shop && python deploy/set_nce_key.py .env"
+  "cd /opt/telegram-sepay-shop && python3 deploy/set_nce_key.py .env"
 
 ssh -i "$HOME\.ssh\codex_vps" root@160.191.243.91 `
   "cd /opt/telegram-sepay-shop && docker compose up -d --force-recreate app"
@@ -322,7 +322,7 @@ endpoint before writing it. The helper rejects other clipboard content:
 
 ```powershell
 Get-Clipboard | ssh -i "$HOME\.ssh\codex_vps" root@160.191.243.91 `
-  "cd /opt/telegram-sepay-shop && python deploy/set_haji_key.py .env"
+  "cd /opt/telegram-sepay-shop && python3 deploy/set_haji_key.py .env"
 
 ssh -i "$HOME\.ssh\codex_vps" root@160.191.243.91 `
   "cd /opt/telegram-sepay-shop && docker compose up -d --force-recreate app"
