@@ -10,7 +10,7 @@ from aiogram.types import InlineKeyboardMarkup, ReplyKeyboardMarkup
 # Telegram's animated topic-icon set. Keeping the IDs here makes all bot surfaces
 # consistent without storing media on the VPS.
 CHATGPT_EMOJI_ID = "6318653047178274387"
-NETFLIX_EMOJI_ID = "6318569630323450252"
+NETFLIX_EMOJI_ID = "5318911503938634641"
 GOOGLE_EMOJI_ID = "6319109310144062723"
 GEMINI_EMOJI_ID = "6212797771372563847"
 
