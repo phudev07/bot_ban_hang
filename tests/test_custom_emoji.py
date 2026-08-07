@@ -46,3 +46,31 @@ def test_prepare_method_animates_text_and_decorates_product_button() -> None:
 
     assert '<tg-emoji emoji-id="5237699328843200968">✅</tg-emoji>' in method.text
     assert button.icon_custom_emoji_id == CHATGPT_EMOJI_ID
+
+
+def test_prepare_method_removes_unmapped_legacy_button_emoji() -> None:
+    button = InlineKeyboardButton(text="🔌 API đấu kho", callback_data="menu:api")
+    method = SendMessage(
+        chat_id=1,
+        text="Menu",
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=[[button]]),
+    )
+
+    prepare_telegram_method(method)
+
+    assert button.text == "API đấu kho"
+    assert button.icon_custom_emoji_id == "6318871179977302808"
+
+
+def test_prepare_method_replaces_all_flags_with_one_language_icon() -> None:
+    button = InlineKeyboardButton(text="🇻🇳 VN / 🇺🇸 US", callback_data="language")
+    method = SendMessage(
+        chat_id=1,
+        text="Menu",
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=[[button]]),
+    )
+
+    prepare_telegram_method(method)
+
+    assert button.text == "VN / US"
+    assert button.icon_custom_emoji_id == "6318871179977302808"

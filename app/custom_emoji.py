@@ -47,6 +47,17 @@ _PROTECTED_HTML = re.compile(
     r"(<(?:pre|code|tg-emoji)\b[^>]*>.*?</(?:pre|code|tg-emoji)>)",
     flags=re.IGNORECASE | re.DOTALL,
 )
+_BUTTON_EMOJI = re.compile(
+    "["
+    "\U0001F100-\U0001F2FF"
+    "\U0001F300-\U0001FAFF"
+    "\u2190-\u21FF"
+    "\u2300-\u23FF"
+    "\u2600-\u27BF"
+    "\u2B00-\u2BFF"
+    "\uFE0F\u200D"
+    "]+"
+)
 
 
 def custom_emoji(fallback: str, emoji_id: str) -> str:
@@ -107,6 +118,8 @@ def animate_html(text: str) -> str:
 
 def button_emoji_id(text: str) -> str | None:
     normalized = " ".join(text.casefold().split())
+    if "🇻🇳" in text or "🇺🇸" in text:
+        return EMOJI_IDS["🌐"]
     if any(
         marker in normalized
         for marker in (
@@ -148,13 +161,10 @@ def button_emoji_id(text: str) -> str | None:
 
 
 def _strip_animated_prefix(text: str) -> str:
-    stripped = text.lstrip()
-    for fallback in sorted(EMOJI_IDS, key=len, reverse=True):
-        variants = (fallback + "️", fallback)
-        for variant in variants:
-            if stripped.startswith(variant):
-                return stripped[len(variant) :].lstrip()
-    return text
+    # Button icons are rendered separately by Telegram. Remove any legacy emoji,
+    # including flags embedded later in the label, so only one icon is visible.
+    cleaned = _BUTTON_EMOJI.sub("", text)
+    return re.sub(r"\s{2,}", " ", cleaned).strip()
 
 
 def decorate_keyboard(markup: Any) -> None:
