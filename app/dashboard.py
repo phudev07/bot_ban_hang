@@ -63,6 +63,7 @@ from app.models import (
     WalletTransaction,
 )
 from app.partner_services import normalize_allowed_ips
+from app.preorders import PreorderError, admin_cancel_preorder
 from app.rentsim import RentSimClient
 from app.services import (
     approve_wallet_deposit,
@@ -125,6 +126,8 @@ WALLET_KIND_LABELS = {
     "sms_refund": "Hoàn tiền thuê số",
     "referral_commission": "Hoa hồng giới thiệu",
     "admin_adjustment": "Admin điều chỉnh",
+    "preorder_charge": "Thanh toán đặt trước",
+    "preorder_refund": "Hoàn tiền đặt trước",
 }
 WALLET_REFERENCE_LABELS = {
     "system": "Hệ thống",
@@ -133,6 +136,7 @@ WALLET_REFERENCE_LABELS = {
     "sms_rental": "Đơn thuê số",
     "referral": "Đơn giới thiệu",
     "balance_adjustment": "Điều chỉnh Admin",
+    "preorder": "Đơn đặt trước",
 }
 
 
@@ -4376,7 +4380,9 @@ def create_dashboard_router(
             pending_value = int(
                 await session.scalar(
                     select(func.coalesce(func.sum(Preorder.total_amount), 0)).where(
-                        Preorder.status.in_(("pending", "processing"))
+                        Preorder.status.in_(("pending", "processing")),
+                        Preorder.funds_charged.is_(True),
+                        Preorder.refunded_at.is_(None),
                     )
                 )
                 or 0
@@ -4423,6 +4429,41 @@ def create_dashboard_router(
                 },
             ),
         )
+
+    @router.post("/admin/preorders/{preorder_id}/cancel")
+    async def cancel_preorder_admin(
+        preorder_id: int,
+        request: Request,
+        csrf: str = Form(...),
+        reason: str = Form(...),
+    ) -> RedirectResponse:
+        if not is_admin(request):
+            return redirect_to_login()
+        if not valid_csrf(request, csrf):
+            flash(request, "Phiên xác nhận đã hết hạn. Vui lòng thử lại.", "error")
+            return RedirectResponse("/admin/preorders", status_code=303)
+        try:
+            async with session_factory() as session:
+                preorder = await admin_cancel_preorder(
+                    session,
+                    preorder_id,
+                    reason=reason,
+                    admin_username=str(request.session.get("dashboard_admin") or "admin"),
+                )
+                await session.commit()
+                refunded = format_vnd(preorder.total_amount)
+            flash(
+                request,
+                f"Đã hủy {preorder.code}, hoàn {refunded} và xếp thông báo cho khách.",
+            )
+        except PreorderError as exc:
+            message = {
+                "not_found": "Không tìm thấy đơn đặt trước.",
+                "too_late": "Đơn đang giao hoặc đã kết thúc nên không thể hủy.",
+                "cancel_reason_required": "Bạn cần nhập lý do hủy để thông báo cho khách.",
+            }.get(exc.code, "Không thể hủy đơn đặt trước.")
+            flash(request, message, "error")
+        return RedirectResponse("/admin/preorders?status=pending", status_code=303)
 
     @router.get("/admin/orders", response_class=HTMLResponse)
     async def orders_page(

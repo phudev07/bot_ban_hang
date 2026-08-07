@@ -438,10 +438,18 @@ class Preorder(Base):
     base_unit_price: Mapped[int] = mapped_column(BigInteger)
     preorder_unit_price: Mapped[int] = mapped_column(BigInteger)
     total_amount: Mapped[int] = mapped_column(BigInteger)
+    funds_charged: Mapped[bool] = mapped_column(
+        Boolean, default=False, server_default="false"
+    )
+    refunded_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
     status: Mapped[str] = mapped_column(
         String(20), default="pending", server_default="pending", index=True
     )
     cancel_reason: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    cancel_note: Mapped[str | None] = mapped_column(Text, nullable=True)
+    cancelled_by: Mapped[str | None] = mapped_column(String(255), nullable=True)
     completed_order_code: Mapped[str | None] = mapped_column(
         String(32), nullable=True, index=True
     )

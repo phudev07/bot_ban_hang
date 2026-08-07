@@ -5,11 +5,21 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from app.database import Base
-from app.models import Category, InventoryItem, Order, Preorder, Product, User
+from app.models import (
+    Category,
+    InventoryItem,
+    Order,
+    Preorder,
+    Product,
+    User,
+    WalletTransaction,
+)
 from app.preorders import (
     PreorderError,
     _claim_next_preorder,
     _process_claimed_preorder,
+    admin_cancel_preorder,
+    cancel_user_preorder,
     create_preorder,
     preorder_unit_price,
     preorderable_products,
@@ -62,7 +72,7 @@ def test_preorder_price_adds_five_percent() -> None:
     assert preorder_unit_price(10_001) == 10_502
 
 
-def test_preorder_creation_checks_wallet_without_deducting() -> None:
+def test_preorder_creation_deducts_wallet_immediately() -> None:
     async def scenario() -> None:
         engine, sessions = await make_database()
         product_id, user_id = await seed_product(sessions)
@@ -82,7 +92,7 @@ def test_preorder_creation_checks_wallet_without_deducting() -> None:
         async with sessions() as session:
             user = await session.get(User, user_id)
             assert user is not None
-            assert user.balance == 100_000
+            assert user.balance == 79_000
             assert await session.scalar(select(func.count(Preorder.id))) == 1
         await engine.dispose()
 
@@ -117,6 +127,89 @@ def test_preorder_rejects_duplicate_active_product() -> None:
                 assert exc.code == "duplicate"
             else:
                 raise AssertionError("duplicate preorder was accepted")
+        await engine.dispose()
+
+    asyncio.run(scenario())
+
+
+def test_customer_cancel_refunds_exactly_once() -> None:
+    async def scenario() -> None:
+        engine, sessions = await make_database()
+        product_id, user_id = await seed_product(sessions)
+        async with sessions() as session:
+            preorder = await create_preorder(
+                session,
+                user_id,
+                product_id,
+                1,
+                expected_base_unit_price=10_000,
+                max_active_per_user=5,
+            )
+            await session.commit()
+            preorder_id = preorder.id
+        async with sessions() as session:
+            user = await session.get(User, user_id)
+            assert user is not None and user.balance == 89_500
+            cancelled = await cancel_user_preorder(session, user_id, preorder_id)
+            await session.commit()
+            assert cancelled.refunded_at is not None
+
+        async with sessions() as session:
+            user = await session.get(User, user_id)
+            preorder = await session.get(Preorder, preorder_id)
+            assert user is not None and user.balance == 100_000
+            assert preorder is not None and preorder.status == "cancelled"
+            assert preorder.cancel_reason == "user_cancelled"
+            assert (
+                await session.scalar(
+                    select(func.count(WalletTransaction.id)).where(
+                        WalletTransaction.event_key == f"preorder_refund:{preorder_id}"
+                    )
+                )
+                == 1
+            )
+            try:
+                await cancel_user_preorder(session, user_id, preorder_id)
+            except PreorderError as exc:
+                assert exc.code == "too_late"
+            else:
+                raise AssertionError("cancelled preorder was refunded twice")
+        await engine.dispose()
+
+    asyncio.run(scenario())
+
+
+def test_admin_cancel_refunds_and_queues_reason_notification() -> None:
+    async def scenario() -> None:
+        engine, sessions = await make_database()
+        product_id, user_id = await seed_product(sessions)
+        async with sessions() as session:
+            preorder = await create_preorder(
+                session,
+                user_id,
+                product_id,
+                1,
+                expected_base_unit_price=10_000,
+                max_active_per_user=5,
+            )
+            await session.commit()
+            preorder_id = preorder.id
+        async with sessions() as session:
+            preorder = await admin_cancel_preorder(
+                session,
+                preorder_id,
+                reason="Nguồn hàng chưa có lịch mở lại",
+                admin_username="owner",
+            )
+            await session.commit()
+            assert preorder.status == "cancelled"
+            assert preorder.cancel_reason == "admin_cancelled"
+            assert preorder.cancel_note == "Nguồn hàng chưa có lịch mở lại"
+            assert preorder.cancelled_by == "admin:owner"
+            assert preorder.notification_status == "pending"
+        async with sessions() as session:
+            user = await session.get(User, user_id)
+            assert user is not None and user.balance == 100_000
         await engine.dispose()
 
     asyncio.run(scenario())
@@ -323,7 +416,7 @@ def test_price_change_cancels_without_charging() -> None:
     asyncio.run(scenario())
 
 
-def test_insufficient_wallet_at_fulfillment_cancels_without_delivery() -> None:
+def test_reserved_preorder_fulfills_even_if_remaining_wallet_is_low() -> None:
     async def scenario() -> None:
         engine, sessions = await make_database()
         product_id, user_id = await seed_product(sessions, balance=20_000)
@@ -361,10 +454,9 @@ def test_insufficient_wallet_at_fulfillment_cancels_without_delivery() -> None:
             preorder = await session.get(Preorder, preorder_id)
             user = await session.get(User, user_id)
             assert preorder is not None
-            assert preorder.status == "cancelled"
-            assert preorder.cancel_reason == "insufficient_balance"
+            assert preorder.status == "completed"
             assert user is not None and user.balance == 5_000
-            assert await session.scalar(select(func.count(Order.id))) == 0
+            assert await session.scalar(select(func.count(Order.id))) == 1
         await engine.dispose()
 
     asyncio.run(scenario())
@@ -598,7 +690,7 @@ def test_transient_supplier_failure_stays_pending_and_does_not_charge() -> None:
             user = await session.get(User, user_id)
             assert preorder is not None and preorder.status == "pending"
             assert preorder.last_error == "supplier_unavailable"
-            assert user is not None and user.balance == 100_000
+            assert user is not None and user.balance == 79_000
             assert await session.scalar(select(func.count(Order.id))) == 0
         await engine.dispose()
 

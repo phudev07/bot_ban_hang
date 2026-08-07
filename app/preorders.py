@@ -13,12 +13,13 @@ from sqlalchemy.orm import aliased, selectinload
 from app.delivery import delivery_keyboard, delivery_text
 from app.haji_suppliers import HajiClient
 from app.lehai_suppliers import LeHaiPremiumClient
-from app.models import InventoryItem, Order, Preorder, Product, User
+from app.models import InventoryItem, Order, Preorder, Product, User, WalletTransaction
 from app.product_tutorials import send_purchase_tutorials
 from app.services import active_products, purchase_product
 from app.supplier_recovery import queue_supplier_recovery
 from app.suppliers import EXTERNAL_FULFILLMENT_SOURCES, ExternalSupplierClient, SumistoreClient
 from app.utils import SecretCipher, format_vnd, sanitize_customer_text
+from app.wallet_ledger import apply_wallet_change
 
 
 logger = logging.getLogger(__name__)
@@ -166,6 +167,19 @@ async def create_preorder(
     except IntegrityError as exc:
         await session.rollback()
         raise PreorderError("duplicate") from exc
+    apply_wallet_change(
+        session,
+        user,
+        -quote.total_amount,
+        kind="preorder_charge",
+        event_key=f"preorder_charge:{preorder.id}",
+        reference_type="preorder",
+        reference_id=preorder.code,
+        description=(
+            f"Đặt trước {quantity} tài khoản {product.name_vi} · giá đã gồm 5%"
+        ),
+    )
+    preorder.funds_charged = True
     return preorder
 
 
@@ -215,13 +229,90 @@ async def cancel_user_preorder(
         raise PreorderError("not_found")
     if preorder.status != "pending":
         raise PreorderError("too_late")
-    preorder.status = "cancelled"
-    preorder.cancel_reason = "user_cancelled"
-    preorder.cancelled_at = datetime.now(UTC)
-    preorder.next_attempt_at = None
-    preorder.notification_status = "none"
+    await _cancel_and_refund_locked(
+        session,
+        preorder,
+        reason="user_cancelled",
+        cancelled_by=f"user:{user_id}",
+        notify=True,
+    )
     await session.flush()
     return preorder
+
+
+async def admin_cancel_preorder(
+    session: AsyncSession,
+    preorder_id: int,
+    *,
+    reason: str,
+    admin_username: str,
+) -> Preorder:
+    clean_reason = " ".join(reason.split()).strip()
+    if not clean_reason:
+        raise PreorderError("cancel_reason_required")
+    preorder = await session.scalar(
+        select(Preorder).where(Preorder.id == preorder_id).with_for_update()
+    )
+    if preorder is None:
+        raise PreorderError("not_found")
+    if preorder.status != "pending":
+        raise PreorderError("too_late")
+    await _cancel_and_refund_locked(
+        session,
+        preorder,
+        reason="admin_cancelled",
+        cancel_note=clean_reason[:500],
+        cancelled_by=f"admin:{admin_username}"[:255],
+        notify=True,
+    )
+    await session.flush()
+    return preorder
+
+
+async def _cancel_and_refund_locked(
+    session: AsyncSession,
+    preorder: Preorder,
+    *,
+    reason: str,
+    cancelled_by: str,
+    notify: bool,
+    cancel_note: str | None = None,
+) -> None:
+    user = await session.scalar(
+        select(User).where(User.telegram_id == preorder.user_id).with_for_update()
+    )
+    if user is None:
+        raise PreorderError("not_found")
+    refund_event_key = f"preorder_refund:{preorder.id}"
+    existing_refund = await session.scalar(
+        select(WalletTransaction.id).where(
+            WalletTransaction.event_key == refund_event_key
+        )
+    )
+    if preorder.funds_charged and preorder.refunded_at is None:
+        if existing_refund is None:
+            apply_wallet_change(
+                session,
+                user,
+                preorder.total_amount,
+                kind="preorder_refund",
+                event_key=refund_event_key,
+                reference_type="preorder",
+                reference_id=preorder.code,
+                description=(
+                    f"Hoàn tiền đơn đặt trước {preorder.code} · "
+                    f"{cancel_note or reason}"
+                ),
+            )
+        preorder.refunded_at = datetime.now(UTC)
+    preorder.status = "cancelled"
+    preorder.cancel_reason = reason[:64]
+    preorder.cancel_note = cancel_note
+    preorder.cancelled_by = cancelled_by[:255]
+    preorder.cancelled_at = datetime.now(UTC)
+    preorder.processing_started_at = None
+    preorder.next_attempt_at = datetime.now(UTC) if notify else None
+    preorder.notification_status = "pending" if notify else "none"
 
 
 def preorder_detail_text(preorder: Preorder, language: str) -> str:
@@ -245,12 +336,20 @@ def preorder_detail_text(preorder: Preorder, language: str) -> str:
         if preorder.status == "cancelled":
             reason = {
                 "user_cancelled": "Cancelled by you",
+                "admin_cancelled": preorder.cancel_note or "Cancelled by shop admin",
                 "price_changed": "Product price changed",
                 "insufficient_balance": "Insufficient wallet balance when stock returned",
                 "product_unavailable": "Product is no longer available",
                 "user_blocked": "Account is restricted",
             }.get(preorder.cancel_reason or "", "Could not complete the preorder")
-            reason_line = f"• Reason: <b>{reason}</b>\n"
+            reason_line = f"• Reason: <b>{escape(reason)}</b>\n"
+        payment_status = (
+            f"Refunded <b>{format_vnd(preorder.total_amount)}</b> to wallet"
+            if preorder.refunded_at is not None
+            else f"Paid <b>{format_vnd(preorder.total_amount)}</b>"
+            if preorder.funds_charged
+            else "Charged on delivery (legacy preorder)"
+        )
         return (
             f"📦 <b>Preorder {preorder.code}</b>\n\n"
             f"• Product: <b>{escape(name)}</b>\n"
@@ -258,20 +357,29 @@ def preorder_detail_text(preorder: Preorder, language: str) -> str:
             f"• Normal price at booking: <b>{format_vnd(preorder.base_unit_price)}/1</b>\n"
             f"• Preorder price (+5%): <b>{format_vnd(preorder.preorder_unit_price)}/1</b>\n"
             f"• Expected total: <b>{format_vnd(preorder.total_amount)}</b>\n"
+            f"• Payment: {payment_status}\n"
             f"• Status: <b>{status}</b>\n\n"
             f"{reason_line}"
-            "Your wallet is charged only after a successful delivery."
+            "Cancelled preorders are refunded automatically."
         )
     reason_line = ""
     if preorder.status == "cancelled":
         reason = {
             "user_cancelled": "Bạn chủ động hủy",
+            "admin_cancelled": preorder.cancel_note or "Admin hủy đơn",
             "price_changed": "Giá sản phẩm đã thay đổi",
             "insufficient_balance": "Ví không đủ tiền khi hàng về",
             "product_unavailable": "Sản phẩm không còn khả dụng",
             "user_blocked": "Tài khoản đang bị hạn chế",
         }.get(preorder.cancel_reason or "", "Không thể hoàn tất đơn đặt trước")
-        reason_line = f"• Lý do: <b>{reason}</b>\n"
+        reason_line = f"• Lý do: <b>{escape(reason)}</b>\n"
+    payment_status = (
+        f"Đã hoàn <b>{format_vnd(preorder.total_amount)}</b> về ví"
+        if preorder.refunded_at is not None
+        else f"Đã thanh toán <b>{format_vnd(preorder.total_amount)}</b>"
+        if preorder.funds_charged
+        else "Trừ tiền khi giao (đơn cũ)"
+    )
     return (
         f"📦 <b>Đơn đặt trước {preorder.code}</b>\n\n"
         f"• Sản phẩm: <b>{escape(name)}</b>\n"
@@ -279,9 +387,10 @@ def preorder_detail_text(preorder: Preorder, language: str) -> str:
         f"• Giá thường lúc đặt: <b>{format_vnd(preorder.base_unit_price)}/1</b>\n"
         f"• Giá đặt trước (+5%): <b>{format_vnd(preorder.preorder_unit_price)}/1</b>\n"
         f"• Tổng dự kiến: <b>{format_vnd(preorder.total_amount)}</b>\n"
+        f"• Thanh toán: {payment_status}\n"
         f"• Trạng thái: <b>{status}</b>\n\n"
         f"{reason_line}"
-        "Bot chỉ trừ ví sau khi lấy hàng và giao thành công."
+        "Mọi đơn bị hủy đều được tự động hoàn tiền về ví."
     )
 
 
@@ -310,6 +419,7 @@ async def _recover_stale_preorders(session_factory: async_sessionmaker[AsyncSess
                 preorder.status = "completed"
                 preorder.completed_order_code = existing_order.shop_order_code
                 preorder.completed_at = existing_order.delivered_at or datetime.now(UTC)
+                preorder.funds_charged = True
                 preorder.processing_started_at = None
                 preorder.next_attempt_at = datetime.now(UTC)
                 preorder.notification_status = "pending"
@@ -426,12 +536,13 @@ async def _cancel_preorder(
         )
         if preorder is None or preorder.status not in ACTIVE_PREORDER_STATUSES:
             return
-        preorder.status = "cancelled"
-        preorder.cancel_reason = reason[:64]
-        preorder.cancelled_at = datetime.now(UTC)
-        preorder.processing_started_at = None
-        preorder.next_attempt_at = datetime.now(UTC)
-        preorder.notification_status = "pending"
+        await _cancel_and_refund_locked(
+            session,
+            preorder,
+            reason=reason,
+            cancelled_by="system:preorder_worker",
+            notify=True,
+        )
         await session.commit()
 
 
@@ -449,6 +560,7 @@ async def _complete_preorder(
         preorder.status = "completed"
         preorder.completed_order_code = order_code
         preorder.completed_at = datetime.now(UTC)
+        preorder.funds_charged = True
         preorder.processing_started_at = None
         preorder.next_attempt_at = datetime.now(UTC)
         preorder.notification_status = "pending"
@@ -490,7 +602,7 @@ async def _process_claimed_preorder(
             await session.commit()
             await _cancel_preorder(session_factory, current.id, "user_blocked")
             return
-        if int(user.balance) < int(current.total_amount):
+        if not current.funds_charged and int(user.balance) < int(current.total_amount):
             await session.commit()
             await _cancel_preorder(session_factory, current.id, "insufficient_balance")
             return
@@ -527,6 +639,7 @@ async def _process_claimed_preorder(
         preorder_id=preorder.id,
         expected_base_unit_price=preorder.base_unit_price,
         fixed_unit_price=preorder.preorder_unit_price,
+        wallet_already_charged=preorder.funds_charged,
     )
     if result.ok and result.orders:
         await _complete_preorder(
@@ -564,7 +677,15 @@ def _cancel_notification_text(preorder: Preorder, user: User) -> str:
     name = sanitize_customer_text(
         preorder.product_name_en if language == "en" else preorder.product_name_vi
     )
-    if preorder.cancel_reason == "price_changed":
+    if preorder.cancel_reason == "admin_cancelled" and preorder.cancel_note:
+        reason = preorder.cancel_note
+    elif preorder.cancel_reason == "user_cancelled":
+        reason = (
+            "You cancelled this preorder."
+            if language == "en"
+            else "Bạn đã chủ động hủy đơn đặt trước này."
+        )
+    elif preorder.cancel_reason == "price_changed":
         reason = (
             "The product price changed before stock returned."
             if language == "en"
@@ -587,15 +708,15 @@ def _cancel_notification_text(preorder: Preorder, user: User) -> str:
             f"❌ <b>Preorder {preorder.code} cancelled</b>\n\n"
             f"• Product: <b>{escape(name)}</b>\n"
             f"• Quantity: <b>{preorder.quantity}</b>\n"
-            f"• Reason: {reason}\n\n"
-            "No wallet funds were deducted."
+            f"• Reason: {escape(reason)}\n\n"
+            f"Refunded to wallet: <b>{format_vnd(preorder.total_amount)}</b>."
         )
     return (
         f"❌ <b>Đã hủy đơn đặt trước {preorder.code}</b>\n\n"
         f"• Sản phẩm: <b>{escape(name)}</b>\n"
         f"• Số lượng: <b>{preorder.quantity}</b>\n"
-        f"• Lý do: {reason}\n\n"
-        "Bot chưa trừ bất kỳ khoản tiền nào cho đơn này."
+        f"• Lý do: {escape(reason)}\n\n"
+        f"Đã hoàn về ví: <b>{format_vnd(preorder.total_amount)}</b>."
     )
 
 

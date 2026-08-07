@@ -98,6 +98,26 @@ async def initialize_database(engine, session_factory, seed_demo_data: bool) -> 
         )
         await connection.execute(
             text(
+                "ALTER TABLE preorders ADD COLUMN IF NOT EXISTS "
+                "funds_charged BOOLEAN NOT NULL DEFAULT FALSE"
+            )
+        )
+        await connection.execute(
+            text(
+                "ALTER TABLE preorders ADD COLUMN IF NOT EXISTS refunded_at TIMESTAMPTZ NULL"
+            )
+        )
+        await connection.execute(
+            text("ALTER TABLE preorders ADD COLUMN IF NOT EXISTS cancel_note TEXT NULL")
+        )
+        await connection.execute(
+            text(
+                "ALTER TABLE preorders ADD COLUMN IF NOT EXISTS "
+                "cancelled_by VARCHAR(255) NULL"
+            )
+        )
+        await connection.execute(
+            text(
                 "ALTER TABLE broadcast_logs ADD COLUMN IF NOT EXISTS "
                 "status VARCHAR(20) NOT NULL DEFAULT 'completed'"
             )

@@ -1169,7 +1169,10 @@ async def purchase_product(
     preorder_id: int | None = None,
     expected_base_unit_price: int | None = None,
     fixed_unit_price: int | None = None,
+    wallet_already_charged: bool = False,
 ) -> PurchaseResult:
+    if wallet_already_charged and preorder_id is None:
+        return PurchaseResult(False, "invalid_preorder_payment")
     async with session_factory() as session:
         product = await session.get(Product, product_id)
     external_clients = (
@@ -1214,6 +1217,7 @@ async def purchase_product(
                 preorder_id=preorder_id,
                 expected_base_unit_price=expected_base_unit_price,
                 fixed_unit_price=fixed_unit_price,
+                wallet_already_charged=wallet_already_charged,
             )
     return await _purchase_product(
         session_factory,
@@ -1239,6 +1243,7 @@ async def purchase_product(
         preorder_id=preorder_id,
         expected_base_unit_price=expected_base_unit_price,
         fixed_unit_price=fixed_unit_price,
+        wallet_already_charged=wallet_already_charged,
     )
 
 
@@ -1267,6 +1272,7 @@ async def _purchase_product(
     preorder_id: int | None,
     expected_base_unit_price: int | None,
     fixed_unit_price: int | None,
+    wallet_already_charged: bool,
 ) -> PurchaseResult:
     async with session_factory() as session:
         async with session.begin():
@@ -1283,6 +1289,8 @@ async def _purchase_product(
                     or preorder.product_id != product_id
                     or preorder.quantity != quantity
                     or preorder.status == "cancelled"
+                    or (wallet_already_charged and not preorder.funds_charged)
+                    or (wallet_already_charged and preorder.refunded_at is not None)
                 ):
                     return PurchaseResult(False, "preorder_unavailable")
                 existing_orders = list(
@@ -1566,7 +1574,7 @@ async def _purchase_product(
                     quantity_discount_value=pricing.quantity_discount_value,
                     flash_sale_id=(pricing.flash_sale.id if pricing.flash_sale else None),
                 )
-            if user.balance < total_amount:
+            if not wallet_already_charged and user.balance < total_amount:
                 return PurchaseResult(
                     False,
                     "insufficient",
@@ -1621,19 +1629,20 @@ async def _purchase_product(
                         secret_values.append(cipher.decrypt(item.encrypted_secret))
                     if pricing.coupon is not None:
                         pricing.coupon.used_count += 1
-                    apply_wallet_change(
-                        session,
-                        user,
-                        -total_amount,
-                        kind="product_purchase",
-                        event_key=f"purchase:{batch_code}",
-                        reference_type="order",
-                        reference_id=batch_code,
-                        description=(
-                            f"Mua {quantity} tài khoản {product.name_vi} "
-                            f"qua {sales_channel}"
-                        ),
-                    )
+                    if not wallet_already_charged:
+                        apply_wallet_change(
+                            session,
+                            user,
+                            -total_amount,
+                            kind="product_purchase",
+                            event_key=f"purchase:{batch_code}",
+                            reference_type="order",
+                            reference_id=batch_code,
+                            description=(
+                                f"Mua {quantity} tài khoản {product.name_vi} "
+                                f"qua {sales_channel}"
+                            ),
+                        )
                     await award_referral_commission(
                         session,
                         user,
@@ -1917,18 +1926,19 @@ async def _purchase_product(
                     )
                 if pricing.coupon is not None:
                     pricing.coupon.used_count += 1
-                apply_wallet_change(
-                    session,
-                    user,
-                    -total_amount,
-                    kind="product_purchase",
-                    event_key=f"purchase:{batch_code}",
-                    reference_type="order",
-                    reference_id=batch_code,
-                    description=(
-                        f"Mua {quantity} tài khoản {product.name_vi} qua {sales_channel}"
-                    ),
-                )
+                if not wallet_already_charged:
+                    apply_wallet_change(
+                        session,
+                        user,
+                        -total_amount,
+                        kind="product_purchase",
+                        event_key=f"purchase:{batch_code}",
+                        reference_type="order",
+                        reference_id=batch_code,
+                        description=(
+                            f"Mua {quantity} tài khoản {product.name_vi} qua {sales_channel}"
+                        ),
+                    )
                 await award_referral_commission(
                     session,
                     user,
@@ -1969,18 +1979,19 @@ async def _purchase_product(
 
             now = datetime.now(UTC)
             batch_code = f"B{secrets.token_hex(5).upper()}"
-            apply_wallet_change(
-                session,
-                user,
-                -total_amount,
-                kind="product_purchase",
-                event_key=f"purchase:{batch_code}",
-                reference_type="order",
-                reference_id=batch_code,
-                description=(
-                    f"Mua {quantity} tài khoản {product.name_vi} qua {sales_channel}"
-                ),
-            )
+            if not wallet_already_charged:
+                apply_wallet_change(
+                    session,
+                    user,
+                    -total_amount,
+                    kind="product_purchase",
+                    event_key=f"purchase:{batch_code}",
+                    reference_type="order",
+                    reference_id=batch_code,
+                    description=(
+                        f"Mua {quantity} tài khoản {product.name_vi} qua {sales_channel}"
+                    ),
+                )
             orders = []
             secret_values = []
             for item in items:

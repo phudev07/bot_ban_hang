@@ -5,8 +5,8 @@
   <article><span>Đang chờ</span><strong>{{ stats.pending }}</strong><small>xếp FIFO theo từng sản phẩm</small></article>
   <article><span>Đang giao</span><strong>{{ stats.processing }}</strong><small>đã được worker nhận xử lý</small></article>
   <article><span>Đã giao</span><strong>{{ stats.completed }}</strong><small>đã trừ ví và trả hàng</small></article>
-  <article><span>Đã hủy</span><strong>{{ stats.cancelled }}</strong><small>không trừ tiền</small></article>
-  <article><span>Giá trị đang chờ</span><strong>{{ stats.pending_value|vnd }}</strong><small>chưa giữ tiền trong ví khách</small></article>
+  <article><span>Đã hủy</span><strong>{{ stats.cancelled }}</strong><small>đã hoàn lại ví khách</small></article>
+  <article><span>Tiền đang giữ</span><strong>{{ stats.pending_value|vnd }}</strong><small>đã thu cho đơn đang chờ</small></article>
 </section>
 
 <section class="panel filter-panel">
@@ -19,8 +19,8 @@
 </section>
 
 <section class="panel">
-  <div class="panel-head"><div><span>PREORDER QUEUE</span><h2>Hàng chờ giao tự động</h2></div><small>100 đơn mỗi trang · không giữ tiền</small></div>
-  <div class="table-wrap"><table><thead><tr><th>Mã đặt trước</th><th>Khách hàng</th><th>Sản phẩm</th><th>Số lượng</th><th>Giá lúc đặt</th><th>Giá +5%</th><th>Tổng dự kiến</th><th>Trạng thái</th><th>Kết quả</th><th>Thời gian</th></tr></thead><tbody>
+  <div class="panel-head"><div><span>PREORDER QUEUE</span><h2>Hàng chờ giao tự động</h2></div><small>100 đơn mỗi trang · đã thu tiền</small></div>
+  <div class="table-wrap"><table><thead><tr><th>Mã đặt trước</th><th>Khách hàng</th><th>Sản phẩm</th><th>Số lượng</th><th>Giá lúc đặt</th><th>Giá +5%</th><th>Tổng đã thu</th><th>Trạng thái</th><th>Kết quả</th><th>Thời gian</th><th>Quản lý</th></tr></thead><tbody>
   {% for preorder, user, product in rows %}
   <tr>
     <td><strong><code>{{ preorder.code }}</code></strong><small>ID #{{ preorder.id }} · thử {{ preorder.attempt_count }} lần</small></td>
@@ -31,10 +31,11 @@
     <td><strong>{{ preorder.preorder_unit_price|vnd }}/1</strong></td>
     <td><strong>{{ preorder.total_amount|vnd }}</strong></td>
     <td><span class="status {{ 'on' if preorder.status == 'completed' else 'wait' if preorder.status in ('pending', 'processing') else 'off' }}">{{ {'pending':'Đang chờ','processing':'Đang giao','completed':'Đã giao','cancelled':'Đã hủy'}.get(preorder.status, preorder.status) }}</span><small>{{ preorder.last_error or '—' }}</small></td>
-    <td>{% if preorder.completed_order_code %}<a class="text-link" href="/admin/orders?q={{ preorder.completed_order_code }}"><code>{{ preorder.completed_order_code }}</code></a>{% else %}<span>{{ preorder.cancel_reason or '—' }}</span>{% endif %}<small>TB: {{ preorder.notification_status }}</small></td>
+    <td>{% if preorder.completed_order_code %}<a class="text-link" href="/admin/orders?q={{ preorder.completed_order_code }}"><code>{{ preorder.completed_order_code }}</code></a>{% else %}<span>{{ preorder.cancel_note or preorder.cancel_reason or '—' }}</span>{% endif %}<small>Thanh toán: {{ 'đã hoàn' if preorder.refunded_at else 'đã thu' if preorder.funds_charged else 'đơn cũ' }} · TB: {{ preorder.notification_status }}</small></td>
     <td>{{ preorder.created_at|localtime }}<small>Cập nhật: {{ preorder.updated_at|localtime }}</small></td>
+    <td>{% if preorder.status == 'pending' %}<form method="post" action="/admin/preorders/{{ preorder.id }}/cancel" onsubmit="return confirm('Hủy {{ preorder.code }} và hoàn {{ preorder.total_amount|vnd }} về ví khách?');"><input type="hidden" name="csrf" value="{{ csrf_token }}"><input name="reason" maxlength="500" required placeholder="Lý do gửi cho khách"><button class="button danger compact" type="submit">Hủy & hoàn tiền</button></form>{% else %}<span>—</span>{% endif %}</td>
   </tr>
-  {% else %}<tr><td colspan="10" class="empty">Không có đơn đặt trước phù hợp.</td></tr>{% endfor %}
+  {% else %}<tr><td colspan="11" class="empty">Không có đơn đặt trước phù hợp.</td></tr>{% endfor %}
   </tbody></table></div>
   {{ render_pager(pager, 'đơn đặt trước') }}
 </section>
