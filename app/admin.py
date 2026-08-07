@@ -12,13 +12,14 @@ from app.broadcasts import queue_broadcast
 from app.config import Settings
 from app.inventory_dedup import filter_duplicate_inventory
 from app.models import Category, InventoryItem, Order, Product, User
-from app.states import BroadcastStates
+from app.states import BroadcastStates, ProductDescriptionStates
 from app.suppliers import EXTERNAL_FULFILLMENT_SOURCES
 from app.utils import (
     SecretCipher,
     contains_supplier_identity,
     format_vnd,
     parse_vnd,
+    safe_customer_telegram_html,
 )
 
 
@@ -55,6 +56,98 @@ def create_admin_router(settings: Settings, cipher: SecretCipher) -> Router:
             ]
         )
 
+    def admin_panel_keyboard() -> InlineKeyboardMarkup:
+        return InlineKeyboardMarkup(
+            inline_keyboard=[
+                [
+                    InlineKeyboardButton(
+                        text="✍️ Sửa mô tả sản phẩm trong bot",
+                        callback_data="admin:description:list",
+                    )
+                ]
+            ]
+        )
+
+    def description_product_keyboard(products: list[Product]) -> InlineKeyboardMarkup:
+        rows = [
+            [
+                InlineKeyboardButton(
+                    text=f"✍️ #{product.id} · {product.name_vi[:42]}",
+                    callback_data=f"admin:description:select:{product.id}",
+                )
+            ]
+            for product in products
+        ]
+        rows.append(
+            [
+                InlineKeyboardButton(
+                    text="❌ Hủy",
+                    callback_data="admin:description:cancel",
+                )
+            ]
+        )
+        return InlineKeyboardMarkup(inline_keyboard=rows)
+
+    def description_language_keyboard(product_id: int) -> InlineKeyboardMarkup:
+        return InlineKeyboardMarkup(
+            inline_keyboard=[
+                [
+                    InlineKeyboardButton(
+                        text="🇻🇳 Mô tả tiếng Việt",
+                        callback_data=f"admin:description:lang:{product_id}:vi",
+                    )
+                ],
+                [
+                    InlineKeyboardButton(
+                        text="🇺🇸 Mô tả tiếng Anh",
+                        callback_data=f"admin:description:lang:{product_id}:en",
+                    )
+                ],
+                [
+                    InlineKeyboardButton(
+                        text="← Chọn sản phẩm khác",
+                        callback_data="admin:description:list",
+                    ),
+                    InlineKeyboardButton(
+                        text="❌ Hủy",
+                        callback_data="admin:description:cancel",
+                    ),
+                ],
+            ]
+        )
+
+    async def active_description_products(session: AsyncSession) -> list[Product]:
+        return list(
+            await session.scalars(
+                select(Product)
+                .where(
+                    Product.archived_at.is_(None),
+                    Product.active.is_(True),
+                    Product.product_type == "account",
+                )
+                .order_by(Product.id)
+                .limit(90)
+            )
+        )
+
+    async def send_description_product_list(
+        message: Message,
+        session: AsyncSession,
+    ) -> None:
+        products = await active_description_products(session)
+        if not products:
+            await message.answer(
+                "Không có sản phẩm đang hiển thị để sửa mô tả. "
+                "Hãy bật sản phẩm trong trang Admin trước."
+            )
+            return
+        await message.answer(
+            "✍️ <b>Sửa mô tả hiển thị trong bot</b>\n\n"
+            "Chọn sản phẩm. Sau đó bạn chỉ cần gửi một tin nhắn đã định dạng "
+            "và gắn emoji Premium; bot sẽ lưu nguyên format của Telegram.",
+            reply_markup=description_product_keyboard(products),
+        )
+
     async def reject_if_not_admin(message: Message) -> bool:
         if is_admin(message):
             return False
@@ -62,9 +155,14 @@ def create_admin_router(settings: Settings, cipher: SecretCipher) -> Router:
         return True
 
     @router.message(Command("admin"))
-    async def admin_panel(message: Message, session: AsyncSession) -> None:
+    async def admin_panel(
+        message: Message,
+        session: AsyncSession,
+        state: FSMContext,
+    ) -> None:
         if await reject_if_not_admin(message):
             return
+        await state.clear()
         users = int(await session.scalar(select(func.count(User.telegram_id))) or 0)
         batch_orders = int(
             await session.scalar(
@@ -99,8 +197,218 @@ def create_admin_router(settings: Settings, cipher: SecretCipher) -> Router:
             "/addcategory Tên danh mục\n"
             "/addproduct category_id | tên | giá | mô tả\n"
             "/addstock product_id | giá vốn rồi xuống dòng nhập hàng; ngăn bằng ---\n"
-            "/thongbao - gửi thông báo tới tất cả người đã /start"
+            "/thongbao - gửi thông báo tới tất cả người đã /start\n"
+            "/mota - sửa mô tả và emoji Telegram của sản phẩm",
+            reply_markup=admin_panel_keyboard(),
         )
+
+    @router.message(Command("mota"))
+    async def begin_product_description(
+        message: Message,
+        session: AsyncSession,
+        state: FSMContext,
+    ) -> None:
+        if await reject_if_not_admin(message):
+            return
+        await state.clear()
+        await send_description_product_list(message, session)
+
+    @router.callback_query(F.data == "admin:description:list")
+    async def open_product_description_list(
+        callback: CallbackQuery,
+        session: AsyncSession,
+        state: FSMContext,
+    ) -> None:
+        if not is_admin_id(callback.from_user.id if callback.from_user else None):
+            await callback.answer("Bạn không có quyền.", show_alert=True)
+            return
+        await state.clear()
+        if callback.message:
+            await send_description_product_list(callback.message, session)
+        await callback.answer()
+
+    @router.callback_query(F.data.startswith("admin:description:select:"))
+    async def select_description_product(
+        callback: CallbackQuery,
+        session: AsyncSession,
+        state: FSMContext,
+    ) -> None:
+        if not is_admin_id(callback.from_user.id if callback.from_user else None):
+            await callback.answer("Bạn không có quyền.", show_alert=True)
+            return
+        product_id_text = (callback.data or "").rsplit(":", 1)[-1]
+        product = (
+            await session.get(Product, int(product_id_text))
+            if product_id_text.isdigit()
+            else None
+        )
+        if (
+            product is None
+            or product.archived_at is not None
+            or not product.active
+            or product.product_type != "account"
+        ):
+            await callback.answer("Sản phẩm không còn hiển thị.", show_alert=True)
+            return
+        await state.clear()
+        if callback.message:
+            await callback.message.answer(
+                f"📦 <b>{escape(product.name_vi)}</b>\n\n"
+                "Bạn muốn thay mô tả ngôn ngữ nào?",
+                reply_markup=description_language_keyboard(product.id),
+            )
+        await callback.answer()
+
+    @router.callback_query(F.data.startswith("admin:description:lang:"))
+    async def select_description_language(
+        callback: CallbackQuery,
+        session: AsyncSession,
+        state: FSMContext,
+    ) -> None:
+        if not is_admin_id(callback.from_user.id if callback.from_user else None):
+            await callback.answer("Bạn không có quyền.", show_alert=True)
+            return
+        parts = (callback.data or "").split(":")
+        product_id_text = parts[3] if len(parts) == 5 else ""
+        language = parts[4] if len(parts) == 5 else ""
+        product = (
+            await session.get(Product, int(product_id_text))
+            if product_id_text.isdigit()
+            else None
+        )
+        if (
+            product is None
+            or product.archived_at is not None
+            or not product.active
+            or product.product_type != "account"
+            or language not in {"vi", "en"}
+        ):
+            await callback.answer("Lựa chọn đã hết hạn.", show_alert=True)
+            return
+        await state.set_state(ProductDescriptionStates.waiting_for_content)
+        await state.update_data(product_id=product.id, language=language)
+        if callback.message:
+            await callback.message.answer(
+                "✍️ <b>Gửi mô tả mới ngay trong tin nhắn tiếp theo</b>\n\n"
+                f"• Sản phẩm: <b>{escape(product.name_vi)}</b>\n"
+                f"• Ngôn ngữ: <b>{'Tiếng Việt' if language == 'vi' else 'Tiếng Anh'}</b>\n\n"
+                "Hãy soạn tin bằng công cụ định dạng của Telegram và chọn emoji Premium "
+                "như khi nhắn tin bình thường. Bot sẽ giữ nguyên chữ đậm, nghiêng, "
+                "gạch chân, link và custom emoji.\n\n"
+                "Chỉ gửi phần mô tả, không cần gửi tên hay giá sản phẩm.",
+                reply_markup=InlineKeyboardMarkup(
+                    inline_keyboard=[
+                        [
+                            InlineKeyboardButton(
+                                text="❌ Hủy sửa mô tả",
+                                callback_data="admin:description:cancel",
+                            )
+                        ]
+                    ]
+                ),
+            )
+        await callback.answer("Hãy gửi mô tả mới.")
+
+    @router.message(ProductDescriptionStates.waiting_for_content)
+    async def receive_product_description(
+        message: Message,
+        session: AsyncSession,
+        state: FSMContext,
+    ) -> None:
+        if await reject_if_not_admin(message):
+            await state.clear()
+            return
+        plain_text = message.text or message.caption or ""
+        if not plain_text.strip():
+            await message.answer(
+                "Mô tả phải là tin nhắn chữ hoặc caption. Hãy gửi lại, hoặc bấm Hủy."
+            )
+            return
+        if plain_text.lstrip().startswith("/"):
+            await message.answer(
+                "Bạn đang ở bước gửi mô tả. Hãy gửi nội dung mô tả hoặc bấm "
+                "Hủy sửa mô tả trước khi dùng lệnh khác."
+            )
+            return
+        if len(plain_text) > 3000:
+            await message.answer(
+                "Mô tả dài quá 3.000 ký tự. Hãy rút gọn để bot còn chỗ hiển thị "
+                "tên, giá, tồn kho và ưu đãi."
+            )
+            return
+        source_html = message.html_text
+        if contains_supplier_identity(source_html):
+            await message.answer(
+                "Mô tả có tên, URL hoặc mã kỹ thuật của nguồn hàng. "
+                "Hãy bỏ thông tin nguồn rồi gửi lại."
+            )
+            return
+        description_html = safe_customer_telegram_html(source_html).strip()
+        if not description_html:
+            await message.answer("Mô tả không có nội dung hợp lệ. Hãy gửi lại.")
+            return
+        state_data = await state.get_data()
+        product_id = int(state_data.get("product_id", 0))
+        language = str(state_data.get("language", ""))
+        product = await session.scalar(
+            select(Product).where(Product.id == product_id).with_for_update()
+        )
+        if (
+            product is None
+            or product.archived_at is not None
+            or not product.active
+            or product.product_type != "account"
+            or language not in {"vi", "en"}
+        ):
+            await state.clear()
+            await message.answer("Sản phẩm không còn hiển thị. Thao tác đã được hủy.")
+            return
+        if language == "vi":
+            product.description_vi = description_html
+        else:
+            product.description_en = description_html
+        await session.commit()
+        await state.clear()
+        await message.answer(
+            "✅ <b>Đã cập nhật mô tả trong bot</b>\n\n"
+            f"• Sản phẩm: <b>{escape(product.name_vi)}</b>\n"
+            f"• Ngôn ngữ: <b>{'Tiếng Việt' if language == 'vi' else 'Tiếng Anh'}</b>\n\n"
+            "📋 <b>Nội dung vừa lưu:</b>\n"
+            f"{description_html}",
+            reply_markup=InlineKeyboardMarkup(
+                inline_keyboard=[
+                    [
+                        InlineKeyboardButton(
+                            text="✍️ Sửa tiếp sản phẩm này",
+                            callback_data=f"admin:description:select:{product.id}",
+                        )
+                    ],
+                    [
+                        InlineKeyboardButton(
+                            text="📦 Chọn sản phẩm khác",
+                            callback_data="admin:description:list",
+                        )
+                    ],
+                ]
+            ),
+        )
+
+    @router.callback_query(F.data == "admin:description:cancel")
+    async def cancel_product_description(
+        callback: CallbackQuery,
+        state: FSMContext,
+    ) -> None:
+        if not is_admin_id(callback.from_user.id if callback.from_user else None):
+            await callback.answer("Bạn không có quyền.", show_alert=True)
+            return
+        await state.clear()
+        if callback.message:
+            try:
+                await callback.message.edit_reply_markup(reply_markup=None)
+            except TelegramBadRequest:
+                pass
+            await callback.message.answer("Đã hủy sửa mô tả sản phẩm.")
+        await callback.answer()
 
     async def stage_broadcast(
         source: Message,

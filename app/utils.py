@@ -139,6 +139,8 @@ _TELEGRAM_TAG_ALIASES = {
     "pre": "pre",
     "blockquote": "blockquote",
     "a": "a",
+    "tg-spoiler": "tg-spoiler",
+    "tg-emoji": "tg-emoji",
 }
 _TELEGRAM_LINK_SCHEMES = frozenset({"http", "https", "tg", "mailto"})
 
@@ -179,11 +181,22 @@ class _TelegramDescriptionSanitizer(HTMLParser):
         output_tag = _TELEGRAM_TAG_ALIASES.get(normalized)
         if output_tag is None:
             return
+        if any(opened_tag == "tg-emoji" for _, opened_tag in self.open_tags):
+            return
         if output_tag == "a":
             href = _safe_telegram_href(dict(attrs).get("href"))
             self.open_tags.append((output_tag, output_tag if href else None))
             if href:
                 self.parts.append(f'<a href="{escape(href, quote=True)}">')
+            return
+        if output_tag == "tg-emoji":
+            emoji_id = dict(attrs).get("emoji-id") or ""
+            valid_emoji_id = bool(re.fullmatch(r"\d{5,30}", emoji_id))
+            self.open_tags.append(
+                (output_tag, output_tag if valid_emoji_id else None)
+            )
+            if valid_emoji_id:
+                self.parts.append(f'<tg-emoji emoji-id="{emoji_id}">')
             return
         self.open_tags.append((output_tag, output_tag))
         self.parts.append(f"<{output_tag}>")
@@ -191,6 +204,10 @@ class _TelegramDescriptionSanitizer(HTMLParser):
     def handle_endtag(self, tag: str) -> None:
         output_tag = _TELEGRAM_TAG_ALIASES.get(tag.casefold())
         if output_tag is None:
+            return
+        if output_tag != "tg-emoji" and any(
+            opened_tag == "tg-emoji" for _, opened_tag in self.open_tags
+        ):
             return
         matching_index = next(
             (

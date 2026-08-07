@@ -104,6 +104,18 @@ def test_product_description_balances_malformed_telegram_html() -> None:
     )
 
 
+def test_product_description_keeps_valid_telegram_custom_emoji_only() -> None:
+    rendered = safe_customer_telegram_html(
+        '<tg-emoji emoji-id="5312241539987020022">🔥</tg-emoji> '
+        '<tg-emoji emoji-id="invalid" onclick="bad()">⚡</tg-emoji>'
+    )
+
+    assert rendered == (
+        '<tg-emoji emoji-id="5312241539987020022">🔥</tg-emoji> ⚡'
+    )
+    assert "onclick" not in rendered
+
+
 def test_verify_sepay_hmac() -> None:
     body = b'{"id":92704,"transferType":"in"}'
     timestamp = "1700000000"

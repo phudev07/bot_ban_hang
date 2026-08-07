@@ -1438,6 +1438,7 @@ async def main() -> None:
             *customer_commands,
             BotCommand(command="admin", description="Mở bảng quản trị Telegram"),
             BotCommand(command="products", description="Xem sản phẩm và tồn kho"),
+            BotCommand(command="mota", description="Sửa mô tả sản phẩm trong bot"),
             BotCommand(command="thongbao", description="Gửi thông báo tới khách hàng"),
         ]
         for admin_id in settings.admin_ids:
