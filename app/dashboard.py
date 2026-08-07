@@ -27,6 +27,11 @@ from app.config import Settings
 from app.haji_suppliers import HajiClient
 from app.inventory_dedup import filter_duplicate_inventory
 from app.lehai_suppliers import LeHaiPremiumClient
+from app.maintenance import (
+    set_sms_rental_maintenance,
+    sms_maintenance_operation,
+    sms_rental_maintenance_enabled,
+)
 from app.models import (
     BalanceAdjustment,
     BroadcastDelivery,
@@ -67,7 +72,7 @@ from app.services import (
     supplier_client_for_product,
 )
 from app.price_alerts import release_price_lock_if_inventory_empty
-from app.sms_rentals import sms_availability
+from app.sms_rentals import SmsAvailability, sms_availability
 from app.stock_alerts import queue_inventory_stock_alert, stock_alert_mode
 from app.supplier_audit import PROVIDER, reconcile_supplier_balance, record_supplier_purchase
 from app.suppliers import (
@@ -105,7 +110,7 @@ SUPPLIER_PROVIDER_LABELS = {
     "sumistore": "Sumi",
     "lehai": "Lê Hải",
     "canboso": "Canboso",
-    "nce": "Codex/Claude (lịch sử API)",
+    "nce": "Kho cũ",
     "haji": "Haji",
 }
 
@@ -5217,6 +5222,7 @@ def create_dashboard_router(
                 )
             )
         async with session_factory() as session:
+            maintenance_enabled = await sms_rental_maintenance_enabled(session)
             rental_count_statement = (
                 select(func.count(SmsRental.id))
                 .join(User, User.telegram_id == SmsRental.user_id)
@@ -5289,10 +5295,19 @@ def create_dashboard_router(
                 )
                 or 0
             )
-        availability = await sms_availability(
-            rentsim_client,
-            settings.rentsim_markup,
-            fallback_unit_cost=settings.rentsim_fallback_price,
+        availability = (
+            SmsAvailability(
+                False,
+                unit_cost=settings.rentsim_fallback_price,
+                sale_price=settings.rentsim_fallback_price + settings.rentsim_markup,
+                error_code="MAINTENANCE",
+            )
+            if maintenance_enabled
+            else await sms_availability(
+                rentsim_client,
+                settings.rentsim_markup,
+                fallback_unit_cost=settings.rentsim_fallback_price,
+            )
         )
         total, pending, unknown, success, refunded, users, revenue, cost, refund_total = (
             int(value) for value in metrics
@@ -5309,6 +5324,7 @@ def create_dashboard_router(
                 search=search,
                 pager=pager,
                 availability=availability,
+                maintenance_enabled=maintenance_enabled,
                 stats={
                     "total": total,
                     "pending": pending,
@@ -5325,6 +5341,34 @@ def create_dashboard_router(
             ),
         )
 
+    @router.post("/admin/sms-rentals/maintenance")
+    async def toggle_sms_rental_maintenance(
+        request: Request,
+        mode: str = Form(...),
+        csrf: str = Form(...),
+    ) -> RedirectResponse:
+        if not is_admin(request):
+            return redirect_to_login()
+        if not valid_csrf(request, csrf):
+            return RedirectResponse("/admin/sms-rentals", status_code=303)
+        if mode not in {"enable", "disable"}:
+            flash(request, "Trạng thái bảo trì không hợp lệ.", "error")
+            return RedirectResponse("/admin/sms-rentals", status_code=303)
+        enabled = mode == "enable"
+        async with sms_maintenance_operation():
+            async with session_factory() as session:
+                async with session.begin():
+                    await set_sms_rental_maintenance(session, enabled)
+        flash(
+            request,
+            (
+                "Đã bật bảo trì thuê số. Bot dừng nhận lượt thuê mới."
+                if enabled
+                else "Đã tắt bảo trì. Khách có thể thuê số trở lại."
+            ),
+        )
+        return RedirectResponse("/admin/sms-rentals", status_code=303)
+
     @router.get("/admin/supplier-audit", response_class=HTMLResponse)
     async def supplier_audit_page(
         request: Request,
@@ -5339,14 +5383,12 @@ def create_dashboard_router(
             PROVIDER: supplier_client,
             "lehai": lehai_client,
             "canboso": canboso_client,
-            "nce": nce_client,
             "haji": haji_client,
         }
         provider_labels = {
             PROVIDER: "Sumi",
             "lehai": "Lê Hải Premium",
             "canboso": "Canboso",
-            "nce": "Codex/Claude (lịch sử API)",
             "haji": "Haji",
         }
         selected_provider = provider if provider in provider_clients else PROVIDER
@@ -5486,14 +5528,12 @@ def create_dashboard_router(
             PROVIDER: supplier_client,
             "lehai": lehai_client,
             "canboso": canboso_client,
-            "nce": nce_client,
             "haji": haji_client,
         }
         provider_labels = {
             PROVIDER: "Sumi",
             "lehai": "Lê Hải Premium",
             "canboso": "Canboso",
-            "nce": "Codex/Claude (lịch sử API)",
             "haji": "Haji",
         }
         selected_provider = provider if provider in provider_clients else PROVIDER

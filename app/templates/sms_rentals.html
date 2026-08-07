@@ -1,14 +1,27 @@
 {% extends "base.html" %}
 {% from "_pagination.html" import render_pager %}
 {% block content %}
+<section class="panel maintenance-control {{ 'maintenance-on' if maintenance_enabled else 'maintenance-off' }}">
+  <div>
+    <span>TRẠNG THÁI NHẬN ĐƠN THUÊ MỚI</span>
+    <h2>{{ 'Đang bảo trì' if maintenance_enabled else 'Đang hoạt động' }}</h2>
+    <p>{% if maintenance_enabled %}Bot đang chặn toàn bộ lượt thuê mới trước khi gọi nguồn. Các số đã thuê vẫn tiếp tục được kiểm tra OTP và hoàn ví bình thường.{% else %}Khách có thể thuê số mới. Khi nguồn bảo trì, bật công tắc này để khóa nhận đơn ngay lập tức.{% endif %}</p>
+  </div>
+  <form method="post" action="/admin/sms-rentals/maintenance">
+    <input type="hidden" name="csrf" value="{{ csrf_token }}">
+    <input type="hidden" name="mode" value="{{ 'disable' if maintenance_enabled else 'enable' }}">
+    <button class="button {{ 'primary' if maintenance_enabled else 'danger' }}" type="submit">{{ 'Tắt bảo trì · Mở thuê số' if maintenance_enabled else 'Bật bảo trì · Dừng thuê số' }}</button>
+  </form>
+</section>
+
 <section class="page-intro sms-intro">
   <div>
     <span>RENTSIM · KH2 · CHATGPT</span>
     <h2>Theo dõi từng số thuê, OTP và khoản hoàn ví.</h2>
     <p>Giá bán bằng giá nguồn động cộng 1.000đ. Số có thể thuê được ước tính theo số dư key vì trường stock của RentSim cập nhật không chính xác.</p>
   </div>
-  <div class="sms-live-card {{ 'connected' if availability.connected else 'offline' }}">
-    <small>{{ 'ĐANG KẾT NỐI' if availability.connected else 'MẤT KẾT NỐI' }}</small>
+  <div class="sms-live-card {{ 'maintenance' if maintenance_enabled else 'connected' if availability.connected else 'offline' }}">
+    <small>{{ 'ĐANG BẢO TRÌ' if maintenance_enabled else 'ĐANG KẾT NỐI' if availability.connected else 'MẤT KẾT NỐI' }}</small>
     <strong>{{ availability.effective_stock }}</strong>
     <span>số có thể thuê theo số dư</span>
     <dl><div><dt>Giá nguồn</dt><dd>{{ availability.unit_cost|vnd }}</dd></div><div><dt>Giá bán</dt><dd>{{ availability.sale_price|vnd }}</dd></div><div><dt>Số dư API</dt><dd>{{ availability.provider_balance|vnd }}</dd></div><div><dt>Stock API tham khảo</dt><dd>{{ availability.source_stock }}</dd></div></dl>

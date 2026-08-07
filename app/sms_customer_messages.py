@@ -64,6 +64,7 @@ def rental_failure_text(
     """Render a safe failure message without interpolating internal error data."""
     if language == "en":
         messages = {
+            "maintenance": "SMS rentals are under maintenance. Please try again later.",
             "disabled": "SMS rental is not available yet.",
             "out_of_stock": (
                 "ChatGPT Cambodia numbers are currently unavailable. Your wallet was not "
@@ -98,6 +99,7 @@ def rental_failure_text(
         )
     else:
         messages = {
+            "maintenance": "Dịch vụ thuê số đang bảo trì. Vui lòng quay lại sau.",
             "disabled": "Chức năng thuê số hiện chưa sẵn sàng.",
             "out_of_stock": (
                 "Số ChatGPT Cambodia hiện chưa có. Ví không bị trừ hoặc tiền giữ đã được hoàn lại."

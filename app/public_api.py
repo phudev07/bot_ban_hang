@@ -10,7 +10,7 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Request
-from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse
+from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
 from pydantic import BaseModel, ConfigDict, Field
 from redis.asyncio import Redis
@@ -36,7 +36,6 @@ from app.models import (
     User,
 )
 from app.partner_services import api_signature
-from app.nce_suppliers import nce_family_from_product
 from app.services import active_products, available_stock, purchase_product
 from app.suppliers import ExternalSupplierClient, SumistoreClient
 from app.suppliers import EXTERNAL_FULFILLMENT_SOURCES, SELLABLE_FULFILLMENT_SOURCES
@@ -45,17 +44,6 @@ from app.utils import SecretCipher, sanitize_customer_text
 
 templates = Jinja2Templates(directory=Path(__file__).parent / "templates")
 logger = logging.getLogger(__name__)
-CODEX_SETUP_PATH = Path(__file__).parent / "static" / "VietShare-Codex-Claude-Setup.zip"
-CODEX_ACTIVATION_URL = "https://gateway.dichvuright.ai/redeem"
-CODEX_GATEWAY_URL = "https://gateway.dichvuright.ai/v1"
-CODEX_MODELS = ("cx/gpt-5.6-sol", "cx/gpt-5.5")
-CLAUDE_GATEWAY_URL = "https://gateway.dichvuright.ai"
-CLAUDE_MODELS = (
-    "claude-opus-5",
-    "claude-sonnet-5",
-    "claude-haiku-4-5",
-    "claude-fable-5",
-)
 API_PROCESSING_RECOVERY_AFTER = timedelta(minutes=15)
 API_ID_PATTERN = re.compile(r"^VS[0-9A-F]{16}$")
 API_SIGNATURE_PATTERN = re.compile(r"^[0-9a-fA-F]{64}$")
@@ -160,41 +148,6 @@ def public_order_failure_code(message: str) -> str:
 
 def create_public_api_docs_router(settings: Settings) -> APIRouter:
     router = APIRouter(tags=["shop-api-docs"])
-
-    @router.get("/codex-claude", response_class=HTMLResponse)
-    @router.get("/codex-claude/", response_class=HTMLResponse, include_in_schema=False)
-    async def codex_claude_guide(request: Request) -> HTMLResponse:
-        response = templates.TemplateResponse(
-            request,
-            "codex_claude_guide.html",
-            {
-                "activation_url": CODEX_ACTIVATION_URL,
-                "gateway_url": CODEX_GATEWAY_URL,
-                "models": CODEX_MODELS,
-                "claude_gateway_url": CLAUDE_GATEWAY_URL,
-                "claude_models": CLAUDE_MODELS,
-            },
-        )
-        response.headers["Cache-Control"] = "public, max-age=300"
-        return response
-
-    @router.get("/codex-setup.zip", response_class=FileResponse)
-    async def download_codex_setup() -> FileResponse:
-        if not CODEX_SETUP_PATH.is_file():
-            raise HTTPException(status_code=404, detail="Setup tool is unavailable")
-        return FileResponse(
-            CODEX_SETUP_PATH,
-            media_type="application/zip",
-            filename="VietShare-Codex-Claude-Setup.zip",
-            headers={
-                "Cache-Control": "public, max-age=300",
-                "X-Content-Type-Options": "nosniff",
-            },
-        )
-
-    @router.get("/codex-setup.exe", include_in_schema=False)
-    async def download_codex_setup_legacy() -> RedirectResponse:
-        return RedirectResponse("/codex-setup.zip", status_code=307)
 
     @router.get("/docs", response_class=HTMLResponse)
     @router.get("/docs/", response_class=HTMLResponse, include_in_schema=False)
@@ -429,7 +382,6 @@ def create_public_api_router(
                 product
                 for product in rows
                 if product.fulfillment_source != "haji"
-                and nce_family_from_product(product) is None
             ]
             flash_sales = await active_flash_sale_campaigns(
                 session, [product.id for product in rows]
@@ -484,7 +436,6 @@ def create_public_api_router(
                 or product.archived_at is not None
                 or product.product_type != "account"
                 or product.fulfillment_source == "haji"
-                or nce_family_from_product(product) is not None
                 or product.fulfillment_source not in SELLABLE_FULFILLMENT_SOURCES
             ):
                 raise api_error(404, "PRODUCT_NOT_FOUND", "Product does not exist")
@@ -550,10 +501,7 @@ def create_public_api_router(
                         Product.fulfillment_source != "haji",
                     )
                 )
-                if (
-                    product_exists is None
-                    or nce_family_from_product(product_exists) is not None
-                ):
+                if product_exists is None:
                     raise api_error(404, "PRODUCT_NOT_FOUND", "Product does not exist")
             session.add(order_request)
             try:

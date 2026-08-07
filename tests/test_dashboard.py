@@ -1111,6 +1111,23 @@ def test_dashboard_login_catalog_inventory_and_balance(tmp_path) -> None:
         assert "SMS1" in sms_page.text
         assert "+85512345678" in sms_page.text
         assert "123456" in sms_page.text
+        assert "Đang hoạt động" in sms_page.text
+        maintenance_on = client.post(
+            "/admin/sms-rentals/maintenance",
+            data={"csrf": csrf, "mode": "enable"},
+            follow_redirects=False,
+        )
+        assert maintenance_on.status_code == 303
+        sms_maintenance_page = client.get("/admin/sms-rentals")
+        assert "Đang bảo trì" in sms_maintenance_page.text
+        assert "Tắt bảo trì · Mở thuê số" in sms_maintenance_page.text
+        maintenance_off = client.post(
+            "/admin/sms-rentals/maintenance",
+            data={"csrf": csrf, "mode": "disable"},
+            follow_redirects=False,
+        )
+        assert maintenance_off.status_code == 303
+        assert "Đang hoạt động" in client.get("/admin/sms-rentals").text
 
         api_clients_page = client.get("/admin/api-clients")
         assert api_clients_page.status_code == 200

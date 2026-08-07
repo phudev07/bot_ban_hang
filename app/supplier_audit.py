@@ -227,7 +227,7 @@ def record_supplier_purchase(
         PROVIDER: "Sumi",
         "lehai": "Lê Hải Premium",
         "canboso": "Canboso",
-        "nce": "API Codex & Claude",
+        "nce": "kho cũ",
     }.get(provider, "nhà cung cấp")
     transaction = SupplierBalanceTransaction(
         provider=provider,

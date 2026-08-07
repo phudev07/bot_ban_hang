@@ -31,7 +31,6 @@ from app.keyboards import (
     deposit_amounts,
     language_menu,
     main_menu,
-    nce_family_menu,
     order_history_menu,
     product_detail,
     products_menu,
@@ -45,8 +44,8 @@ from app.keyboards import (
     warehouse_api_rotate_confirmation,
 )
 from app.lehai_suppliers import LeHaiPremiumClient
+from app.maintenance import sms_rental_maintenance_enabled
 from app.models import ApiClient, Product, QuantityDiscount, User
-from app.nce_suppliers import nce_family_from_product
 from app.partner_services import ensure_api_client, referral_stats, rotate_api_secret
 from app.payment_expiry import register_deposit_message
 from app.product_tutorials import send_purchase_tutorials
@@ -238,7 +237,6 @@ async def send_home_with_navigation(
     settings: Settings,
     *,
     sms_enabled: bool,
-    nce_enabled: bool = False,
 ) -> None:
     quick_access_text = (
         "⌨️ Phím thao tác nhanh đã sẵn sàng."
@@ -254,7 +252,6 @@ async def send_home_with_navigation(
         reply_markup=main_menu(
             user.language,
             sms_enabled=sms_enabled,
-            nce_enabled=nce_enabled,
         ),
         disable_web_page_preview=True,
     )
@@ -382,7 +379,6 @@ def create_router(
             user,
             settings,
             sms_enabled=rentsim_client is not None,
-            nce_enabled=True,
         )
 
     @router.message(Command("muanhanh"))
@@ -406,7 +402,6 @@ def create_router(
             reply_markup=main_menu(
                 user.language,
                 sms_enabled=rentsim_client is not None,
-                nce_enabled=True,
             ),
             disable_web_page_preview=True,
         )
@@ -501,7 +496,6 @@ def create_router(
                 reply_markup=main_menu(
                     user.language,
                     sms_enabled=rentsim_client is not None,
-                    nce_enabled=True,
                 ),
                 disable_web_page_preview=True,
             )
@@ -533,21 +527,6 @@ def create_router(
         flash_prices = await active_flash_sale_prices(
             session, [product.id for product in products]
         )
-        if products and all(
-            nce_family_from_product(product) is not None for product in products
-        ):
-            text = (
-                "⚡ <b>Chọn loại API</b>"
-                if user.language == "vi"
-                else "⚡ <b>Choose an API family</b>"
-            )
-            if callback.message:
-                await callback.message.edit_text(
-                    text,
-                    reply_markup=nce_family_menu(category_id, user.language, products),
-                )
-            await callback.answer()
-            return
         text = "📦 <b>Chọn mặt hàng</b>" if user.language == "vi" else "📦 <b>Choose a product</b>"
         if not products:
             text = (
@@ -596,38 +575,6 @@ def create_router(
     ) -> None:
         user = await get_or_create_user(callback, session)
         products = await active_products(session)
-        if group == "nce":
-            nce_products = [
-                product
-                for product in products
-                if nce_family_from_product(product) is not None
-            ]
-            if callback.message:
-                if nce_products:
-                    await callback.message.edit_text(
-                        "⚡ <b>Chọn loại API</b>"
-                        if user.language == "vi"
-                        else "⚡ <b>Choose an API family</b>",
-                        reply_markup=nce_family_menu(
-                            nce_products[0].category_id,
-                            user.language,
-                            nce_products,
-                        ),
-                    )
-                else:
-                    await callback.message.edit_text(
-                        "Các gói API đang tạm hết hàng."
-                        if user.language == "vi"
-                        else "API packages are temporarily unavailable.",
-                        reply_markup=main_menu(
-                            user.language,
-                            sms_enabled=rentsim_client is not None,
-                            nce_enabled=True,
-                        ),
-                    )
-            await callback.answer()
-            return
-
         def is_gg18m(product: Product) -> bool:
             name = f"{product.name_vi} {product.name_en}".lower()
             return "18m" in name and any(
@@ -640,8 +587,7 @@ def create_router(
             selected = [
                 product
                 for product in products
-                if nce_family_from_product(product) is None
-                and not is_gg18m(product)
+                if not is_gg18m(product)
                 and "gpt" in f"{product.name_vi} {product.name_en}".lower()
             ]
         flash_prices = await active_flash_sale_prices(
@@ -670,39 +616,32 @@ def create_router(
     async def quick_group(callback: CallbackQuery, session: AsyncSession) -> None:
         await show_quick_group(callback, session, callback.data.split(":", 1)[1])
 
-    @router.callback_query(F.data == "menu:nce")
-    async def show_nce_menu(callback: CallbackQuery, session: AsyncSession) -> None:
-        await show_quick_group(callback, session, "nce")
-
-    @router.callback_query(F.data.startswith("nce-family:"))
-    async def show_nce_family(callback: CallbackQuery, session: AsyncSession) -> None:
-        user = await get_or_create_user(callback, session)
-        _, category_text, family = callback.data.split(":", 2)
-        category_id = int(category_text)
-        products = [
-            product
-            for product in await active_products(session, category_id)
-            if nce_family_from_product(product) == family
-        ]
-        flash_prices = await active_flash_sale_prices(
-            session, [product.id for product in products]
-        )
-        if callback.message:
-            await callback.message.edit_text(
-                f"⚡ <b>{family.upper()} API</b>",
-                reply_markup=products_menu(
-                    products,
-                    user.language,
-                    f"cat:{category_id}",
-                    flash_prices,
-                ),
-            )
-        await callback.answer()
-
     @router.callback_query(F.data == "menu:sms")
     async def show_sms_rental(callback: CallbackQuery, session: AsyncSession) -> None:
         await callback.answer()
         user = await get_or_create_user(callback, session)
+        if await sms_rental_maintenance_enabled(session):
+            text = (
+                "🛠 <b>Dịch vụ thuê số đang bảo trì</b>\n\n"
+                "Hiện tại bot tạm ngừng nhận lượt thuê số mới. Các đơn đã thuê trước đó "
+                "vẫn tiếp tục được kiểm tra OTP và hoàn ví theo trạng thái từng số."
+                if user.language == "vi"
+                else "🛠 <b>SMS rentals are under maintenance</b>\n\n"
+                "New rentals are temporarily paused. Existing rentals will still be checked "
+                "for OTP and refunded according to each number's status."
+            )
+            if callback.message:
+                await edit_or_send_text(
+                    callback.message,
+                    text,
+                    reply_markup=sms_rental_menu(
+                        user.language,
+                        settings.rentsim_fallback_price + settings.rentsim_markup,
+                        0,
+                        connected=False,
+                    ),
+                )
+            return
         availability = await sms_availability(
             rentsim_client,
             settings.rentsim_markup,
@@ -732,8 +671,33 @@ def create_router(
         session: AsyncSession,
         session_factory: async_sessionmaker[AsyncSession],
     ) -> None:
-        await callback.answer("⏳ Đang lấy số...")
         user = await get_or_create_user(callback, session)
+        if await sms_rental_maintenance_enabled(session):
+            alert = (
+                "Dịch vụ thuê số đang bảo trì, vui lòng quay lại sau."
+                if user.language == "vi"
+                else "SMS rentals are under maintenance. Please try again later."
+            )
+            await callback.answer(alert, show_alert=True)
+            if callback.message:
+                await edit_or_send_text(
+                    callback.message,
+                    (
+                        "🛠 <b>Dịch vụ thuê số đang bảo trì</b>\n\n"
+                        "Bot chưa nhận lượt thuê mới trong thời gian này."
+                        if user.language == "vi"
+                        else "🛠 <b>SMS rentals are under maintenance</b>\n\n"
+                        "The bot is not accepting new rentals right now."
+                    ),
+                    reply_markup=sms_rental_menu(
+                        user.language,
+                        settings.rentsim_fallback_price + settings.rentsim_markup,
+                        0,
+                        connected=False,
+                    ),
+                )
+            return
+        await callback.answer("⏳ Đang lấy số...")
         loading_text = (
             "⏳ <b>Getting a ChatGPT number...</b>\n\n"
             "The bot is reserving your rental. Please wait and do not tap the rent button again."
@@ -879,10 +843,15 @@ def create_router(
                 )
             title = "🧾 <b>Lịch sử thuê số</b>" if user.language == "vi" else "🧾 <b>SMS rental history</b>"
             text = f"{title}\n\n" + "\n".join(lines)
-        availability = await sms_availability(
-            rentsim_client,
-            settings.rentsim_markup,
-            fallback_unit_cost=settings.rentsim_fallback_price,
+        maintenance_enabled = await sms_rental_maintenance_enabled(session)
+        availability = (
+            await sms_availability(
+                rentsim_client,
+                settings.rentsim_markup,
+                fallback_unit_cost=settings.rentsim_fallback_price,
+            )
+            if not maintenance_enabled
+            else None
         )
         if callback.message:
             await edit_or_send_text(
@@ -890,9 +859,15 @@ def create_router(
                 text,
                 reply_markup=sms_rental_menu(
                     user.language,
-                    availability.sale_price,
-                    availability.effective_stock,
-                    connected=availability.connected,
+                    (
+                        availability.sale_price
+                        if availability is not None
+                        else settings.rentsim_fallback_price + settings.rentsim_markup
+                    ),
+                    availability.effective_stock if availability is not None else 0,
+                    connected=(
+                        availability.connected if availability is not None else False
+                    ),
                 ),
             )
 
@@ -2336,7 +2311,6 @@ def create_router(
                 reply_markup=main_menu(
                     user.language,
                     sms_enabled=rentsim_client is not None,
-                    nce_enabled=True,
                 ),
                 disable_web_page_preview=True,
             )
@@ -2364,7 +2338,6 @@ def create_router(
                 reply_markup=main_menu(
                     user.language,
                     sms_enabled=rentsim_client is not None,
-                    nce_enabled=True,
                 ),
                 disable_web_page_preview=True,
             )

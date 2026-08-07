@@ -43,7 +43,8 @@ from app.inventory_dedup import (
     backfill_inventory_fingerprints,
 )
 from app.models import ApiRequestAudit, Category, Product
-from app.nce_suppliers import ensure_nce_local_products
+from app.retired_catalog import retire_discontinued_api_catalog
+from app.maintenance import ensure_sms_rental_maintenance
 from app.payment_expiry import payment_expiry_worker
 from app.rate_limit import BotSpamProtectionMiddleware
 from app.rentsim import RentSimClient, create_rentsim_client
@@ -1324,7 +1325,16 @@ async def main() -> None:
     await ensure_lehai_products(session_factory, settings)
     lehai_client = create_lehai_client(settings)
     canboso_client = create_canboso_client(settings)
-    await ensure_nce_local_products(session_factory)
+    retired_api_products = await retire_discontinued_api_catalog(session_factory)
+    if retired_api_products:
+        logging.getLogger(__name__).info(
+            "Retired discontinued API products: count=%s",
+            retired_api_products,
+        )
+    await ensure_sms_rental_maintenance(
+        session_factory,
+        enabled_by_default=True,
+    )
     nce_client = None
     haji_client = create_haji_client(settings)
     await ensure_haji_products(

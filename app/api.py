@@ -402,7 +402,6 @@ def create_api(
                     reply_markup=main_menu(
                         result.language,
                         sms_enabled=rentsim_client is not None,
-                        nce_enabled=True,
                     ),
                 )
             except Exception:
@@ -468,7 +467,6 @@ def create_api(
                     reply_markup=main_menu(
                         result.language,
                         sms_enabled=rentsim_client is not None,
-                        nce_enabled=True,
                     ),
                 )
             except Exception:
@@ -516,7 +514,6 @@ def create_api(
                     reply_markup=main_menu(
                         result.language,
                         sms_enabled=rentsim_client is not None,
-                        nce_enabled=True,
                     ),
                 )
             except Exception:

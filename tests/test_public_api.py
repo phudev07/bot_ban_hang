@@ -119,10 +119,8 @@ def test_warehouse_api_origin_is_cloudflare_only_and_body_is_bounded() -> None:
     assert "@direct_origin not remote_ip" in token_site
     assert "respond @direct_origin 403" in token_site
     assert "max_size 64KB" in token_site
-    assert (
-        "path /codex-claude /codex-claude/ /codex-setup.exe /codex-setup.zip"
-        in token_site
-    )
+    assert "/codex-claude" not in token_site
+    assert "/codex-setup" not in token_site
 
 
 def test_client_ip_trusts_cloudflare_header_only_from_cloudflare() -> None:
@@ -226,17 +224,6 @@ def test_warehouse_api_purchases_from_shared_wallet_and_is_idempotent(tmp_path) 
             )
             session.add(haji_product)
             await session.flush()
-            nce_product = Product(
-                category_id=category.id,
-                name_vi="API CODEX - 50M token",
-                name_en="CODEX API - 50M tokens",
-                price=40_000,
-                product_type="account",
-                fulfillment_source="local",
-                active=True,
-            )
-            session.add(nce_product)
-            await session.flush()
             session.add_all(
                 [
                     InventoryItem(
@@ -260,7 +247,6 @@ def test_warehouse_api_purchases_from_shared_wallet_and_is_idempotent(tmp_path) 
             product.id,
             sms_product.id,
             haji_product.id,
-            nce_product.id,
             api_client.api_id,
             api_secret,
         )
@@ -272,7 +258,6 @@ def test_warehouse_api_purchases_from_shared_wallet_and_is_idempotent(tmp_path) 
         product_id,
         sms_product_id,
         haji_product_id,
-        nce_product_id,
         api_id,
         api_secret,
     ) = asyncio.run(setup_database())
@@ -309,37 +294,9 @@ def test_warehouse_api_purchases_from_shared_wallet_and_is_idempotent(tmp_path) 
         assert "flash_sale_id" in docs.text
         assert "max_unit_price" in docs.text
 
-        codex_guide = client.get("/codex-claude")
-        assert codex_guide.status_code == 200
-        assert "Kích hoạt CDK trước" in codex_guide.text
-        assert "https://gateway.dichvuright.ai/redeem" in codex_guide.text
-        assert "https://gateway.dichvuright.ai/v1" in codex_guide.text
-        assert "cx/gpt-5.6-sol" in codex_guide.text
-        assert "cx/gpt-5.5" in codex_guide.text
-        assert "claude-opus-5" in codex_guide.text
-        assert "claude-sonnet-5" in codex_guide.text
-        assert "claude-haiku-4-5" in codex_guide.text
-        assert "claude-fable-5" in codex_guide.text
-        assert "C:\\Users\\Tên máy\\.claude\\settings.json" in codex_guide.text
-        assert "ANTHROPIC_AUTH_TOKEN" in codex_guide.text
-        assert "ANTHROPIC_DEFAULT_FABLE_MODEL" in codex_guide.text
-        assert "requires_openai_auth = true" in codex_guide.text
-        assert "default_subagent_model" in codex_guide.text
-        assert "[agents.subagent]" not in codex_guide.text
-        assert "SHA256" not in codex_guide.text
-        assert "SmartScreen" not in codex_guide.text
-
-        codex_setup = client.get("/codex-setup.zip")
-        assert codex_setup.status_code == 200
-        assert codex_setup.content.startswith(b"PK")
-        assert codex_setup.headers["content-type"].startswith("application/zip")
-        assert "VietShare-Codex-Claude-Setup.zip" in codex_setup.headers[
-            "content-disposition"
-        ]
-
-        old_setup_url = client.get("/codex-setup.exe", follow_redirects=False)
-        assert old_setup_url.status_code == 307
-        assert old_setup_url.headers["location"] == "/codex-setup.zip"
+        assert client.get("/codex-claude").status_code == 404
+        assert client.get("/codex-setup.zip").status_code == 404
+        assert client.get("/codex-setup.exe").status_code == 404
 
         docs_redirect = client.get("/v1/docs", follow_redirects=False)
         assert docs_redirect.status_code == 307
@@ -369,8 +326,6 @@ def test_warehouse_api_purchases_from_shared_wallet_and_is_idempotent(tmp_path) 
             f"/v1/stock/{sms_product_id}",
             f"/v1/products/{haji_product_id}",
             f"/v1/stock/{haji_product_id}",
-            f"/v1/products/{nce_product_id}",
-            f"/v1/stock/{nce_product_id}",
         ):
             blocked_stock = client.get(
                 path,
@@ -416,25 +371,6 @@ def test_warehouse_api_purchases_from_shared_wallet_and_is_idempotent(tmp_path) 
         )
         assert haji_blocked_order.status_code == 404
         assert haji_blocked_order.json()["detail"]["code"] == "PRODUCT_NOT_FOUND"
-
-        nce_blocked_body = json.dumps(
-            {"product_id": nce_product_id, "quantity": 1, "max_unit_price": 40_000},
-            separators=(",", ":"),
-        ).encode()
-        nce_blocked_order = client.post(
-            "/v1/orders",
-            content=nce_blocked_body,
-            headers=signed_headers(
-                api_id,
-                api_secret,
-                "POST",
-                "/v1/orders",
-                nce_blocked_body,
-                idempotency_key="NCE-ORDER-BLOCKED-01",
-            ),
-        )
-        assert nce_blocked_order.status_code == 404
-        assert nce_blocked_order.json()["detail"]["code"] == "PRODUCT_NOT_FOUND"
 
         missing_price_body = json.dumps(
             {"product_id": product_id, "quantity": 1},

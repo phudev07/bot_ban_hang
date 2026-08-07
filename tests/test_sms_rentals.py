@@ -5,7 +5,15 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from app.database import Base
-from app.models import BalanceAdjustment, ReferralReward, SmsRental, User, WalletTransaction
+from app.models import (
+    BalanceAdjustment,
+    FeatureFlag,
+    ReferralReward,
+    SmsRental,
+    User,
+    WalletTransaction,
+)
+from app.maintenance import SMS_RENTAL_MAINTENANCE
 from app.rentsim import RentSimError, RentSimOtp, RentSimRental, RentSimSnapshot
 from app.sms_rentals import (
     mark_sms_review_alerted,
@@ -142,6 +150,34 @@ def test_sms_rental_charges_wallet_enforces_cooldown_and_unlocks_after_otp() -> 
             assert referrer is not None and referrer.balance == 40
             assert reward is not None and reward.shop_order_code == rentals[0].shop_order_code
             assert [rental.status for rental in rentals] == ["success", "pending"]
+        await engine.dispose()
+
+    asyncio.run(scenario())
+
+
+def test_sms_maintenance_blocks_before_provider_or_wallet_is_touched() -> None:
+    async def scenario() -> None:
+        engine, sessions = await make_database()
+        client = FakeRentSim()
+        async with sessions() as session:
+            session.add_all(
+                [
+                    User(telegram_id=1051, full_name="Buyer", balance=10_000),
+                    FeatureFlag(key=SMS_RENTAL_MAINTENANCE, enabled=True),
+                ]
+            )
+            await session.commit()
+
+        result = await rent_sms_number(sessions, 1051, client)  # type: ignore[arg-type]
+
+        assert result.ok is False
+        assert result.message == "maintenance"
+        assert client.rent_count == 0
+        async with sessions() as session:
+            user = await session.get(User, 1051)
+            rental_count = int(await session.scalar(select(func.count(SmsRental.id))) or 0)
+            assert user is not None and user.balance == 10_000
+            assert rental_count == 0
         await engine.dispose()
 
     asyncio.run(scenario())

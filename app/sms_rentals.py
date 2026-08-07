@@ -5,6 +5,7 @@ from sqlalchemy import and_, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.models import BalanceAdjustment, SmsRental, User
+from app.maintenance import sms_maintenance_operation, sms_rental_maintenance_enabled
 from app.partner_services import award_referral_commission
 from app.rentsim import RentSimClient, RentSimError, RentSimSnapshot
 from app.wallet_ledger import apply_wallet_change
@@ -220,6 +221,31 @@ async def _complete_sms_success(
 
 
 async def rent_sms_number(
+    session_factory: async_sessionmaker[AsyncSession],
+    user_id: int,
+    client: RentSimClient | None,
+    *,
+    markup: int = 1_000,
+    cooldown_seconds: int = 60,
+    referral_commission_percent: int = 2,
+    now: datetime | None = None,
+) -> SmsRentResult:
+    async with sms_maintenance_operation():
+        async with session_factory() as session:
+            if await sms_rental_maintenance_enabled(session):
+                return SmsRentResult(False, "maintenance")
+        return await _rent_sms_number_unlocked(
+            session_factory,
+            user_id,
+            client,
+            markup=markup,
+            cooldown_seconds=cooldown_seconds,
+            referral_commission_percent=referral_commission_percent,
+            now=now,
+        )
+
+
+async def _rent_sms_number_unlocked(
     session_factory: async_sessionmaker[AsyncSession],
     user_id: int,
     client: RentSimClient | None,

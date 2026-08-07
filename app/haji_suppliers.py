@@ -335,7 +335,6 @@ async def _ensure_categories(session: AsyncSession) -> tuple[Category, Category]
             category
             for category in categories
             if _category_matches(category, "chatgpt", "gpt")
-            and not _category_matches(category, "codex", "claude")
         ),
         None,
     )
