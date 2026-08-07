@@ -62,6 +62,7 @@ class BroadcastPayload:
     broadcast_id: int
     source_chat_id: int
     source_message_id: int
+    include_purchase_button: bool
 
 
 class BroadcastRateLimiter:
@@ -239,6 +240,7 @@ async def deliver_broadcast(
     source_chat_id: int,
     source_message_id: int,
     throttle_seconds: float = 0.05,
+    include_purchase_button: bool = True,
 ) -> BroadcastResult:
     started_at = datetime.now(UTC)
     recipient_ids = list(
@@ -251,7 +253,7 @@ async def deliver_broadcast(
     delivered = 0
     failed = 0
     inactive_ids: list[int] = []
-    purchase_keyboard = broadcast_purchase_keyboard()
+    purchase_keyboard = broadcast_purchase_keyboard() if include_purchase_button else None
 
     for user_id in recipient_ids:
         try:
@@ -306,6 +308,7 @@ async def deliver_broadcast(
             total_recipients=len(recipient_ids),
             delivered_count=delivered,
             failed_count=failed,
+            include_purchase_button=include_purchase_button,
             status="completed",
             started_at=started_at,
             completed_at=datetime.now(UTC),
@@ -325,6 +328,7 @@ async def queue_broadcast(
     admin_id: int,
     source_chat_id: int,
     source_message_id: int,
+    include_purchase_button: bool = True,
 ) -> QueuedBroadcast:
     async with session_factory() as session:
         async with session.begin():
@@ -340,6 +344,7 @@ async def queue_broadcast(
                 source_chat_id=source_chat_id,
                 source_message_id=source_message_id,
                 total_recipients=len(recipient_ids),
+                include_purchase_button=include_purchase_button,
                 status="queued",
             )
             session.add(campaign)
@@ -393,6 +398,7 @@ async def _claim_broadcast(
                 broadcast_id=campaign.id,
                 source_chat_id=campaign.source_chat_id,
                 source_message_id=campaign.source_message_id,
+                include_purchase_button=campaign.include_purchase_button,
             )
 
 
@@ -458,7 +464,9 @@ async def _send_queued_delivery(
     limiter: BroadcastRateLimiter,
     semaphore: asyncio.Semaphore,
 ) -> DeliveryResult:
-    keyboard = broadcast_purchase_keyboard()
+    keyboard = (
+        broadcast_purchase_keyboard() if payload.include_purchase_button else None
+    )
 
     async def operation() -> object:
         return await bot.copy_message(

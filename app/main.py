@@ -105,6 +105,12 @@ async def initialize_database(engine, session_factory, seed_demo_data: bool) -> 
         )
         await connection.execute(
             text(
+                "ALTER TABLE broadcast_logs ADD COLUMN IF NOT EXISTS "
+                "include_purchase_button BOOLEAN NOT NULL DEFAULT TRUE"
+            )
+        )
+        await connection.execute(
+            text(
                 "CREATE INDEX IF NOT EXISTS ix_broadcast_logs_status "
                 "ON broadcast_logs (status)"
             )

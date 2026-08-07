@@ -114,9 +114,14 @@ class FakeMessage:
 
 
 class FakeCallback:
-    def __init__(self, message: FakeMessage) -> None:
+    def __init__(
+        self,
+        message: FakeMessage,
+        data: str = "broadcast:confirm:buy",
+    ) -> None:
         self.from_user = SimpleNamespace(id=42)
         self.message = message
+        self.data = data
         self.answers: list[tuple[str, dict[str, object]]] = []
 
     async def answer(self, text: str, **kwargs) -> None:
@@ -173,7 +178,8 @@ def test_broadcast_requires_confirmation_before_delivery() -> None:
             assert bot.copy_kwargs[-1]["from_chat_id"] == 42
             assert bot.copy_kwargs[-1]["message_id"] == 20
             markup = bot.copy_markups[-1]
-            assert markup.inline_keyboard[0][0].callback_data == "broadcast:confirm"
+            assert markup.inline_keyboard[0][0].callback_data == "broadcast:confirm:buy"
+            assert markup.inline_keyboard[1][0].callback_data == "broadcast:confirm:info"
         await engine.dispose()
 
     asyncio.run(scenario())
@@ -251,8 +257,10 @@ def test_broadcast_photo_gets_confirmation_button_on_preview() -> None:
             assert state.data["source_message_id"] == 31
             assert bot.copy_calls == [42]
             markup = bot.copy_markups[0]
-            assert markup.inline_keyboard[0][0].callback_data == "broadcast:confirm"
-            assert "Gửi tới 1 người" in markup.inline_keyboard[0][0].text
+            assert markup.inline_keyboard[0][0].callback_data == "broadcast:confirm:buy"
+            assert markup.inline_keyboard[1][0].callback_data == "broadcast:confirm:info"
+            assert "Gửi có Mua ngay" in markup.inline_keyboard[0][0].text
+            assert "Chỉ gửi thông tin" in markup.inline_keyboard[1][0].text
         await engine.dispose()
 
     asyncio.run(scenario())
@@ -303,9 +311,62 @@ def test_broadcast_confirmation_queues_without_blocking_on_delivery() -> None:
             campaign = await session.scalar(select(BroadcastLog))
             deliveries = list(await session.scalars(select(BroadcastDelivery)))
             assert campaign is not None and campaign.status == "queued"
+            assert campaign.include_purchase_button is True
             assert campaign.total_recipients == 2
             assert len(deliveries) == 2
             assert all(delivery.status == "pending" for delivery in deliveries)
+        await engine.dispose()
+
+    asyncio.run(scenario())
+
+
+def test_admin_information_only_broadcast_has_no_purchase_button() -> None:
+    async def scenario() -> None:
+        engine, sessions = await make_database()
+        async with sessions() as session:
+            session.add(User(telegram_id=1, full_name="One", has_started=True))
+            await session.commit()
+
+        settings = Settings(
+            _env_file=None,
+            bot_token="123456:ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghi",
+            inventory_encryption_key=Fernet.generate_key().decode(),
+            sepay_enabled=False,
+            ADMIN_IDS="42",
+        )
+        router = create_admin_router(
+            settings,
+            SecretCipher(settings.inventory_encryption_key.get_secret_value()),
+        )
+        confirm = next(
+            handler.callback
+            for handler in router.callback_query.handlers
+            if handler.callback.__name__ == "confirm_broadcast"
+        )
+        state = FakeState()
+        state.data = {
+            "source_chat_id": 42,
+            "source_message_id": 90,
+            "recipient_count": 1,
+        }
+        callback = FakeCallback(
+            FakeMessage(message_id=91),
+            data="broadcast:confirm:info",
+        )
+
+        await confirm(callback, sessions, state)
+        bot = FakeBot()
+        await deliver_queued_broadcasts(
+            sessions,
+            bot,  # type: ignore[arg-type]
+            BroadcastRateLimiter(10_000),
+        )
+
+        assert bot.copy_markups == [None]
+        async with sessions() as session:
+            campaign = await session.scalar(select(BroadcastLog))
+            assert campaign is not None
+            assert campaign.include_purchase_button is False
         await engine.dispose()
 
     asyncio.run(scenario())

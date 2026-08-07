@@ -63,6 +63,26 @@ def test_local_inventory_menu_stock_overrides_stale_external_stock() -> None:
     assert "Hết hàng" not in button.text
 
 
+def test_quick_buy_product_returns_to_quick_buy_list() -> None:
+    product = make_product()
+    product.external_stock = 3
+    listing = products_menu(
+        [product],
+        "vi",
+        "back:menu",
+        origin="quick",
+    )
+    assert listing.inline_keyboard[0][0].callback_data == "prod:10:quick"
+
+    detail = product_detail(product, "vi", stock=3, origin="quick")
+    callbacks = [button.callback_data for row in detail.inline_keyboard for button in row]
+    assert "qtymenu:10:origin:quick" in callbacks
+    assert "menu:quick" in callbacks
+
+    quantities = quantity_menu(product, "vi", stock=3, origin="quick")
+    assert quantities.inline_keyboard[-1][0].callback_data == "prod:10:quick"
+
+
 def test_main_menu_exposes_warehouse_api_and_referrals() -> None:
     keyboard = main_menu("vi", sms_enabled=True)
     callbacks = [button.callback_data for row in keyboard.inline_keyboard for button in row]

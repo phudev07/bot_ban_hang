@@ -189,6 +189,8 @@ def products_menu(
     language: str,
     back_callback: str,
     prices: dict[int, int] | None = None,
+    *,
+    origin: str | None = None,
 ) -> InlineKeyboardMarkup:
     builder = InlineKeyboardBuilder()
     for product in products:
@@ -205,7 +207,9 @@ def products_menu(
             button_text = f"🔴 {button_text} · {stock_label}"
         builder.button(
             text=button_text,
-            callback_data=f"prod:{product.id}",
+            callback_data=(
+                f"prod:{product.id}:{origin}" if origin else f"prod:{product.id}"
+            ),
             style="success" if in_stock else "danger",
         )
     builder.adjust(1)
@@ -220,10 +224,13 @@ def product_detail(
     *,
     allow_coupon: bool = True,
     flash_sale_id: int | None = None,
+    origin: str | None = None,
 ) -> InlineKeyboardMarkup:
     buy_callback = f"qtymenu:{product.id}" if product.allow_quantity else f"buy:{product.id}:1"
     if flash_sale_id is not None:
         buy_callback += f":flash:{flash_sale_id}"
+    if product.allow_quantity and origin:
+        buy_callback += f":origin:{origin}"
     rows = []
     if stock > 0:
         rows.append([InlineKeyboardButton(text=tr(language, "buy"), callback_data=buy_callback)])
@@ -232,7 +239,7 @@ def product_detail(
             rows.append(
                 [InlineKeyboardButton(text=coupon_label, callback_data=f"coupon:{product.id}")]
             )
-    back_callback = f"cat:{product.category_id}"
+    back_callback = "menu:quick" if origin == "quick" else f"cat:{product.category_id}"
     rows.append(
         [
             InlineKeyboardButton(
@@ -251,6 +258,7 @@ def quantity_menu(
     stock: int,
     unit_price: int | None = None,
     flash_sale_id: int | None = None,
+    origin: str | None = None,
 ) -> InlineKeyboardMarkup:
     builder = InlineKeyboardBuilder()
     maximum = min(product.max_quantity, max(0, stock))
@@ -279,7 +287,9 @@ def quantity_menu(
     builder.row(
         InlineKeyboardButton(
             text=tr(language, "back"),
-            callback_data=f"prod:{product.id}",
+            callback_data=(
+                f"prod:{product.id}:{origin}" if origin else f"prod:{product.id}"
+            ),
         )
     )
     return builder.as_markup()

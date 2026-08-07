@@ -351,6 +351,7 @@ def create_router(
                 user.language,
                 "back:menu",
                 flash_prices,
+                origin="quick",
             ),
         )
 
@@ -577,6 +578,7 @@ def create_router(
                     user.language,
                     "back:menu",
                     flash_prices,
+                    origin="quick",
                 ),
             )
         await callback.answer()
@@ -621,6 +623,7 @@ def create_router(
                     user.language,
                     "menu:quick",
                     flash_prices,
+                    origin="quick",
                 ),
             )
         await callback.answer()
@@ -887,7 +890,9 @@ def create_router(
     @router.callback_query(F.data.startswith("prod:"))
     async def show_product_detail(callback: CallbackQuery, session: AsyncSession) -> None:
         user = await get_or_create_user(callback, session)
-        product_id = int(callback.data.split(":", 1)[1])
+        parts = callback.data.split(":")
+        product_id = int(parts[1])
+        origin = parts[2] if len(parts) >= 3 and parts[2] == "quick" else None
         product = await session.get(Product, product_id)
         if product is None or not product.active:
             await callback.answer("Sản phẩm không tồn tại.", show_alert=True)
@@ -960,6 +965,7 @@ def create_router(
                         if pricing is not None and pricing.flash_sale is not None
                         else None
                     ),
+                    origin=origin,
                 ),
             )
         await callback.answer()
@@ -1297,6 +1303,11 @@ def create_router(
         expected_flash_sale_id = (
             int(parts[3]) if len(parts) >= 4 and parts[2] == "flash" else None
         )
+        origin = (
+            parts[parts.index("origin") + 1]
+            if "origin" in parts and parts.index("origin") + 1 < len(parts)
+            else None
+        )
         product = await session.get(Product, product_id)
         if product is None or not product.active:
             await callback.answer("Sản phẩm không tồn tại.", show_alert=True)
@@ -1332,7 +1343,12 @@ def create_router(
         if maximum <= 0:
             if callback.message:
                 await callback.message.edit_reply_markup(
-                    reply_markup=product_detail(product, user.language, 0)
+                    reply_markup=product_detail(
+                        product,
+                        user.language,
+                        0,
+                        origin=origin,
+                    )
                 )
             await callback.answer("Sản phẩm đã hết hàng.", show_alert=True)
             return
@@ -1366,6 +1382,7 @@ def create_router(
                     menu_stock,
                     display_price,
                     expected_flash_sale_id,
+                    origin,
                 ),
             )
         await callback.answer()

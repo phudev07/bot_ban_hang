@@ -36,8 +36,14 @@ def create_admin_router(settings: Settings, cipher: SecretCipher) -> Router:
             inline_keyboard=[
                 [
                     InlineKeyboardButton(
-                        text=f"📤 Gửi tới {recipient_count} người",
-                        callback_data="broadcast:confirm",
+                        text=f"🛒 Gửi có Mua ngay · {recipient_count} người",
+                        callback_data="broadcast:confirm:buy",
+                    )
+                ],
+                [
+                    InlineKeyboardButton(
+                        text=f"📣 Chỉ gửi thông tin · {recipient_count} người",
+                        callback_data="broadcast:confirm:info",
                     )
                 ],
                 [
@@ -147,8 +153,8 @@ def create_admin_router(settings: Settings, cipher: SecretCipher) -> Router:
                 "📣 <b>Xác nhận gửi thông báo</b>\n\n"
                 f"• Người nhận dự kiến: <b>{recipient_count}</b>\n"
                 "• Nội dung sẽ được copy nguyên định dạng/media.\n"
-                "• Mỗi tin có thêm nút 🛒 Mua ngay.\n\n"
-                "Bấm Gửi để bắt đầu hoặc Hủy để bỏ.",
+                "• Chọn gửi kèm nút 🛒 Mua ngay hoặc chỉ gửi nội dung.\n\n"
+                "Chọn cách gửi bên dưới hoặc Hủy để bỏ.",
                 reply_markup=keyboard,
             )
 
@@ -202,7 +208,7 @@ def create_admin_router(settings: Settings, cipher: SecretCipher) -> Router:
 
     @router.callback_query(
         BroadcastStates.waiting_for_confirmation,
-        F.data == "broadcast:confirm",
+        F.data.in_({"broadcast:confirm:buy", "broadcast:confirm:info"}),
     )
     async def confirm_broadcast(
         callback: CallbackQuery,
@@ -220,6 +226,7 @@ def create_admin_router(settings: Settings, cipher: SecretCipher) -> Router:
             await state.clear()
             await callback.answer("Nội dung thông báo đã hết hạn.", show_alert=True)
             return
+        include_purchase_button = callback.data == "broadcast:confirm:buy"
 
         await state.clear()
         if callback.message:
@@ -232,6 +239,7 @@ def create_admin_router(settings: Settings, cipher: SecretCipher) -> Router:
             admin_id=int(admin_id),
             source_chat_id=source_chat_id,
             source_message_id=source_message_id,
+            include_purchase_button=include_purchase_button,
         )
         await callback.answer("Đã đưa vào hàng chờ.")
         if callback.message:
@@ -239,6 +247,7 @@ def create_admin_router(settings: Settings, cipher: SecretCipher) -> Router:
                 "✅ <b>Đã đưa thông báo vào hàng chờ</b>\n\n"
                 f"• Mã lần gửi: <code>#{queued.broadcast_id}</code>\n"
                 f"• Người nhận: <b>{queued.total}</b>\n\n"
+                f"• Kiểu gửi: <b>{'Có nút Mua ngay' if include_purchase_button else 'Chỉ thông tin'}</b>\n\n"
                 "Xem tốc độ và kết quả trong trang Admin → Thông báo."
             )
 

@@ -828,6 +828,9 @@ class BroadcastLog(Base):
     total_recipients: Mapped[int] = mapped_column(default=0)
     delivered_count: Mapped[int] = mapped_column(default=0)
     failed_count: Mapped[int] = mapped_column(default=0)
+    include_purchase_button: Mapped[bool] = mapped_column(
+        Boolean, default=True, server_default="true"
+    )
     status: Mapped[str] = mapped_column(
         String(20), default="queued", server_default="queued", index=True
     )
