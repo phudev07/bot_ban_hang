@@ -100,7 +100,7 @@ def test_quick_access_buttons_use_one_animated_icon_each() -> None:
     buttons = [button for row in method.reply_markup.keyboard for button in row]
     assert [button.text for button in buttons] == ["Menu", "Mua nhanh", "Nạp tiền"]
     assert [button.icon_custom_emoji_id for button in buttons] == [
-        EMOJI_IDS["☰"],
-        EMOJI_IDS["⚡"],
-        EMOJI_IDS["💳"],
+        EMOJI_IDS["🏠"],
+        EMOJI_IDS["🛒"],
+        EMOJI_IDS["💰"],
     ]

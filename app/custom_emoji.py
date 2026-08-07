@@ -9,7 +9,7 @@ from aiogram.types import InlineKeyboardMarkup, ReplyKeyboardMarkup
 # Brand emoji are owned by the shop bot; functional emoji use either that pack or
 # Telegram's animated topic-icon set. Keeping the IDs here makes all bot surfaces
 # consistent without storing media on the VPS.
-CHATGPT_EMOJI_ID = "6319022375711023569"
+CHATGPT_EMOJI_ID = "6318653047178274387"
 NETFLIX_EMOJI_ID = "6318569630323450252"
 GOOGLE_EMOJI_ID = "6319109310144062723"
 GEMINI_EMOJI_ID = "6212797771372563847"
@@ -183,6 +183,17 @@ def button_emoji_id(text: str) -> str | None:
     return None
 
 
+def reply_button_emoji_id(text: str) -> str | None:
+    normalized = " ".join(_strip_animated_prefix(text).casefold().split())
+    if normalized == "menu":
+        return EMOJI_IDS["🏠"]
+    if normalized in {"mua nhanh", "quick buy"}:
+        return EMOJI_IDS["🛒"]
+    if normalized in {"nạp tiền", "deposit"}:
+        return EMOJI_IDS["💰"]
+    return None
+
+
 def _strip_animated_prefix(text: str) -> str:
     # Button icons are rendered separately by Telegram. Remove any legacy emoji,
     # including flags embedded later in the label, so only one icon is visible.
@@ -193,11 +204,17 @@ def _strip_animated_prefix(text: str) -> str:
 def decorate_keyboard(markup: Any) -> None:
     if not isinstance(markup, (InlineKeyboardMarkup, ReplyKeyboardMarkup)):
         return
-    for row in markup.inline_keyboard if isinstance(markup, InlineKeyboardMarkup) else markup.keyboard:
+    is_reply_keyboard = isinstance(markup, ReplyKeyboardMarkup)
+    for row in markup.inline_keyboard if not is_reply_keyboard else markup.keyboard:
         for button in row:
             if button.icon_custom_emoji_id:
                 continue
-            emoji_id = button_emoji_id(button.text)
+            emoji_id = (
+                reply_button_emoji_id(button.text)
+                if is_reply_keyboard
+                else button_emoji_id(button.text)
+            )
+            emoji_id = emoji_id or button_emoji_id(button.text)
             if emoji_id:
                 button.icon_custom_emoji_id = emoji_id
                 button.text = _strip_animated_prefix(button.text)

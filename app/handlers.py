@@ -1,3 +1,4 @@
+import asyncio
 from html import escape
 
 from aiogram import Bot, F, Router
@@ -6,7 +7,7 @@ from aiogram.filters import Command, CommandStart
 from aiogram.filters.command import CommandObject
 from aiogram.filters.exception import ExceptionMessageFilter, ExceptionTypeFilter
 from aiogram.fsm.context import FSMContext
-from aiogram.types import CallbackQuery, ErrorEvent, Message
+from aiogram.types import CallbackQuery, ErrorEvent, Message, ReplyKeyboardRemove
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
@@ -244,10 +245,21 @@ async def send_home_with_navigation(
         if user.language == "vi"
         else "⌨️ <b>Quick actions are ready</b>"
     )
+    refresh_message = await message.answer(
+        "🔄 Đang làm mới bàn phím…"
+        if user.language == "vi"
+        else "🔄 Refreshing keyboard…",
+        reply_markup=ReplyKeyboardRemove(),
+    )
+    await asyncio.sleep(0.15)
     await message.answer(
         quick_access_text,
         reply_markup=quick_access_keyboard(user.language),
     )
+    try:
+        await refresh_message.delete()
+    except TelegramBadRequest:
+        pass
     await message.answer(
         home_text(user, settings),
         reply_markup=main_menu(
@@ -390,7 +402,7 @@ def create_router(
     async def deposit_command(message: Message, session: AsyncSession) -> None:
         await send_deposit_menu(message, session)
 
-    @router.message(F.text.in_({"☰ Menu"}))
+    @router.message(F.text.in_({"☰ Menu", "Menu"}))
     async def quick_menu_button(
         message: Message,
         session: AsyncSession,
@@ -407,7 +419,7 @@ def create_router(
             disable_web_page_preview=True,
         )
 
-    @router.message(F.text.in_({"⚡ Mua nhanh", "⚡ Quick buy"}))
+    @router.message(F.text.in_({"⚡ Mua nhanh", "⚡ Quick buy", "Mua nhanh", "Quick buy"}))
     async def quick_buy_button(
         message: Message,
         session: AsyncSession,
@@ -416,7 +428,7 @@ def create_router(
         await state.clear()
         await send_quick_buy(message, session)
 
-    @router.message(F.text.in_({"💳 Nạp tiền", "💳 Deposit"}))
+    @router.message(F.text.in_({"💳 Nạp tiền", "💳 Deposit", "Nạp tiền", "Deposit"}))
     async def deposit_button(
         message: Message,
         session: AsyncSession,
