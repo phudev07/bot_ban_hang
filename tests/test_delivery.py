@@ -22,6 +22,10 @@ def test_delivery_card_has_only_copy_all_and_txt_download() -> None:
 
     assert "Tài khoản/code của bạn" in text
     assert "Mã đơn shop: <code>BTEST123</code>" in text
+    assert "🧾 Mã đơn shop:" in text
+    assert "🧮 Số lượng: <b>2</b>" in text
+    assert "💰 Tổng tiền: <b>40.000đ</b>" in text
+    assert "📋 <b>Tài khoản/code của bạn:</b>" in text
     assert "<pre>account1@example.com:password1\naccount2@example.com:password2</pre>" in text
     assert "1. account1@example.com:password1" not in text
     assert "2. account2@example.com:password2" not in text

@@ -7,6 +7,7 @@ from aiogram.types import InlineKeyboardMarkup, ReplyKeyboardMarkup
 from app.handlers import (
     coupon_error_message,
     edit_or_send_text,
+    home_text,
     send_home_with_navigation,
 )
 
@@ -91,3 +92,25 @@ def test_start_home_keeps_quick_actions_and_shows_main_menu() -> None:
         assert "menu:sms" in menu_callbacks
 
     asyncio.run(scenario())
+
+
+def test_home_text_uses_scannable_animated_icon_sections() -> None:
+    user = SimpleNamespace(
+        language="vi",
+        full_name="Test User",
+        username="tester",
+        telegram_id=123,
+        balance=50_000,
+    )
+    settings = SimpleNamespace(
+        support_username="support",
+        community_group_url="https://t.me/example",
+    )
+
+    text = home_text(user, settings)  # type: ignore[arg-type]
+
+    assert "🧾 ID:" in text
+    assert "👤 Username:" in text
+    assert "👛 Số dư khả dụng:" in text
+    assert "⚡ <b>Truy cập nhanh</b>" in text
+    assert "⌨️ Ba nút dưới ô chat" in text

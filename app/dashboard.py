@@ -646,11 +646,11 @@ def default_flash_sale_message(
 ) -> str:
     return (
         "⚡ <b>FLASH SALE GIỚI HẠN</b>\n\n"
-        f"• Sản phẩm: {product_brand_emoji(product_name)} <b>{escape(product_name)}</b>\n"
-        f"• Giá cũ: <s>{format_vnd(original_price)}</s>\n"
-        f"• Giá Flash Sale: <b>{format_vnd(sale_price)}</b>\n"
-        f"• Số lượng ưu đãi: <b>{quantity}</b>\n\n"
-        "Nhanh tay mua trước khi hết suất."
+        f"📋 Sản phẩm: {product_brand_emoji(product_name)} <b>{escape(product_name)}</b>\n"
+        f"💰 Giá cũ: <s>{format_vnd(original_price)}</s>\n"
+        f"🔥 Giá Flash Sale: <b>{format_vnd(sale_price)}</b>\n"
+        f"⚡ Số lượng ưu đãi: <b>{quantity}</b>\n\n"
+        "🛒 Nhanh tay mua trước khi hết suất."
     )
 
 

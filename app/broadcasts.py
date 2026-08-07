@@ -159,21 +159,21 @@ def sale_alert_text(payload: SaleAlertPayload, language: str) -> str:
     if language == "en":
         return (
             "🔥 <b>PRODUCT PRICE DROP</b>\n\n"
-            f"• Product: {product_brand_emoji(payload.name_en)} "
+            f"📋 Product: {product_brand_emoji(payload.name_en)} "
             f"<b>{safe_customer_html(payload.name_en)}</b>\n"
-            f"• Previous price: <s>{format_vnd(payload.old_price)}</s>\n"
-            f"• Sale price: <b>{format_vnd(payload.new_price)}</b>\n"
-            f"• Available now: <b>{payload.stock}</b>\n\n"
-            "This is the shop's current selling price. Buy now before the price changes."
+            f"💰 Previous price: <s>{format_vnd(payload.old_price)}</s>\n"
+            f"🔥 Sale price: <b>{format_vnd(payload.new_price)}</b>\n"
+            f"📦 Available now: <b>{payload.stock}</b>\n\n"
+            "🛒 This is the shop's current selling price. Buy now before the price changes."
         )
     return (
         "🔥 <b>MẶT HÀNG VỪA GIẢM GIÁ</b>\n\n"
-        f"• Sản phẩm: {product_brand_emoji(payload.name_vi)} "
+        f"📋 Sản phẩm: {product_brand_emoji(payload.name_vi)} "
         f"<b>{safe_customer_html(payload.name_vi)}</b>\n"
-        f"• Giá trước: <s>{format_vnd(payload.old_price)}</s>\n"
-        f"• Giá sale còn: <b>{format_vnd(payload.new_price)}</b>\n"
-        f"• Kho hiện có: <b>{payload.stock}</b>\n\n"
-        "Đây là giá bán hiện tại của shop. Mua ngay trước khi giá thay đổi."
+        f"💰 Giá trước: <s>{format_vnd(payload.old_price)}</s>\n"
+        f"🔥 Giá sale còn: <b>{format_vnd(payload.new_price)}</b>\n"
+        f"📦 Kho hiện có: <b>{payload.stock}</b>\n\n"
+        "🛒 Đây là giá bán hiện tại của shop. Mua ngay trước khi giá thay đổi."
     )
 
 
@@ -185,39 +185,39 @@ def stock_alert_text(payload: StockAlertPayload, language: str) -> str:
     ):
         if language == "en":
             return (
-                "📦 <b>PRODUCT BACK IN STOCK · FLASH SALE</b>\n\n"
-                f"• Product: {product_brand_emoji(payload.name_en)} "
+                "⚡ <b>PRODUCT BACK IN STOCK · FLASH SALE</b>\n\n"
+                f"📋 Product: {product_brand_emoji(payload.name_en)} "
                 f"<b>{safe_customer_html(payload.name_en)}</b>\n"
-                f"• Flash Sale price: <b>{format_vnd(payload.flash_sale_price)}</b>\n"
-                f"• Available now: <b>{payload.stock}</b>\n"
-                f"• Flash Sale orders left: <b>{payload.flash_sale_remaining}</b>\n\n"
-                "Flash Sale quantity is limited. Buy now while the offer is active."
+                f"🔥 Flash Sale price: <b>{format_vnd(payload.flash_sale_price)}</b>\n"
+                f"📦 Available now: <b>{payload.stock}</b>\n"
+                f"⚡ Flash Sale orders left: <b>{payload.flash_sale_remaining}</b>\n\n"
+                "🛒 Flash Sale quantity is limited. Buy now while the offer is active."
             )
         return (
-            "📦 <b>HÀNG MỚI VỀ · FLASH SALE</b>\n\n"
-            f"• Sản phẩm: {product_brand_emoji(payload.name_vi)} "
+            "⚡ <b>HÀNG MỚI VỀ · FLASH SALE</b>\n\n"
+            f"📋 Sản phẩm: {product_brand_emoji(payload.name_vi)} "
             f"<b>{safe_customer_html(payload.name_vi)}</b>\n"
-            f"• Giá Flash Sale: <b>{format_vnd(payload.flash_sale_price)}</b>\n"
-            f"• Kho vừa có: <b>{payload.stock}</b>\n"
-            f"• Còn lại: <b>{payload.flash_sale_remaining} đơn Flash Sale</b>\n\n"
-            "Số lượng Flash Sale có hạn. Mua ngay khi ưu đãi đang còn."
+            f"🔥 Giá Flash Sale: <b>{format_vnd(payload.flash_sale_price)}</b>\n"
+            f"📦 Kho vừa có: <b>{payload.stock}</b>\n"
+            f"⚡ Còn lại: <b>{payload.flash_sale_remaining} đơn Flash Sale</b>\n\n"
+            "🛒 Số lượng Flash Sale có hạn. Mua ngay khi ưu đãi đang còn."
         )
     if language == "en":
         return (
             "📦 <b>PRODUCT BACK IN STOCK</b>\n\n"
-            f"• Product: {product_brand_emoji(payload.name_en)} "
+            f"📋 Product: {product_brand_emoji(payload.name_en)} "
             f"<b>{safe_customer_html(payload.name_en)}</b>\n"
-            f"• Current price: <b>{format_vnd(payload.price)}</b>\n"
-            f"• Available now: <b>{payload.stock}</b>\n\n"
-            "Stock can sell out quickly. Buy now while it is available."
+            f"💰 Current price: <b>{format_vnd(payload.price)}</b>\n"
+            f"📦 Available now: <b>{payload.stock}</b>\n\n"
+            "🛒 Stock can sell out quickly. Buy now while it is available."
         )
     return (
         "📦 <b>HÀNG MỚI VỀ</b>\n\n"
-        f"• Sản phẩm: {product_brand_emoji(payload.name_vi)} "
+        f"📋 Sản phẩm: {product_brand_emoji(payload.name_vi)} "
         f"<b>{safe_customer_html(payload.name_vi)}</b>\n"
-        f"• Giá hiện tại: <b>{format_vnd(payload.price)}</b>\n"
-        f"• Kho vừa có: <b>{payload.stock}</b>\n\n"
-        "Số lượng có thể hết nhanh. Mua ngay khi hàng đang còn."
+        f"💰 Giá hiện tại: <b>{format_vnd(payload.price)}</b>\n"
+        f"📦 Kho vừa có: <b>{payload.stock}</b>\n\n"
+        "🛒 Số lượng có thể hết nhanh. Mua ngay khi hàng đang còn."
     )
 
 

@@ -126,7 +126,7 @@
   const defaultMessage = () => {
     const option = product.options[product.selectedIndex];
     if (!option || !option.value) return 'Chọn sản phẩm để xem nội dung mặc định.';
-    return `⚡ <b>FLASH SALE GIỚI HẠN</b>\n\n• Sản phẩm: <b>${option.dataset.name}</b>\n• Giá cũ: <s>${money(option.dataset.price)}</s>\n• Giá Flash Sale: <b>${money(price.value)}</b>\n• Số lượng ưu đãi: <b>${quantity.value || 1}</b>\n\nNhanh tay mua trước khi hết suất.`;
+    return `⚡ <b>FLASH SALE GIỚI HẠN</b>\n\n📋 Sản phẩm: <b>${option.dataset.name}</b>\n💰 Giá cũ: <s>${money(option.dataset.price)}</s>\n🔥 Giá Flash Sale: <b>${money(price.value)}</b>\n⚡ Số lượng ưu đãi: <b>${quantity.value || 1}</b>\n\n🛒 Nhanh tay mua trước khi hết suất.`;
   };
   const refresh = () => {
     const option = product.options[product.selectedIndex];

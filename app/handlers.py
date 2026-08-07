@@ -190,24 +190,24 @@ def home_text(user: User, settings: Settings) -> str:
     group_line_vi = f'\n📢 Nhóm Telegram: <a href="{group_url}">Vào nhóm</a>' if group_url else ""
     if user.language == "en":
         return (
-            f"✨ Hello, <b>{escape(user.full_name)}</b>\n"
-            f"• ID: <code>{user.telegram_id}</code>\n"
-            f"• Username: {username}\n"
+            f"✨ <b>Hello, {escape(user.full_name)}</b>\n\n"
+            f"🧾 ID: <code>{user.telegram_id}</code>\n"
+            f"👤 Username: {username}\n"
             f"👛 Available balance: <b>{format_vnd(user.balance)}</b>\n\n"
-            "<b>Priority actions</b>\n"
-            "• Quick buy, Deposit, My codes\n"
-            "• Use the three buttons below the chat for quick access.\n\n"
+            "⚡ <b>Quick access</b>\n"
+            "🛒 Quick buy · 💳 Deposit · 🔑 My codes\n"
+            "⌨️ The three buttons below the chat are always ready.\n\n"
             f"💬 Support: @{escape(settings.support_username)}"
             f"{group_line_en}"
         )
     return (
-        f"✨ Xin chào, <b>{escape(user.full_name)}</b>\n"
-        f"• ID: <code>{user.telegram_id}</code>\n"
-        f"• Username: {username}\n"
+        f"✨ <b>Xin chào, {escape(user.full_name)}</b>\n\n"
+        f"🧾 ID: <code>{user.telegram_id}</code>\n"
+        f"👤 Username: {username}\n"
         f"👛 Số dư khả dụng: <b>{format_vnd(user.balance)}</b>\n\n"
-        "<b>Ưu tiên trước</b>\n"
-        "• Mua nhanh, Nạp tiền, Lấy code\n"
-        "• Dùng ba nút dưới ô chat để thao tác nhanh.\n\n"
+        "⚡ <b>Truy cập nhanh</b>\n"
+        "🛒 Mua nhanh · 💳 Nạp tiền · 🔑 Lấy code\n"
+        "⌨️ Ba nút dưới ô chat luôn sẵn sàng thao tác.\n\n"
         f"💬 Hỗ trợ: @{escape(settings.support_username)}"
         f"{group_line_vi}"
     )
@@ -240,9 +240,9 @@ async def send_home_with_navigation(
     sms_enabled: bool,
 ) -> None:
     quick_access_text = (
-        "⌨️ Phím thao tác nhanh đã sẵn sàng."
+        "⌨️ <b>Phím thao tác nhanh đã sẵn sàng</b>"
         if user.language == "vi"
-        else "⌨️ Quick actions are ready."
+        else "⌨️ <b>Quick actions are ready</b>"
     )
     await message.answer(
         quick_access_text,
@@ -912,9 +912,10 @@ def create_router(
             )
         text = (
             f"{product_brand_emoji(name)} <b>{safe_customer_html(name)}</b>\n\n"
-            f"📋 {labels[2]}: {safe_customer_html(description or '—')}\n\n"
-            f"💵 {labels[0]}: {price_text}\n"
-            f"📊 {labels[1]}: <b>{stock}</b>"
+            f"📋 <b>{labels[2]}:</b>\n"
+            f"{safe_customer_html(description or '—')}\n\n"
+            f"💰 <b>{labels[0]}:</b> {price_text}\n"
+            f"📦 <b>{labels[1]}:</b> <b>{stock}</b>"
         )
         if pricing is not None and pricing.flash_sale is not None:
             remaining = flash_sale_remaining(pricing.flash_sale)
@@ -925,13 +926,13 @@ def create_router(
             )
         if quantity_discounts and not (pricing and pricing.flash_sale):
             tier_lines = "\n".join(
-                f"• {quantity_tier_offer_text(tier, product.price, user.language)}"
+                f"🛒 {quantity_tier_offer_text(tier, product.price, user.language)}"
                 for tier in quantity_discounts
             )
             tier_title = (
-                "🎁 <b>Ưu đãi số lượng</b>"
+                "🎁 <b>Ưu đãi:</b>"
                 if user.language == "vi"
-                else "🎁 <b>Quantity discounts</b>"
+                else "🎁 <b>Offers:</b>"
             )
             text += f"\n\n{tier_title}\n{tier_lines}"
         if callback.message:
@@ -1036,49 +1037,49 @@ def create_router(
                 if product is not None:
                     total_amount = result.total_amount or product.price * quantity
                     coupon_line_vi = (
-                        f"Mã giảm giá: <b>{escape(result.coupon_code)}</b> "
+                        f"🏷️ Mã giảm giá: <b>{escape(result.coupon_code)}</b> "
                         f"(tổng ưu đãi {format_vnd(result.discount_amount)})\n"
                         if result.coupon_code
                         else ""
                     )
                     coupon_line_en = (
-                        f"Discount code: <b>{escape(result.coupon_code)}</b> "
+                        f"🏷️ Discount code: <b>{escape(result.coupon_code)}</b> "
                         f"(total savings {format_vnd(result.discount_amount)})\n"
                         if result.coupon_code
                         else ""
                     )
                     quantity_line_vi = (
-                        "Ưu đãi số lượng: "
+                        "🎁 Ưu đãi số lượng: "
                         f"{applied_quantity_discount_text(result.quantity_discount_type, result.quantity_discount_value, 'vi')}\n"
                         if result.quantity_discount_type
                         else ""
                     )
                     quantity_line_en = (
-                        "Quantity discount: "
+                        "🎁 Quantity discount: "
                         f"{applied_quantity_discount_text(result.quantity_discount_type, result.quantity_discount_value, 'en')}\n"
                         if result.quantity_discount_type
                         else ""
                     )
                     text = (
                         "💳 <b>Số dư chưa đủ</b>\n\n"
-                        f"Sản phẩm: {product_brand_emoji(product.name_vi)} "
+                        f"📦 Sản phẩm: {product_brand_emoji(product.name_vi)} "
                         f"<b>{safe_customer_html(product.name_vi)}</b>\n"
-                        f"Số lượng: <b>{quantity}</b>\n"
+                        f"🧮 Số lượng: <b>{quantity}</b>\n"
                         f"{coupon_line_vi}"
                         f"{quantity_line_vi}"
-                        f"Tổng tiền: <b>{format_vnd(total_amount)}</b>\n"
-                        f"Số dư hiện có: <b>{format_vnd(user.balance)}</b>\n\n"
+                        f"💰 Tổng tiền: <b>{format_vnd(total_amount)}</b>\n"
+                        f"👛 Số dư hiện có: <b>{format_vnd(user.balance)}</b>\n\n"
                         "Bạn có thể thanh toán QR trực tiếp cho sản phẩm này. "
                         "Số dư hiện có vẫn được giữ nguyên."
                         if user.language == "vi"
                         else "💳 <b>Insufficient balance</b>\n\n"
-                        f"Product: {product_brand_emoji(product.name_en)} "
+                        f"📦 Product: {product_brand_emoji(product.name_en)} "
                         f"<b>{safe_customer_html(product.name_en)}</b>\n"
-                        f"Quantity: <b>{quantity}</b>\n"
+                        f"🧮 Quantity: <b>{quantity}</b>\n"
                         f"{coupon_line_en}"
                         f"{quantity_line_en}"
-                        f"Total: <b>{format_vnd(total_amount)}</b>\n"
-                        f"Current balance: <b>{format_vnd(user.balance)}</b>\n\n"
+                        f"💰 Total: <b>{format_vnd(total_amount)}</b>\n"
+                        f"👛 Current balance: <b>{format_vnd(user.balance)}</b>\n\n"
                         "You can pay for this product directly by QR. "
                         "Your current balance remains unchanged."
                     )
@@ -1140,10 +1141,10 @@ def create_router(
                     else f"Quantity discount {quantity_label_en}"
                 )
                 text += (
-                    f"\n\n🏷 {discount_label} đã giảm tổng "
+                    f"\n\n🏷️ {discount_label} đã giảm tổng "
                     f"<b>{format_vnd(result.discount_amount)}</b>."
                     if user.language == "vi"
-                    else f"\n\n🏷 {discount_label_en} saved "
+                    else f"\n\n🏷️ {discount_label_en} saved "
                     f"<b>{format_vnd(result.discount_amount)}</b>."
                 )
             await target.answer(
@@ -1254,15 +1255,15 @@ def create_router(
             return
         text = (
             f"✅ <b>Đã áp dụng mã {escape(coupon.code)}</b>\n\n"
-            f"• Giá gốc: <s>{format_vnd(pricing.original_unit_price)}</s>\n"
-            f"• Giảm mỗi sản phẩm: <b>{format_vnd(pricing.discount_per_unit)}</b>\n"
-            f"• Giá còn lại: <b>{format_vnd(pricing.final_unit_price)}</b>\n\n"
+            f"💰 Giá gốc: <s>{format_vnd(pricing.original_unit_price)}</s>\n"
+            f"🏷️ Giảm mỗi sản phẩm: <b>{format_vnd(pricing.discount_per_unit)}</b>\n"
+            f"✅ Giá còn lại: <b>{format_vnd(pricing.final_unit_price)}</b>\n\n"
             "Chọn số lượng để mua với mức giá này."
             if user.language == "vi"
             else f"✅ <b>Code {escape(coupon.code)} applied</b>\n\n"
-            f"• Original: <s>{format_vnd(pricing.original_unit_price)}</s>\n"
-            f"• Discount per item: <b>{format_vnd(pricing.discount_per_unit)}</b>\n"
-            f"• Final price: <b>{format_vnd(pricing.final_unit_price)}</b>\n\n"
+            f"💰 Original: <s>{format_vnd(pricing.original_unit_price)}</s>\n"
+            f"🏷️ Discount per item: <b>{format_vnd(pricing.discount_per_unit)}</b>\n"
+            f"✅ Final price: <b>{format_vnd(pricing.final_unit_price)}</b>\n\n"
             "Choose a quantity to continue."
         )
         await message.answer(
@@ -1325,18 +1326,18 @@ def create_router(
             return
         text = (
             f"🧮 <b>Chọn số lượng</b>\n\n"
-            f"• Sản phẩm: {product_brand_emoji(product.name_vi)} "
+            f"📦 Sản phẩm: {product_brand_emoji(product.name_vi)} "
             f"<b>{safe_customer_html(product.name_vi)}</b>\n"
-            f"• Đơn giá: <b>{format_vnd(display_price)}</b>\n"
-            f"• Còn hàng: <b>{stock}</b>\n"
-            f"• Tối đa mỗi lần: <b>{maximum}</b>"
+            f"💰 Đơn giá: <b>{format_vnd(display_price)}</b>\n"
+            f"📦 Còn hàng: <b>{stock}</b>\n"
+            f"🧾 Tối đa mỗi lần: <b>{maximum}</b>"
             if user.language == "vi"
             else f"🧮 <b>Choose quantity</b>\n\n"
-            f"• Product: {product_brand_emoji(product.name_en)} "
+            f"📦 Product: {product_brand_emoji(product.name_en)} "
             f"<b>{safe_customer_html(product.name_en)}</b>\n"
-            f"• Unit price: <b>{format_vnd(display_price)}</b>\n"
-            f"• In stock: <b>{stock}</b>\n"
-            f"• Maximum per order: <b>{maximum}</b>"
+            f"💰 Unit price: <b>{format_vnd(display_price)}</b>\n"
+            f"📦 In stock: <b>{stock}</b>\n"
+            f"🧾 Maximum per order: <b>{maximum}</b>"
         )
         if quantity_discounts and not (pricing and pricing.flash_sale):
             tier_summary = "\n".join(
@@ -1755,7 +1756,7 @@ def create_router(
             product.name_en if user.language == "en" else product.name_vi
         )
         price_breakdown_vi = (
-            "• Chi tiết giá: "
+            "💰 Chi tiết giá: "
             + " + ".join(
                 f"<b>{allocation.quantity}</b> x "
                 f"<b>{format_vnd(allocation.final_unit_price)}</b>"
@@ -1766,7 +1767,7 @@ def create_router(
             else ""
         )
         price_breakdown_en = (
-            "• Price breakdown: "
+            "💰 Price breakdown: "
             + " + ".join(
                 f"<b>{allocation.quantity}</b> x "
                 f"<b>{format_vnd(allocation.final_unit_price)}</b>"
@@ -1787,26 +1788,26 @@ def create_router(
             else pricing.quantity_discount_per_unit * quantity
         )
         coupon_line_vi = (
-            f"• Mã giảm giá: <b>{escape(pricing.coupon.code)}</b> "
+            f"🏷️ Mã giảm giá: <b>{escape(pricing.coupon.code)}</b> "
             f"(-{format_vnd(coupon_discount_amount)})\n"
             if pricing.coupon
             else ""
         )
         coupon_line_en = (
-            f"• Discount code: <b>{escape(pricing.coupon.code)}</b> "
+            f"🏷️ Discount code: <b>{escape(pricing.coupon.code)}</b> "
             f"(-{format_vnd(coupon_discount_amount)})\n"
             if pricing.coupon
             else ""
         )
         quantity_line_vi = (
-            "• Ưu đãi số lượng: "
+            "🎁 Ưu đãi số lượng: "
             f"{applied_quantity_discount_text(pricing.quantity_discount_type, pricing.quantity_discount_value, 'vi')} "
             f"(-{format_vnd(quantity_discount_amount)})\n"
             if pricing.quantity_discount_type
             else ""
         )
         quantity_line_en = (
-            "• Quantity discount: "
+            "🎁 Quantity discount: "
             f"{applied_quantity_discount_text(pricing.quantity_discount_type, pricing.quantity_discount_value, 'en')} "
             f"(-{format_vnd(quantity_discount_amount)})\n"
             if pricing.quantity_discount_type
@@ -1814,33 +1815,33 @@ def create_router(
         )
         text = (
             "🧾 <b>Thanh toán sản phẩm</b>\n\n"
-            f"• Sản phẩm: {product_brand_emoji(product_name)} "
+            f"📦 Sản phẩm: {product_brand_emoji(product_name)} "
             f"<b>{safe_customer_html(product_name)}</b>\n"
-            f"• Số lượng: <b>{quantity}</b>\n"
+            f"🧮 Số lượng: <b>{quantity}</b>\n"
             f"{price_breakdown_vi}"
             f"{coupon_line_vi}"
             f"{quantity_line_vi}"
-            f"• Ngân hàng: <b>{escape(settings.bank_code)}</b>\n"
-            f"• Số tài khoản: <code>{escape(settings.bank_account)}</code>\n"
-            f"• Chủ tài khoản: <b>{escape(settings.bank_account_name)}</b>\n"
-            f"• Số tiền: <b>{format_vnd(total_amount)}</b>\n"
-            f"• Nội dung bắt buộc: <code>{deposit.code}</code>\n\n"
+            f"🏦 Ngân hàng: <b>{escape(settings.bank_code)}</b>\n"
+            f"💳 Số tài khoản: <code>{escape(settings.bank_account)}</code>\n"
+            f"👤 Chủ tài khoản: <b>{escape(settings.bank_account_name)}</b>\n"
+            f"💰 Số tiền: <b>{format_vnd(total_amount)}</b>\n"
+            f"🧾 Nội dung bắt buộc: <code>{deposit.code}</code>\n\n"
             "Giữ nguyên số tiền và nội dung. Sản phẩm sẽ được giao tự động sau khi "
             "giao dịch được ghi nhận."
             "\n\n⏳ QR chỉ có hiệu lực 5 phút. Quá hạn bot sẽ xóa tin nhắn và giao dịch thất bại."
             if user.language == "vi"
             else "🧾 <b>Product payment</b>\n\n"
-            f"• Product: {product_brand_emoji(product_name)} "
+            f"📦 Product: {product_brand_emoji(product_name)} "
             f"<b>{safe_customer_html(product_name)}</b>\n"
-            f"• Quantity: <b>{quantity}</b>\n"
+            f"🧮 Quantity: <b>{quantity}</b>\n"
             f"{price_breakdown_en}"
             f"{coupon_line_en}"
             f"{quantity_line_en}"
-            f"• Bank: <b>{escape(settings.bank_code)}</b>\n"
-            f"• Account: <code>{escape(settings.bank_account)}</code>\n"
-            f"• Account name: <b>{escape(settings.bank_account_name)}</b>\n"
-            f"• Amount: <b>{format_vnd(total_amount)}</b>\n"
-            f"• Required content: <code>{deposit.code}</code>\n\n"
+            f"🏦 Bank: <b>{escape(settings.bank_code)}</b>\n"
+            f"💳 Account: <code>{escape(settings.bank_account)}</code>\n"
+            f"👤 Account name: <b>{escape(settings.bank_account_name)}</b>\n"
+            f"💰 Amount: <b>{format_vnd(total_amount)}</b>\n"
+            f"🧾 Required content: <code>{deposit.code}</code>\n\n"
             "Keep the exact amount and content. The product is delivered automatically "
             "after the payment is recorded."
             "\n\n⏳ This QR is valid for 5 minutes. After that, the message is deleted and "
@@ -1962,20 +1963,20 @@ def create_router(
         qr_url = build_sepay_qr_url(settings.bank_code, settings.bank_account, amount, deposit.code)
         text = (
             "💳 <b>Thông tin chuyển khoản</b>\n\n"
-            f"• Ngân hàng: <b>{escape(settings.bank_code)}</b>\n"
-            f"• Số tài khoản: <code>{escape(settings.bank_account)}</code>\n"
-            f"• Chủ tài khoản: <b>{escape(settings.bank_account_name)}</b>\n"
-            f"• Số tiền: <b>{format_vnd(amount)}</b>\n"
-            f"• Nội dung bắt buộc: <code>{deposit.code}</code>\n\n"
+            f"🏦 Ngân hàng: <b>{escape(settings.bank_code)}</b>\n"
+            f"💳 Số tài khoản: <code>{escape(settings.bank_account)}</code>\n"
+            f"👤 Chủ tài khoản: <b>{escape(settings.bank_account_name)}</b>\n"
+            f"💰 Số tiền: <b>{format_vnd(amount)}</b>\n"
+            f"🧾 Nội dung bắt buộc: <code>{deposit.code}</code>\n\n"
             "Giữ nguyên số tiền và nội dung. Số dư sẽ được cập nhật tự động."
             "\n\n⏳ QR chỉ có hiệu lực 5 phút. Quá hạn bot sẽ xóa tin nhắn và giao dịch thất bại."
             if user.language == "vi"
             else "💳 <b>Bank transfer details</b>\n\n"
-            f"• Bank: <b>{escape(settings.bank_code)}</b>\n"
-            f"• Account: <code>{escape(settings.bank_account)}</code>\n"
-            f"• Account name: <b>{escape(settings.bank_account_name)}</b>\n"
-            f"• Amount: <b>{format_vnd(amount)}</b>\n"
-            f"• Required content: <code>{deposit.code}</code>\n\n"
+            f"🏦 Bank: <b>{escape(settings.bank_code)}</b>\n"
+            f"💳 Account: <code>{escape(settings.bank_account)}</code>\n"
+            f"👤 Account name: <b>{escape(settings.bank_account_name)}</b>\n"
+            f"💰 Amount: <b>{format_vnd(amount)}</b>\n"
+            f"🧾 Required content: <code>{deposit.code}</code>\n\n"
             "Keep the exact amount and content. Your balance updates automatically."
             "\n\n⏳ This QR is valid for 5 minutes. After that, the message is deleted and "
             "the payment request fails."

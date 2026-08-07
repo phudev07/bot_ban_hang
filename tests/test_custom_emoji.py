@@ -3,17 +3,20 @@ from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 
 from app.custom_emoji import (
     CHATGPT_EMOJI_ID,
+    EMOJI_IDS,
     GEMINI_EMOJI_ID,
     NETFLIX_EMOJI_ID,
     animate_html,
     prepare_telegram_method,
     product_brand_emoji_id,
 )
+from app.keyboards import quick_access_keyboard
 
 
 def test_product_brand_emoji_uses_exact_service_logo() -> None:
     assert product_brand_emoji_id("ChatGPT Plus") == CHATGPT_EMOJI_ID
     assert product_brand_emoji_id("Netflix 4K Premium") == NETFLIX_EMOJI_ID
+    assert product_brand_emoji_id("Netfliix 4K HD TK RIÊNG BHF") == NETFLIX_EMOJI_ID
     assert product_brand_emoji_id("Link GG Pro Jio 18M") == GEMINI_EMOJI_ID
 
 
@@ -30,7 +33,9 @@ def test_animate_html_preserves_code_and_existing_custom_emoji() -> None:
 def test_animate_html_keeps_variation_selector_inside_custom_emoji() -> None:
     rendered = animate_html("🛠️ Bảo trì")
 
-    assert rendered.startswith('<tg-emoji emoji-id="6318738796200338411">🛠️</tg-emoji>')
+    assert rendered.startswith(
+        f'<tg-emoji emoji-id="{EMOJI_IDS["🛠"]}">🛠️</tg-emoji>'
+    )
     assert "</tg-emoji>️" not in rendered
 
 
@@ -59,7 +64,7 @@ def test_prepare_method_removes_unmapped_legacy_button_emoji() -> None:
     prepare_telegram_method(method)
 
     assert button.text == "API đấu kho"
-    assert button.icon_custom_emoji_id == "6318871179977302808"
+    assert button.icon_custom_emoji_id == EMOJI_IDS["🔌"]
 
 
 def test_prepare_method_replaces_all_flags_with_one_language_icon() -> None:
@@ -73,4 +78,29 @@ def test_prepare_method_replaces_all_flags_with_one_language_icon() -> None:
     prepare_telegram_method(method)
 
     assert button.text == "VN / US"
-    assert button.icon_custom_emoji_id == "6318871179977302808"
+    assert button.icon_custom_emoji_id == EMOJI_IDS["🌐"]
+
+
+def test_animate_html_covers_customer_information_icons() -> None:
+    rendered = animate_html("🏷️ Mã giảm giá\n🧮 Số lượng\n👛 Số dư\n⏳ Chờ xử lý")
+
+    for emoji in ("🏷", "🧮", "👛", "⏳"):
+        assert f'emoji-id="{EMOJI_IDS[emoji]}"' in rendered
+
+
+def test_quick_access_buttons_use_one_animated_icon_each() -> None:
+    method = SendMessage(
+        chat_id=1,
+        text="Menu",
+        reply_markup=quick_access_keyboard("vi"),
+    )
+
+    prepare_telegram_method(method)
+
+    buttons = [button for row in method.reply_markup.keyboard for button in row]
+    assert [button.text for button in buttons] == ["Menu", "Mua nhanh", "Nạp tiền"]
+    assert [button.icon_custom_emoji_id for button in buttons] == [
+        EMOJI_IDS["☰"],
+        EMOJI_IDS["⚡"],
+        EMOJI_IDS["💳"],
+    ]

@@ -39,22 +39,22 @@ def delivery_text(
         title = "Payment and delivery successful" if paid_by_qr else "Purchase successful"
         return (
             f"✅ <b>{title}</b>\n\n"
-            f"• Shop order: <code>{safe_html(shop_order_code)}</code>\n"
-            f"• Product: {brand_emoji} <b>{safe_html(product_name)}</b>\n"
-            f"• Quantity: <b>{len(secrets)}</b>\n"
-            f"• Total: <b>{format_vnd(total_amount)}</b>\n\n"
-            f"<b>Your accounts/codes</b>\n{account_block}\n\n"
+            f"🧾 Shop order: <code>{safe_html(shop_order_code)}</code>\n"
+            f"📦 Product: {brand_emoji} <b>{safe_html(product_name)}</b>\n"
+            f"🧮 Quantity: <b>{len(secrets)}</b>\n"
+            f"💰 Total: <b>{format_vnd(total_amount)}</b>\n\n"
+            f"📋 <b>Your accounts/codes:</b>\n{account_block}\n\n"
             "Use the copy-all button or download the TXT file. Keep this information private."
         )
 
     title = "Thanh toán và giao hàng thành công" if paid_by_qr else "Mua hàng thành công"
     return (
         f"✅ <b>{title}</b>\n\n"
-        f"• Mã đơn shop: <code>{safe_html(shop_order_code)}</code>\n"
-        f"• Sản phẩm: {brand_emoji} <b>{safe_html(product_name)}</b>\n"
-        f"• Số lượng: <b>{len(secrets)}</b>\n"
-        f"• Tổng tiền: <b>{format_vnd(total_amount)}</b>\n\n"
-        f"<b>Tài khoản/code của bạn</b>\n{account_block}\n\n"
+        f"🧾 Mã đơn shop: <code>{safe_html(shop_order_code)}</code>\n"
+        f"📦 Sản phẩm: {brand_emoji} <b>{safe_html(product_name)}</b>\n"
+        f"🧮 Số lượng: <b>{len(secrets)}</b>\n"
+        f"💰 Tổng tiền: <b>{format_vnd(total_amount)}</b>\n\n"
+        f"📋 <b>Tài khoản/code của bạn:</b>\n{account_block}\n\n"
         "Dùng nút sao chép hoặc tải file TXT. Không chia sẻ thông tin này cho người khác."
     )
 
