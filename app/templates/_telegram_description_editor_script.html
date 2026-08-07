@@ -1,0 +1,93 @@
+<script>
+(() => {
+  const tagMap = new Map([
+    ['B', 'b'], ['STRONG', 'b'], ['I', 'i'], ['EM', 'i'],
+    ['U', 'u'], ['INS', 'u'], ['S', 's'], ['STRIKE', 's'], ['DEL', 's'],
+    ['CODE', 'code'], ['PRE', 'pre'], ['BLOCKQUOTE', 'blockquote'], ['A', 'a'],
+  ]);
+  const blockedTags = new Set(['SCRIPT', 'STYLE', 'TEMPLATE', 'SVG', 'MATH', 'IFRAME', 'OBJECT']);
+  const safeLink = (value) => {
+    try {
+      const url = new URL(value);
+      return ['http:', 'https:', 'tg:', 'mailto:'].includes(url.protocol) ? value : '';
+    } catch (_) {
+      return '';
+    }
+  };
+  const appendSafeNode = (source, target) => {
+    if (source.nodeType === Node.TEXT_NODE) {
+      target.append(document.createTextNode(source.textContent || ''));
+      return;
+    }
+    if (source.nodeType !== Node.ELEMENT_NODE || blockedTags.has(source.tagName)) return;
+    if (source.tagName === 'BR') {
+      target.append(document.createTextNode('\n'));
+      return;
+    }
+    const outputTag = tagMap.get(source.tagName);
+    if (!outputTag) {
+      [...source.childNodes].forEach((child) => appendSafeNode(child, target));
+      return;
+    }
+    if (outputTag === 'a') {
+      const href = safeLink(source.getAttribute('href') || '');
+      if (!href) {
+        [...source.childNodes].forEach((child) => appendSafeNode(child, target));
+        return;
+      }
+      const anchor = document.createElement('a');
+      anchor.href = href;
+      anchor.tabIndex = -1;
+      [...source.childNodes].forEach((child) => appendSafeNode(child, anchor));
+      target.append(anchor);
+      return;
+    }
+    const element = document.createElement(outputTag);
+    [...source.childNodes].forEach((child) => appendSafeNode(child, element));
+    target.append(element);
+  };
+  const renderPreview = (textarea, preview) => {
+    const raw = textarea.value.trim();
+    preview.replaceChildren();
+    if (!raw) {
+      const empty = document.createElement('em');
+      empty.textContent = 'Chưa có mô tả sản phẩm.';
+      preview.append(empty);
+      return;
+    }
+    const parsed = new DOMParser().parseFromString(raw, 'text/html');
+    [...parsed.body.childNodes].forEach((node) => appendSafeNode(node, preview));
+  };
+  const replaceSelection = (textarea, before, after = '') => {
+    const start = textarea.selectionStart;
+    const end = textarea.selectionEnd;
+    const selected = textarea.value.slice(start, end);
+    textarea.setRangeText(`${before}${selected}${after}`, start, end, 'end');
+    if (!selected && after) textarea.setSelectionRange(start + before.length, start + before.length);
+    textarea.dispatchEvent(new Event('input', {bubbles: true}));
+    textarea.focus();
+  };
+
+  document.querySelectorAll('[data-telegram-editor]').forEach((editor) => {
+    const textarea = editor.querySelector('[data-telegram-source]');
+    const preview = editor.querySelector('[data-telegram-preview]');
+    if (!textarea || !preview) return;
+    editor.querySelectorAll('[data-format-tag]').forEach((button) => {
+      button.addEventListener('click', () => {
+        const tag = button.dataset.formatTag;
+        replaceSelection(textarea, `<${tag}>`, `</${tag}>`);
+      });
+    });
+    editor.querySelector('[data-format-link]')?.addEventListener('click', () => {
+      const href = window.prompt('Nhập link http://, https://, tg:// hoặc mailto:');
+      if (!href) return;
+      replaceSelection(textarea, `<a href="${href.replaceAll('"', '&quot;')}">`, '</a>');
+    });
+    editor.querySelectorAll('[data-insert-text]').forEach((button) => {
+      button.addEventListener('click', () => replaceSelection(textarea, button.dataset.insertText || ''));
+    });
+    textarea.addEventListener('input', () => renderPreview(textarea, preview));
+    renderPreview(textarea, preview);
+  });
+})();
+</script>

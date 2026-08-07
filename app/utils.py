@@ -5,7 +5,8 @@ import time
 import unicodedata
 from decimal import Decimal, ROUND_HALF_UP
 from html import escape
-from urllib.parse import urlencode
+from html.parser import HTMLParser
+from urllib.parse import urlencode, urlsplit
 
 from cryptography.fernet import Fernet
 
@@ -122,6 +123,110 @@ def sanitize_customer_text(value: object) -> str:
 def safe_customer_html(value: object) -> str:
     """Sanitize public text and escape it for Telegram HTML output."""
     return safe_html(sanitize_customer_text(value))
+
+
+_TELEGRAM_TAG_ALIASES = {
+    "b": "b",
+    "strong": "b",
+    "i": "i",
+    "em": "i",
+    "u": "u",
+    "ins": "u",
+    "s": "s",
+    "strike": "s",
+    "del": "s",
+    "code": "code",
+    "pre": "pre",
+    "blockquote": "blockquote",
+    "a": "a",
+}
+_TELEGRAM_LINK_SCHEMES = frozenset({"http", "https", "tg", "mailto"})
+
+
+def _safe_telegram_href(value: str | None) -> str | None:
+    href = sanitize_customer_text(value or "").strip()
+    if not href or len(href) > 2048 or any(ord(character) < 32 for character in href):
+        return None
+    parsed = urlsplit(href)
+    if parsed.scheme.casefold() not in _TELEGRAM_LINK_SCHEMES:
+        return None
+    if parsed.scheme.casefold() in {"http", "https"} and not parsed.netloc:
+        return None
+    if parsed.scheme.casefold() == "mailto" and not parsed.path:
+        return None
+    if parsed.scheme.casefold() == "tg" and not (parsed.netloc or parsed.path):
+        return None
+    return href
+
+
+class _TelegramDescriptionSanitizer(HTMLParser):
+    """Build balanced Telegram HTML from the small supported tag allowlist."""
+
+    def __init__(self) -> None:
+        super().__init__(convert_charrefs=True)
+        self.parts: list[str] = []
+        self.open_tags: list[tuple[str, str | None]] = []
+
+    def handle_starttag(
+        self,
+        tag: str,
+        attrs: list[tuple[str, str | None]],
+    ) -> None:
+        normalized = tag.casefold()
+        if normalized == "br":
+            self.parts.append("\n")
+            return
+        output_tag = _TELEGRAM_TAG_ALIASES.get(normalized)
+        if output_tag is None:
+            return
+        if output_tag == "a":
+            href = _safe_telegram_href(dict(attrs).get("href"))
+            self.open_tags.append((output_tag, output_tag if href else None))
+            if href:
+                self.parts.append(f'<a href="{escape(href, quote=True)}">')
+            return
+        self.open_tags.append((output_tag, output_tag))
+        self.parts.append(f"<{output_tag}>")
+
+    def handle_endtag(self, tag: str) -> None:
+        output_tag = _TELEGRAM_TAG_ALIASES.get(tag.casefold())
+        if output_tag is None:
+            return
+        matching_index = next(
+            (
+                index
+                for index in range(len(self.open_tags) - 1, -1, -1)
+                if self.open_tags[index][0] == output_tag
+            ),
+            None,
+        )
+        if matching_index is None:
+            return
+        for _, opened_output_tag in reversed(self.open_tags[matching_index:]):
+            if opened_output_tag:
+                self.parts.append(f"</{opened_output_tag}>")
+        del self.open_tags[matching_index:]
+
+    def handle_data(self, data: str) -> None:
+        self.parts.append(escape(sanitize_customer_text(data), quote=False))
+
+    def sanitized_html(self) -> str:
+        for _, output_tag in reversed(self.open_tags):
+            if output_tag:
+                self.parts.append(f"</{output_tag}>")
+        self.open_tags.clear()
+        return "".join(self.parts)
+
+
+def safe_customer_telegram_html(value: object) -> str:
+    """Keep safe Telegram formatting in editable customer-facing descriptions."""
+    sanitizer = _TelegramDescriptionSanitizer()
+    try:
+        sanitizer.feed(sanitize_customer_text(value))
+        sanitizer.close()
+    except (ValueError, TypeError):
+        return safe_customer_html(value)
+    return sanitizer.sanitized_html()
 
 
 def contains_supplier_identity(value: object) -> bool:

@@ -1450,9 +1450,17 @@ def create_dashboard_router(
         ]
 
     @router.get("/admin/products", response_class=HTMLResponse)
-    async def products_page(request: Request) -> Response:
+    async def products_page(request: Request, status: str = "all") -> Response:
         if not is_admin(request):
             return redirect_to_login()
+        filter_labels = {
+            "all": "Tất cả",
+            "visible": "Đang hiển thị",
+            "hidden": "Đang ẩn",
+            "in_stock": "Còn hàng",
+            "out_of_stock": "Hết hàng",
+        }
+        selected_filter = status if status in filter_labels else "all"
         async with session_factory() as session:
             products = await product_rows(session)
             categories = list(
@@ -1526,6 +1534,21 @@ def create_dashboard_router(
                     product_row["stock"] = (
                         0 if product.force_out_of_stock else live_stock
                     )
+        filter_counts = {
+            "all": len(products),
+            "visible": sum(bool(row["product"].active) for row in products),
+            "hidden": sum(not bool(row["product"].active) for row in products),
+            "in_stock": sum(int(row["stock"]) > 0 for row in products),
+            "out_of_stock": sum(int(row["stock"]) <= 0 for row in products),
+        }
+        if selected_filter == "visible":
+            products = [row for row in products if bool(row["product"].active)]
+        elif selected_filter == "hidden":
+            products = [row for row in products if not bool(row["product"].active)]
+        elif selected_filter == "in_stock":
+            products = [row for row in products if int(row["stock"]) > 0]
+        elif selected_filter == "out_of_stock":
+            products = [row for row in products if int(row["stock"]) <= 0]
         return templates.TemplateResponse(
             request,
             "products.html",
@@ -1535,6 +1558,16 @@ def create_dashboard_router(
                 "products",
                 products=products,
                 categories=categories,
+                product_filter=selected_filter,
+                product_filter_label=filter_labels[selected_filter],
+                product_filter_options=[
+                    {
+                        "value": value,
+                        "label": label,
+                        "count": filter_counts[value],
+                    }
+                    for value, label in filter_labels.items()
+                ],
             ),
         )
 
@@ -2983,7 +3016,9 @@ def create_dashboard_router(
                 "Nhập kho",
                 "inventory",
                 products=products,
-                import_products=products,
+                import_products=[
+                    row for row in products if bool(row["product"].active)
+                ],
                 withdrawal_products=[
                     row
                     for row in products
@@ -3037,6 +3072,13 @@ def create_dashboard_router(
                 or not parsed_items
             ):
                 flash(request, "Sản phẩm hoặc dữ liệu kho không hợp lệ.", "error")
+                return RedirectResponse("/admin/inventory", status_code=303)
+            if not product.active:
+                flash(
+                    request,
+                    "Sản phẩm đang ẩn. Hãy bật hiển thị sản phẩm trước khi nhập kho.",
+                    "error",
+                )
                 return RedirectResponse("/admin/inventory", status_code=303)
             duplicate_check = await filter_duplicate_inventory(
                 session,

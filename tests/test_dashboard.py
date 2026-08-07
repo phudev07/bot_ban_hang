@@ -130,6 +130,155 @@ class AmbiguousDashboardSupplier(DashboardBuyingSupplier):
         return None
 
 
+def test_product_filters_and_inventory_import_only_allow_visible_products(
+    tmp_path,
+) -> None:
+    async def initialize():
+        database_path = (tmp_path / "dashboard-product-filters.db").as_posix()
+        engine = create_async_engine(f"sqlite+aiosqlite:///{database_path}")
+        async with engine.begin() as connection:
+            await connection.run_sync(Base.metadata.create_all)
+        sessions = async_sessionmaker(engine, expire_on_commit=False)
+        async with sessions() as session:
+            category = Category(name_vi="Tài khoản", name_en="Accounts")
+            session.add(category)
+            await session.flush()
+            visible_stocked = Product(
+                category_id=category.id,
+                name_vi="Sản phẩm hiện còn hàng",
+                name_en="Visible in stock",
+                price=40_000,
+                fulfillment_source="local",
+                active=True,
+            )
+            visible_empty = Product(
+                category_id=category.id,
+                name_vi="Sản phẩm hiện hết hàng",
+                name_en="Visible out of stock",
+                price=40_000,
+                fulfillment_source="local",
+                active=True,
+            )
+            hidden_stocked = Product(
+                category_id=category.id,
+                name_vi="Sản phẩm ẩn còn hàng",
+                name_en="Hidden in stock",
+                price=40_000,
+                fulfillment_source="local",
+                active=False,
+            )
+            session.add_all([visible_stocked, visible_empty, hidden_stocked])
+            await session.flush()
+            session.add_all(
+                [
+                    InventoryItem(
+                        product_id=visible_stocked.id,
+                        encrypted_secret="visible-stock",
+                        cost_amount=30_000,
+                    ),
+                    InventoryItem(
+                        product_id=hidden_stocked.id,
+                        encrypted_secret="hidden-stock",
+                        cost_amount=30_000,
+                    ),
+                ]
+            )
+            await session.commit()
+        return engine, sessions, hidden_stocked.id
+
+    engine, sessions, hidden_product_id = asyncio.run(initialize())
+    encryption_key = Fernet.generate_key().decode()
+    settings = Settings(
+        _env_file=None,
+        bot_token="123456:ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghi",
+        inventory_encryption_key=encryption_key,
+        dashboard_enabled=True,
+        dashboard_username="admin",
+        dashboard_password_hash=hash_dashboard_password("dashboard-password"),
+        dashboard_session_secret="session-secret-long-enough-for-tests",
+    )
+    app = create_api(
+        settings,
+        sessions,
+        FakeBot(),  # type: ignore[arg-type]
+        SecretCipher(encryption_key),
+    )
+
+    with TestClient(app, base_url="https://testserver") as client:
+        client.post(
+            "/admin/login",
+            data={"username": "admin", "password": "dashboard-password"},
+        )
+        all_products = client.get("/admin/products")
+        assert "Sản phẩm hiện còn hàng" in all_products.text
+        assert "Sản phẩm hiện hết hàng" in all_products.text
+        assert "Sản phẩm ẩn còn hàng" in all_products.text
+        assert re.search(r">Đang hiển thị <span>2</span>", all_products.text)
+        assert re.search(r">Đang ẩn <span>1</span>", all_products.text)
+        assert re.search(r">Còn hàng <span>2</span>", all_products.text)
+        assert re.search(r">Hết hàng <span>1</span>", all_products.text)
+
+        visible = client.get("/admin/products?status=visible")
+        assert "Sản phẩm hiện còn hàng" in visible.text
+        assert "Sản phẩm hiện hết hàng" in visible.text
+        assert "Sản phẩm ẩn còn hàng" not in visible.text
+
+        hidden = client.get("/admin/products?status=hidden")
+        assert "Sản phẩm ẩn còn hàng" in hidden.text
+        assert "Sản phẩm hiện còn hàng" not in hidden.text
+
+        in_stock = client.get("/admin/products?status=in_stock")
+        assert "Sản phẩm hiện còn hàng" in in_stock.text
+        assert "Sản phẩm ẩn còn hàng" in in_stock.text
+        assert "Sản phẩm hiện hết hàng" not in in_stock.text
+
+        out_of_stock = client.get("/admin/products?status=out_of_stock")
+        assert "Sản phẩm hiện hết hàng" in out_of_stock.text
+        assert "Sản phẩm hiện còn hàng" not in out_of_stock.text
+
+        inventory_page = client.get("/admin/inventory")
+        import_select = re.search(
+            r'<select name="product_id" required>(.*?)</select>',
+            inventory_page.text,
+            flags=re.DOTALL,
+        )
+        assert import_select is not None
+        assert "Sản phẩm hiện còn hàng" in import_select.group(1)
+        assert "Sản phẩm hiện hết hàng" in import_select.group(1)
+        assert "Sản phẩm ẩn còn hàng" not in import_select.group(1)
+        csrf = re.search(
+            r'name="csrf" value="([^"]+)"', inventory_page.text
+        ).group(1)
+        rejected = client.post(
+            "/admin/inventory",
+            data={
+                "csrf": csrf,
+                "product_id": str(hidden_product_id),
+                "items": "hidden-import@example.com|password",
+                "cost_amount": "30.000",
+            },
+            follow_redirects=False,
+        )
+        assert rejected.status_code == 303
+        rejected_page = client.get("/admin/inventory")
+        assert "Sản phẩm đang ẩn" in rejected_page.text
+
+    async def verify_hidden_stock_unchanged() -> None:
+        async with sessions() as session:
+            hidden_stock = int(
+                await session.scalar(
+                    select(func.count(InventoryItem.id)).where(
+                        InventoryItem.product_id == hidden_product_id
+                    )
+                )
+                or 0
+            )
+            assert hidden_stock == 1
+
+    asyncio.run(verify_hidden_stock_unchanged())
+    asyncio.run(engine.dispose())
+
+
 def test_archived_catalog_items_disappear_but_keep_financial_history(tmp_path) -> None:
     engine, sessions, ids = None, None, None
 

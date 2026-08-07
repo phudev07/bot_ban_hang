@@ -1,4 +1,5 @@
 {% extends "base.html" %}
+{% from "_telegram_description_editor.html" import telegram_description_editor %}
 {% block content %}
 <section class="page-intro compact-intro"><div><span>DANH MỤC BÁN HÀNG</span><h2>Giá bán, giá vốn và lợi nhuận trên cùng một dòng.</h2><p>Sản phẩm API lấy giá vốn động từ nguồn; giá bán bằng giá vốn cộng phần chênh bạn đặt.</p></div><div class="quick-actions"><a href="/admin/inventory">Nhập kho local</a><a href="/admin/discounts">Quản lý mã giảm giá</a></div></section>
 <section class="panel form-panel"><div class="panel-head"><div><span>NEW PRODUCT</span><h2>Thêm sản phẩm</h2></div></div>
@@ -14,12 +15,17 @@
     <label class="check"><input type="checkbox" name="sale_notifications_enabled" value="1" checked><span>Bật thông báo Sale tự động</span></label>
     <label class="check"><input type="checkbox" name="stock_notifications_enabled" value="1" checked><span>Bật thông báo hàng về</span></label>
     <label class="check wide"><input type="checkbox" name="notify_stock_without_balance_topup" value="1"><span>Báo hàng về khi tồn API tăng, kể cả không nạp tiền nguồn; mỗi lần báo cách nhau ít nhất 10 phút</span></label>
-    <label class="wide">Mô tả<textarea name="description_vi" rows="3"></textarea></label><label class="wide">Mô tả tiếng Anh<textarea name="description_en" rows="3"></textarea></label>
+    {{ telegram_description_editor('description_vi', 'Mô tả trong bot · Tiếng Việt') }}
+    {{ telegram_description_editor('description_en', 'Mô tả trong bot · Tiếng Anh') }}
     <label class="check wide"><input type="checkbox" name="allow_quantity" value="1" checked><span>Cho phép khách chọn nhiều số lượng</span></label>
     <button class="button primary" type="submit">Thêm sản phẩm</button>
   </form>
 </section>
-<section class="panel"><div class="panel-head"><div><span>CATALOG</span><h2>Danh sách sản phẩm</h2></div></div><div class="table-wrap"><table><thead><tr><th>ID / Sản phẩm</th><th>Gian hàng</th><th>Giá bán</th><th>Giá vốn hiện tại</th><th>Lãi dự kiến/SP</th><th>Kho</th><th>Mã giảm giá</th><th>Cập nhật</th><th></th></tr></thead><tbody>
+<section class="panel"><div class="panel-head product-list-head"><div><span>CATALOG</span><h2>Danh sách sản phẩm</h2></div><small>Đang xem: <strong>{{ product_filter_label }}</strong> · {{ products|length }} sản phẩm</small></div>
+<nav class="wallet-kind-tabs product-filter-tabs" aria-label="Lọc danh sách sản phẩm">
+  {% for option in product_filter_options %}<a class="{{ 'active' if product_filter == option.value else '' }}" href="/admin/products?status={{ option.value }}" {{ 'aria-current=page' if product_filter == option.value else '' }}>{{ option.label }} <span>{{ option.count }}</span></a>{% endfor %}
+</nav>
+<div class="table-wrap"><table><thead><tr><th>ID / Sản phẩm</th><th>Gian hàng</th><th>Giá bán</th><th>Giá vốn hiện tại</th><th>Lãi dự kiến/SP</th><th>Kho</th><th>Mã giảm giá</th><th>Cập nhật</th><th></th></tr></thead><tbody>
 {% for row in products %}
 <tr>
   <td><strong>{{ row.product.name_vi }}</strong><small><code>#{{ row.product.id }}</code> · {{ row.product.product_type }} · {{ 'hiện' if row.product.active else 'ẩn' }}{% if not row.supplier_sources %} · {{ 'Kho bot' if row.product.fulfillment_source == 'local' else ('Kho + Sumistore API' if row.product.fulfillment_source == 'sumistore' else ('Kho + Lê Hải API' if row.product.fulfillment_source == 'lehai' else 'Kho + Haji API')) }}{% endif %}</small>{% if row.supplier_sources %}<small class="supplier-routing"><span class="supplier-active">API đang đấu: {{ row.active_supplier_label }}</span><span class="supplier-source selected">Kho bot: <strong>{{ row.local_stock }}</strong></span>{% for source in row.supplier_sources %}<span class="supplier-source {{ 'selected' if source.selected else '' }} {{ 'disabled' if not source.enabled else '' }}">{{ source.label }}: <strong>{{ 'Tắt' if not source.enabled else (source.stock if source.stock is not none else 'lỗi') }}</strong></span>{% endfor %}</small>{% elif row.api_sources %}<small class="supplier-routing"><span class="supplier-source selected">Kho bot: <strong>{{ row.local_stock }}</strong></span>{% for source in row.api_sources %}<span class="supplier-source {{ 'selected' if source.enabled else 'disabled' }}">{{ source.label }}: <strong>{{ 'Bật' if source.enabled else 'Tắt' }}</strong></span>{% endfor %}</small>{% endif %}</td>
@@ -32,6 +38,7 @@
   <td>{% if row.product.fulfillment_source != 'local' %}{{ row.product.supplier_synced_at|localtime }}{% else %}{{ row.product.created_at|localtime }}{% endif %}</td>
   <td><div class="row-actions"><a class="button compact quiet" href="/admin/products/{{ row.product.id }}">Sửa</a><form method="post" action="/admin/products/{{ row.product.id }}/stock-zero" onsubmit="return confirm('{{ 'Mở bán lại sản phẩm này?' if row.product.force_out_of_stock else 'Đưa sản phẩm này về 0 hàng? Kho thật sẽ không bị xóa.' }}')"><input type="hidden" name="csrf" value="{{ csrf_token }}"><input type="hidden" name="action" value="{{ 'restore' if row.product.force_out_of_stock else 'zero' }}"><button class="button compact {{ 'primary' if row.product.force_out_of_stock else 'danger' }}" type="submit">{{ 'Mở lại' if row.product.force_out_of_stock else 'Về 0' }}</button></form></div></td>
 </tr>
-{% else %}<tr><td colspan="9" class="empty">Chưa có sản phẩm.</td></tr>{% endfor %}
+{% else %}<tr><td colspan="9" class="empty">Không có sản phẩm thuộc bộ lọc “{{ product_filter_label }}”.</td></tr>{% endfor %}
 </tbody></table></div></section>
+{% include "_telegram_description_editor_script.html" %}
 {% endblock %}

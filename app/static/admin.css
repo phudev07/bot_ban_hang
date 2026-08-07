@@ -235,6 +235,11 @@ textarea { resize: vertical; }
 .wallet-kind-tabs { padding: 13px 18px; border-bottom: 1px solid var(--line); display: flex; gap: 7px; overflow-x: auto; scrollbar-width: thin; }
 .wallet-kind-tabs a { flex: 0 0 auto; padding: 7px 10px; border-radius: 999px; color: var(--muted); background: #eeeae0; font-size: 11px; font-weight: 700; }
 .wallet-kind-tabs a.active { color: white; background: var(--green); }
+.product-list-head > small { color: var(--muted); font-size: 11px; }
+.product-list-head > small strong { color: var(--green); }
+.product-filter-tabs a { display: inline-flex; align-items: center; gap: 7px; }
+.product-filter-tabs a span { min-width: 22px; padding: 2px 6px; border-radius: 999px; color: #5f6863; background: rgba(255,255,255,.66); text-align: center; font-size: 9px; }
+.product-filter-tabs a.active span { color: var(--green); background: white; }
 .wallet-ledger-table { min-width: 880px; }
 .wallet-ledger-table td:first-child { min-width: 260px; }
 .wallet-ledger-table .wallet-amount { white-space: nowrap; }
@@ -253,8 +258,33 @@ textarea { resize: vertical; }
 .api-source-toggle span { display: grid; gap: 2px; }
 .api-source-toggle strong { color: var(--ink); font-size: 13px; }
 .api-source-toggle small { color: var(--muted); font-size: 10px; font-weight: 500; }
+.telegram-editor { grid-column: 1 / -1; overflow: hidden; border: 1px solid #d8d4c8; border-radius: 15px; background: #f8f6ef; }
+.telegram-editor-heading { min-height: 62px; padding: 13px 15px; display: flex; align-items: center; justify-content: space-between; gap: 15px; border-bottom: 1px solid #ddd8cc; }
+.telegram-editor-heading strong, .telegram-editor-heading small { display: block; }
+.telegram-editor-heading strong { color: var(--ink); font-size: 13px; }
+.telegram-editor-heading small { margin-top: 3px; color: var(--muted); font-size: 10px; font-weight: 500; }
+.telegram-editor-heading > span { flex: 0 0 auto; padding: 5px 8px; border-radius: 999px; color: var(--green); background: #e1eee7; font-size: 8px; font-weight: 900; letter-spacing: .1em; }
+.telegram-editor-toolbar { padding: 9px 11px; display: flex; flex-wrap: wrap; align-items: center; gap: 5px; border-bottom: 1px solid #ddd8cc; background: #efede5; }
+.telegram-editor-toolbar button { min-width: 32px; min-height: 30px; padding: 5px 8px; border: 1px solid #d6d1c5; border-radius: 8px; color: #334039; background: #fffdf8; font-size: 11px; font-weight: 800; }
+.telegram-editor-toolbar button:hover { color: white; border-color: var(--green); background: var(--green); }
+.telegram-editor-toolbar button code { padding: 0; color: inherit; background: transparent; }
+.telegram-toolbar-divider { width: 1px; height: 22px; margin: 0 3px; background: #cec8bc; }
+.telegram-editor-grid { display: grid; grid-template-columns: minmax(0, 1.15fr) minmax(260px, .85fr); }
+.telegram-editor-grid > div { min-width: 0; padding: 14px; }
+.telegram-editor textarea { min-height: 190px; border-radius: 11px; background: #fff; font-family: "SFMono-Regular", Consolas, monospace; font-size: 12px; line-height: 1.6; }
+.telegram-editor-help { display: block; margin-top: 8px; color: var(--muted); font-size: 9px; font-weight: 500; line-height: 1.6; }
+.telegram-preview-card { min-width: 0; padding: 14px; color: #eef4f1; background: linear-gradient(150deg, #1c2924, #263c33); }
+.telegram-preview-card > span { color: var(--lime); font-size: 8px; font-weight: 900; letter-spacing: .13em; }
+.telegram-preview-card > small { display: block; margin-top: 9px; color: #aebdb6; font-size: 8px; font-weight: 500; line-height: 1.5; }
+.telegram-preview-body { min-height: 154px; margin-top: 10px; padding: 13px 14px; overflow-wrap: anywhere; border-radius: 12px 12px 12px 4px; color: #f5f7f5; background: #325648; box-shadow: 0 9px 25px rgba(0,0,0,.16); font-size: 12px; font-weight: 500; line-height: 1.55; white-space: pre-wrap; }
+.telegram-preview-body em:only-child { color: #bfd0c8; }
+.telegram-preview-body a { color: #b8e7ff; text-decoration: underline; pointer-events: none; }
+.telegram-preview-body code { color: #e8f5c0; background: rgba(0,0,0,.24); }
+.telegram-preview-body pre { max-width: 100%; margin: 7px 0; padding: 9px; overflow-x: auto; border-radius: 7px; background: rgba(0,0,0,.24); white-space: pre-wrap; }
+.telegram-preview-body blockquote { margin: 7px 0; padding-left: 9px; border-left: 3px solid var(--lime); color: #dce9e3; }
 @media (max-width: 1200px) { .filter-grid { grid-template-columns: repeat(3, minmax(0,1fr)); } .filter-grid label.wide { grid-column: span 2; } }
 @media (max-width: 1050px) { .metric-grid, .growth-grid, .wallet-summary-grid { grid-template-columns: repeat(2, 1fr); } .form-grid.cols-3 { grid-template-columns: repeat(2, 1fr); } .dashboard-grid { grid-template-columns: 1fr; } }
+@media (max-width: 900px) { .telegram-editor-grid { grid-template-columns: 1fr; } }
 @media (max-width: 780px) {
   .shell { display: block; }
   .sidebar { position: static; width: 100%; height: auto; padding: 14px; }
@@ -272,6 +302,7 @@ textarea { resize: vertical; }
   .form-grid.cols-2, .form-grid.cols-3 { grid-template-columns: 1fr; }
   .form-grid label.wide { grid-column: auto; }
   .api-route-switches { grid-column: auto; }
+  .telegram-editor { grid-column: auto; }
   .api-route-switches > div { grid-template-columns: 1fr; }
   .category-card { align-items: stretch; flex-direction: column; }
   .category-form { grid-template-columns: 1fr; }
@@ -290,6 +321,13 @@ textarea { resize: vertical; }
   .order-state { justify-items: start; }
   .customer-ledger-hero { align-items: flex-start; flex-direction: column; }
   .customer-ledger-balance { min-width: 0; text-align: left; }
+}
+@media (max-width: 520px) {
+  .product-list-head > small { text-align: left; }
+  .telegram-editor-heading { align-items: flex-start; flex-direction: column; }
+  .telegram-editor-toolbar { flex-wrap: nowrap; overflow-x: auto; }
+  .telegram-editor-toolbar button { flex: 0 0 auto; }
+  .telegram-toolbar-divider { flex: 0 0 1px; }
 }
 @media (max-width: 520px) { .metric-grid, .wallet-summary-grid { grid-template-columns: 1fr; } .metric { min-height: 130px; } .bot-link { display: none; } .customer-ledger-hero { padding: 20px; } .customer-ledger-identity { align-items: flex-start; } }
 

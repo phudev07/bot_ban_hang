@@ -10,6 +10,7 @@
         <select name="product_id" required>
           {% for row in import_products %}<option value="{{ row.product.id }}">#{{ row.product.id }} · {{ row.product.name_vi }}{{ ' · TB hàng về đang tắt' if not row.product.stock_notifications_enabled else '' }}</option>{% endfor %}
         </select>
+        {% if not import_products %}<small>Không có sản phẩm đang hiển thị. Hãy bật sản phẩm trong mục Sản phẩm trước khi nhập kho.</small>{% else %}<small>Chỉ hiện các sản phẩm đang bật hiển thị trong bot.</small>{% endif %}
       </label>
       <label class="inventory-items-field">
         <span class="inventory-field-heading">

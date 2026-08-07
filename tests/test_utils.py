@@ -11,6 +11,7 @@ from app.utils import (
     inventory_account_identity,
     normalize_inventory_identity,
     parse_vnd,
+    safe_customer_telegram_html,
     verify_sepay_hmac,
 )
 
@@ -67,6 +68,40 @@ def test_inventory_identity_ignores_supplier_contact_instructions() -> None:
     assert inventory_account_identity("Liên hệ @seller có hàng ngay sau 1p") == ""
     assert inventory_account_identity("contact @seller for delivery") == ""
     assert cipher.inventory_fingerprint("Liên hệ @seller có hàng ngay sau 1p") is None
+
+
+def test_product_description_keeps_safe_telegram_formatting_and_emoji() -> None:
+    rendered = safe_customer_telegram_html(
+        '<strong>Sale 🔥</strong> <em>hôm nay</em> '
+        '<a href="https://example.com/offer?a=1&b=2">Xem ngay</a>'
+    )
+
+    assert rendered == (
+        '<b>Sale 🔥</b> <i>hôm nay</i> '
+        '<a href="https://example.com/offer?a=1&amp;b=2">Xem ngay</a>'
+    )
+
+
+def test_product_description_removes_unsafe_html_and_supplier_identity() -> None:
+    rendered = safe_customer_telegram_html(
+        '<script>alert(1)</script><b>SumiStore</b> '
+        '<a href="javascript:alert(1)" onclick="bad()">bấm vào</a> '
+        '<a href="https://api.lehaipremium.me/order">nguồn</a>'
+    )
+
+    assert "<script" not in rendered
+    assert "javascript:" not in rendered
+    assert "onclick" not in rendered
+    assert "sumistore" not in rendered.casefold()
+    assert "lehaipremium" not in rendered.casefold()
+    assert "<b>nguồn hàng</b>" in rendered
+    assert "bấm vào" in rendered
+
+
+def test_product_description_balances_malformed_telegram_html() -> None:
+    assert safe_customer_telegram_html("<b>đậm <i>nghiêng</b> thường") == (
+        "<b>đậm <i>nghiêng</i></b> thường"
+    )
 
 
 def test_verify_sepay_hmac() -> None:

@@ -90,6 +90,7 @@ from app.utils import (
     format_vnd,
     parse_vnd,
     safe_customer_html,
+    safe_customer_telegram_html,
     sanitize_customer_text,
 )
 
@@ -914,7 +915,7 @@ def create_router(
         name = sanitize_customer_text(
             product.name_en if user.language == "en" else product.name_vi
         )
-        description = sanitize_customer_text(
+        description = (
             product.description_en if user.language == "en" else product.description_vi
         )
         labels = (
@@ -930,7 +931,7 @@ def create_router(
         text = (
             f"{product_brand_emoji(name)} <b>{safe_customer_html(name)}</b>\n\n"
             f"📋 <b>{labels[2]}:</b>\n"
-            f"{safe_customer_html(description or '—')}\n\n"
+            f"{safe_customer_telegram_html(description or '—')}\n\n"
             f"💰 <b>{labels[0]}:</b> {price_text}\n"
             f"📦 <b>{labels[1]}:</b> <b>{stock}</b>"
         )
