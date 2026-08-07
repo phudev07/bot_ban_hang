@@ -36,6 +36,7 @@ from app.models import (
     PaymentTransaction,
     Preorder,
     Product,
+    ProductStockAlert,
     QuantityDiscount,
     SmsRental,
     SupplierBalanceTransaction,
@@ -111,6 +112,26 @@ async def reserve_available_inventory(
             .limit(quantity)
         )
     )
+
+
+async def record_preorder_stock_fulfillment(
+    session: AsyncSession,
+    product_id: int,
+    quantity: int,
+) -> None:
+    """Keep a stock-arrival alert when that stock is allocated to preorders."""
+    alert = await session.scalar(
+        select(ProductStockAlert)
+        .where(
+            ProductStockAlert.product_id == product_id,
+            ProductStockAlert.status == "pending",
+        )
+        .order_by(ProductStockAlert.id.desc())
+        .limit(1)
+        .with_for_update()
+    )
+    if alert is not None:
+        alert.preorder_fulfilled_quantity += max(0, int(quantity))
 
 
 async def buy_supplier_product(
@@ -1653,6 +1674,12 @@ async def _purchase_product(
                     )
                     consume_flash_sale(pricing.flash_sale, quantity)
                     await release_price_lock_if_inventory_empty(session, product)
+                    if preorder_id is not None:
+                        await record_preorder_stock_fulfillment(
+                            session,
+                            product.id,
+                            quantity,
+                        )
                     await session.flush()
                     return PurchaseResult(
                         True,
@@ -1948,6 +1975,12 @@ async def _purchase_product(
                     commission_percent=referral_commission_percent,
                 )
                 consume_flash_sale(pricing.flash_sale, quantity)
+                if preorder_id is not None:
+                    await record_preorder_stock_fulfillment(
+                        session,
+                        product.id,
+                        quantity,
+                    )
                 await session.flush()
                 return PurchaseResult(
                     True,
@@ -2035,6 +2068,12 @@ async def _purchase_product(
                 commission_percent=referral_commission_percent,
             )
             consume_flash_sale(pricing.flash_sale, quantity)
+            if preorder_id is not None:
+                await record_preorder_stock_fulfillment(
+                    session,
+                    product.id,
+                    quantity,
+                )
             await session.flush()
             return PurchaseResult(
                 True,

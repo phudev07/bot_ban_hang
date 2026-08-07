@@ -11,6 +11,7 @@ from app.models import (
     Order,
     Preorder,
     Product,
+    ProductStockAlert,
     User,
     WalletTransaction,
 )
@@ -575,7 +576,7 @@ def test_api_preorder_uses_supplier_and_keeps_provider_private_from_order_flow()
                 allow_quantity=True,
                 max_quantity=5,
                 fulfillment_source="sumistore",
-                supplier_product_id="SP-PREORDER",
+                supplier_product_id="SP-GEF55PBV",
                 supplier_price=15_000,
                 supplier_markup=5_000,
                 external_stock=0,
@@ -599,9 +600,15 @@ def test_api_preorder_uses_supplier_and_keeps_provider_private_from_order_flow()
 
         supplier.stock = 1
         async with sessions() as session:
-            product = await session.get(Product, product_id)
-            assert product is not None
-            product.external_stock = 1
+            session.add(
+                ProductStockAlert(
+                    product_id=product_id,
+                    provider="sumistore",
+                    stock_before=0,
+                    stock_after=1,
+                    sale_price=20_000,
+                )
+            )
             await session.commit()
         claimed = await _claim_next_preorder(sessions)
         assert claimed is not None
@@ -621,9 +628,11 @@ def test_api_preorder_uses_supplier_and_keeps_provider_private_from_order_flow()
             preorder = await session.get(Preorder, preorder_id)
             user = await session.get(User, user_id)
             order = await session.scalar(select(Order).where(Order.preorder_id == preorder_id))
+            alert = await session.scalar(select(ProductStockAlert))
             assert preorder is not None and preorder.status == "completed"
             assert user is not None and user.balance == 79_000
             assert order is not None and order.amount == 21_000
+            assert alert is not None and alert.preorder_fulfilled_quantity == 1
             assert supplier.buy_calls == 1
         await engine.dispose()
 

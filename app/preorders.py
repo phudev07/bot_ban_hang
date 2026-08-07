@@ -607,18 +607,16 @@ async def _process_claimed_preorder(
             await _cancel_preorder(session_factory, current.id, "insufficient_balance")
             return
         stock = await _cached_stock(session, product)
-        if (
-            stock >= current.quantity
-            and product.fulfillment_source in EXTERNAL_FULFILLMENT_SOURCES
-        ):
+        uses_supplier_api = product.fulfillment_source in EXTERNAL_FULFILLMENT_SOURCES
+        if uses_supplier_api:
             current.last_error = "supplier_call_started"
         await session.commit()
-        if stock < current.quantity:
+        if stock < current.quantity and not uses_supplier_api:
             await _set_pending_retry(
                 session_factory,
                 current.id,
                 "waiting_for_stock",
-                delay_seconds=15,
+                delay_seconds=2,
             )
             return
 
@@ -663,12 +661,20 @@ async def _process_claimed_preorder(
     }:
         await _cancel_preorder(session_factory, preorder.id, result.message)
         return
+    if result.message == "out_of_stock":
+        await _set_pending_retry(
+            session_factory,
+            preorder.id,
+            result.message,
+            delay_seconds=5,
+        )
+        return
     retry_delay = min(300, max(20, 15 * (2 ** min(preorder.attempt_count, 4))))
     await _set_pending_retry(
         session_factory,
         preorder.id,
         result.message,
-        delay_seconds=retry_delay if result.message == "supplier_unavailable" else 15,
+        delay_seconds=retry_delay if result.message == "supplier_unavailable" else 5,
     )
 
 
@@ -856,6 +862,8 @@ async def preorder_worker(
     loop = asyncio.get_running_loop()
     next_recovery_at = 0.0
     while True:
+        processed_preorders = 0
+        processed_notifications = 0
         try:
             if loop.time() >= next_recovery_at:
                 await _recover_stale_preorders(session_factory)
@@ -864,6 +872,7 @@ async def preorder_worker(
                 preorder = await _claim_next_preorder(session_factory)
                 if preorder is None:
                     break
+                processed_preorders += 1
                 await _process_claimed_preorder(
                     session_factory,
                     preorder,
@@ -879,6 +888,7 @@ async def preorder_worker(
                 notification_id = await _claim_notification(session_factory)
                 if notification_id is None:
                     break
+                processed_notifications += 1
                 await _send_preorder_notification(
                     session_factory,
                     bot,
@@ -889,4 +899,7 @@ async def preorder_worker(
             raise
         except Exception:
             logger.exception("Preorder worker iteration failed")
+        if processed_preorders >= 20 or processed_notifications >= 20:
+            await asyncio.sleep(0)
+            continue
         await asyncio.sleep(interval)

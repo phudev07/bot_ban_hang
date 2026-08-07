@@ -236,6 +236,9 @@ class ProductStockAlert(Base):
     total_recipients: Mapped[int] = mapped_column(default=0)
     delivered_count: Mapped[int] = mapped_column(default=0)
     failed_count: Mapped[int] = mapped_column(default=0)
+    preorder_fulfilled_quantity: Mapped[int] = mapped_column(
+        default=0, server_default="0"
+    )
     started_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )

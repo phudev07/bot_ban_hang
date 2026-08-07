@@ -50,7 +50,7 @@ class Settings(BaseSettings):
     broadcast_rate_per_second: int = 20
     broadcast_concurrency: int = 12
     broadcast_batch_size: int = 100
-    preorder_worker_seconds: int = 5
+    preorder_worker_seconds: int = 2
     preorder_max_active_per_user: int = 5
 
     sumistore_enabled: bool = False
