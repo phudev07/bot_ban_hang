@@ -66,7 +66,7 @@ class Settings(BaseSettings):
     sumistore_timeout_seconds: float = 15
     sumistore_sync_seconds: int = 60
     sumistore_audit_seconds: int = 30
-    supplier_ui_cache_seconds: int = 10
+    supplier_ui_cache_seconds: int = 60
 
     lehai_enabled: bool = False
     lehai_base_url: str = "https://api.lehaipremium.me"

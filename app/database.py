@@ -1,8 +1,10 @@
+import logging
+import time
 from collections.abc import Awaitable, Callable
 from typing import Any
 
 from aiogram import BaseMiddleware
-from aiogram.types import TelegramObject
+from aiogram.types import TelegramObject, Update
 from sqlalchemy.ext.asyncio import (
     AsyncEngine,
     AsyncSession,
@@ -14,6 +16,22 @@ from sqlalchemy.orm import DeclarativeBase
 
 class Base(DeclarativeBase):
     pass
+
+
+logger = logging.getLogger(__name__)
+
+
+def _telegram_update_label(event: TelegramObject) -> tuple[str, int | None]:
+    if not isinstance(event, Update):
+        return type(event).__name__, None
+    if event.callback_query is not None:
+        return (
+            f"callback:{(event.callback_query.data or '')[:80]}",
+            event.callback_query.from_user.id,
+        )
+    if event.message is not None:
+        return "message", event.message.from_user.id if event.message.from_user else None
+    return "update", None
 
 
 def create_database(
@@ -52,7 +70,19 @@ class DatabaseSessionMiddleware(BaseMiddleware):
         event: TelegramObject,
         data: dict[str, Any],
     ) -> Any:
+        started_at = time.perf_counter()
         async with self.session_factory() as session:
             data["session"] = session
             data["session_factory"] = self.session_factory
-            return await handler(event, data)
+            try:
+                return await handler(event, data)
+            finally:
+                duration_ms = (time.perf_counter() - started_at) * 1000
+                if duration_ms >= 750:
+                    action, user_id = _telegram_update_label(event)
+                    logger.warning(
+                        "Slow Telegram handler: action=%s user_id=%s duration_ms=%.0f",
+                        action,
+                        user_id,
+                        duration_ms,
+                    )

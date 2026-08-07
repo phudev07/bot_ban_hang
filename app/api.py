@@ -207,9 +207,21 @@ def create_api(
 
         @app.middleware("http")
         async def cache_admin_assets(request: Request, call_next):
+            started_at = time.perf_counter()
             response = await call_next(request)
+            duration_ms = (time.perf_counter() - started_at) * 1000
             if request.url.path.startswith("/admin-assets/"):
                 response.headers["Cache-Control"] = "public, max-age=86400, immutable"
+            elif request.url.path.startswith("/admin"):
+                response.headers["Server-Timing"] = f"app;dur={duration_ms:.1f}"
+                if duration_ms >= 750:
+                    logger.warning(
+                        "Slow admin request: method=%s path=%s status=%s duration_ms=%.0f",
+                        request.method,
+                        request.url.path,
+                        response.status_code,
+                        duration_ms,
+                    )
             return response
 
         app.include_router(

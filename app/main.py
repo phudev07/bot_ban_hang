@@ -91,6 +91,12 @@ async def initialize_database(engine, session_factory, seed_demo_data: bool) -> 
         )
         await connection.execute(
             text(
+                "CREATE INDEX IF NOT EXISTS ix_orders_user_batch_history "
+                "ON orders (user_id, batch_code, id DESC)"
+            )
+        )
+        await connection.execute(
+            text(
                 "CREATE UNIQUE INDEX IF NOT EXISTS uq_preorders_user_product_active "
                 "ON preorders (user_id, product_id) "
                 "WHERE status IN ('pending', 'processing')"

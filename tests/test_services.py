@@ -906,6 +906,69 @@ def test_user_activity_counts_purchase_batches_and_deposits() -> None:
     asyncio.run(scenario())
 
 
+def test_recent_orders_returns_every_item_from_only_the_latest_batches() -> None:
+    async def scenario() -> None:
+        engine, sessions = await make_database()
+        cipher = SecretCipher(Fernet.generate_key().decode())
+        async with sessions() as session:
+            category = Category(name_vi="Test", name_en="Test")
+            session.add(category)
+            await session.flush()
+            product = Product(
+                category_id=category.id,
+                name_vi="Tài khoản",
+                name_en="Account",
+                price=10_000,
+                allow_quantity=True,
+                max_quantity=10,
+            )
+            user = User(telegram_id=55666, full_name="History buyer", balance=100_000)
+            session.add_all([product, user])
+            await session.flush()
+            session.add_all(
+                [
+                    InventoryItem(
+                        product_id=product.id,
+                        encrypted_secret=cipher.encrypt(f"history-{index}"),
+                    )
+                    for index in range(4)
+                ]
+            )
+            await session.commit()
+
+        first = await purchase_product(
+            sessions,
+            user.telegram_id,
+            product.id,
+            cipher,
+            quantity=2,
+        )
+        second = await purchase_product(
+            sessions,
+            user.telegram_id,
+            product.id,
+            cipher,
+            quantity=2,
+        )
+        assert first.ok is True and second.ok is True
+
+        async with sessions() as session:
+            latest = await recent_orders(session, user.telegram_id, limit=1)
+            both = await recent_orders(session, user.telegram_id, limit=2)
+            assert len(latest) == 2
+            assert {order.batch_code for order in latest} == {
+                second.orders[0].batch_code
+            }
+            assert len(both) == 4
+            assert {order.batch_code for order in both} == {
+                first.orders[0].batch_code,
+                second.orders[0].batch_code,
+            }
+        await engine.dispose()
+
+    asyncio.run(scenario())
+
+
 def test_sepay_payment_is_idempotent() -> None:
     async def scenario() -> None:
         engine, sessions = await make_database()

@@ -296,9 +296,21 @@ def create_router(
     haji_client: HajiClient | None = None,
 ) -> Router:
     router = Router(name="customer")
+    bot_username_cache: str | None = None
+    bot_username_lock = asyncio.Lock()
     warehouse_docs_url = (
         f"{settings.shop_api_base_url.rstrip('/').removesuffix('/v1')}/docs"
     )
+
+    async def bot_username(bot: Bot) -> str:
+        nonlocal bot_username_cache
+        if bot_username_cache:
+            return bot_username_cache
+        async with bot_username_lock:
+            if not bot_username_cache:
+                bot_user = await bot.get_me()
+                bot_username_cache = bot_user.username or "phptool_bot"
+        return bot_username_cache
 
     @router.error(
         ExceptionTypeFilter(TelegramBadRequest),
@@ -579,6 +591,7 @@ def create_router(
     async def back_to_menu(
         callback: CallbackQuery, session: AsyncSession, state: FSMContext
     ) -> None:
+        await callback.answer()
         await state.clear()
         user = await get_or_create_user(callback, session)
         if callback.message:
@@ -591,10 +604,10 @@ def create_router(
                 ),
                 disable_web_page_preview=True,
             )
-        await callback.answer()
 
     @router.callback_query(F.data == "menu:products")
     async def show_categories(callback: CallbackQuery, session: AsyncSession) -> None:
+        await callback.answer()
         user = await get_or_create_user(callback, session)
         categories = await active_categories(session)
         text = (
@@ -609,10 +622,10 @@ def create_router(
                 callback.message,
                 text, reply_markup=categories_menu(categories, user.language)
             )
-        await callback.answer()
 
     @router.callback_query(F.data.startswith("cat:"))
     async def show_products(callback: CallbackQuery, session: AsyncSession) -> None:
+        await callback.answer()
         user = await get_or_create_user(callback, session)
         category_id = int(callback.data.split(":", 1)[1])
         products = await active_products(session, category_id)
@@ -636,10 +649,10 @@ def create_router(
                     flash_prices,
                 ),
             )
-        await callback.answer()
 
     @router.callback_query(F.data == "menu:quick")
     async def quick_buy(callback: CallbackQuery, session: AsyncSession) -> None:
+        await callback.answer()
         user = await get_or_create_user(callback, session)
         products = await active_products(session)
         flash_prices = await active_flash_sale_prices(
@@ -659,7 +672,6 @@ def create_router(
                     origin="quick",
                 ),
             )
-        await callback.answer()
 
     @router.callback_query(F.data == "menu:preorders")
     async def show_preorders(
@@ -667,6 +679,7 @@ def create_router(
         session: AsyncSession,
         state: FSMContext,
     ) -> None:
+        await callback.answer()
         await state.clear()
         user = await get_or_create_user(callback, session)
         products = await preorderable_products(session)
@@ -692,7 +705,6 @@ def create_router(
                 text,
                 reply_markup=preorder_products_menu(products, user.language),
             )
-        await callback.answer()
 
     @router.callback_query(F.data.startswith("preorder:product:"))
     async def choose_preorder_product(
@@ -973,6 +985,7 @@ def create_router(
         session: AsyncSession,
         group: str,
     ) -> None:
+        await callback.answer()
         user = await get_or_create_user(callback, session)
         products = await active_products(session)
         def is_gg18m(product: Product) -> bool:
@@ -1011,7 +1024,6 @@ def create_router(
                     origin="quick",
                 ),
             )
-        await callback.answer()
 
     @router.callback_query(F.data.startswith("quick:"))
     async def quick_group(callback: CallbackQuery, session: AsyncSession) -> None:
@@ -1282,17 +1294,10 @@ def create_router(
         if product is None or not product.active:
             await callback.answer("Sản phẩm không tồn tại.", show_alert=True)
             return
-        stock = await available_stock(
-            session,
-            product.id,
-            supplier_client,
-            lehai_client=lehai_client,
-            canboso_client=canboso_client,
-            nce_client=nce_client,
-            haji_client=haji_client,
-            refresh_external=True,
-            refresh_max_age_seconds=settings.supplier_ui_cache_seconds,
-        )
+        await callback.answer()
+        # Background supplier workers keep this cached stock fresh. The actual
+        # purchase path still refreshes the provider before charging/delivery.
+        stock = await available_stock(session, product.id)
         pricing = await product_pricing(session, product)
         display_price = pricing.final_unit_price if pricing is not None else product.price
         quantity_discounts = await active_quantity_discounts(session, product.id)
@@ -1353,7 +1358,6 @@ def create_router(
                     origin=origin,
                 ),
             )
-        await callback.answer()
 
     async def complete_product_purchase(
         target: Message,
@@ -2416,6 +2420,7 @@ def create_router(
 
     @router.callback_query(F.data == "menu:orders")
     async def show_orders(callback: CallbackQuery, session: AsyncSession) -> None:
+        await callback.answer()
         user = await get_or_create_user(callback, session)
         orders = await recent_orders(session, user.telegram_id, limit=40)
         if not orders:
@@ -2434,10 +2439,10 @@ def create_router(
             markup = order_history_menu(orders, user.language)
         if callback.message:
             await callback.message.edit_text(text, reply_markup=markup)
-        await callback.answer()
 
     @router.callback_query(F.data == "menu:codes")
     async def show_codes(callback: CallbackQuery, session: AsyncSession) -> None:
+        await callback.answer()
         user = await get_or_create_user(callback, session)
         orders = await recent_orders(session, user.telegram_id, limit=40)
         if not orders:
@@ -2452,7 +2457,6 @@ def create_router(
             markup = order_history_menu(orders, user.language)
         if callback.message:
             await callback.message.edit_text(text, reply_markup=markup)
-        await callback.answer()
 
     @router.callback_query(F.data.startswith("orderdetail:"))
     async def show_order_detail(callback: CallbackQuery, session: AsyncSession) -> None:
@@ -2512,13 +2516,13 @@ def create_router(
 
     @router.callback_query(F.data == "menu:profile")
     async def show_profile(callback: CallbackQuery, session: AsyncSession) -> None:
+        await callback.answer()
         user = await get_or_create_user(callback, session)
         if callback.message:
             await callback.message.edit_text(
                 await profile_text(user, session),
                 reply_markup=back_menu(user.language),
             )
-        await callback.answer()
 
     async def warehouse_api_text(user: User, client: ApiClient) -> str:
         status = (
@@ -2555,6 +2559,7 @@ def create_router(
 
     @router.callback_query(F.data == "menu:warehouse-api")
     async def show_warehouse_api(callback: CallbackQuery, session: AsyncSession) -> None:
+        await callback.answer()
         user = await get_or_create_user(callback, session)
         client, new_secret = await ensure_api_client(
             session,
@@ -2584,7 +2589,6 @@ def create_router(
                     "Save it now. Rotate the secret if it is lost."
                 )
                 await callback.message.answer(warning)
-        await callback.answer()
 
     @router.callback_query(F.data == "warehouse-api:rotate")
     async def confirm_api_rotation(callback: CallbackQuery, session: AsyncSession) -> None:
@@ -2671,10 +2675,12 @@ def create_router(
 
     @router.callback_query(F.data == "menu:referral")
     async def show_referral(callback: CallbackQuery, bot: Bot, session: AsyncSession) -> None:
+        await callback.answer()
         user = await get_or_create_user(callback, session)
         stats = await referral_stats(session, user.telegram_id)
-        bot_user = await bot.get_me()
-        referral_url = f"https://t.me/{bot_user.username}?start=ref_{user.referral_code}"
+        referral_url = (
+            f"https://t.me/{await bot_username(bot)}?start=ref_{user.referral_code}"
+        )
         commission_percent = settings.referral_commission_percent
         text = (
             f"🎁 <b>Giới thiệu bạn bè · Hoa hồng {commission_percent}%</b>\n\n"
@@ -2697,10 +2703,10 @@ def create_router(
                 reply_markup=referral_menu(user.language, referral_url),
                 disable_web_page_preview=True,
             )
-        await callback.answer()
 
     @router.callback_query(F.data == "menu:support")
     async def support(callback: CallbackQuery, session: AsyncSession) -> None:
+        await callback.answer()
         user = await get_or_create_user(callback, session)
         text = (
             f"🆘 Cần hỗ trợ? Liên hệ @{escape(settings.support_username)} và gửi kèm mã đơn."
@@ -2709,16 +2715,15 @@ def create_router(
         )
         if callback.message:
             await callback.message.edit_text(text, reply_markup=back_menu(user.language))
-        await callback.answer()
 
     @router.callback_query(F.data == "menu:language")
     async def choose_language(callback: CallbackQuery, session: AsyncSession) -> None:
+        await callback.answer()
         user = await get_or_create_user(callback, session)
         if callback.message:
             await callback.message.edit_text(
                 "🌐 Chọn ngôn ngữ / Choose language", reply_markup=language_menu(user.language)
             )
-        await callback.answer()
 
     @router.callback_query(F.data.startswith("lang:"))
     async def set_language(callback: CallbackQuery, session: AsyncSession) -> None:

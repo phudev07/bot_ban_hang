@@ -840,41 +840,32 @@ def create_dashboard_router(
         periods = dashboard_periods()
         async with session_factory() as session:
             financials = await financial_summaries(session, periods)
-            users = int(await session.scalar(select(func.count(User.telegram_id))) or 0)
-            users_today = int(
-                await session.scalar(
-                    select(func.count(User.telegram_id)).where(
-                        User.created_at >= periods["today"]
+            user_metrics = (
+                await session.execute(
+                    select(
+                        func.count(User.telegram_id),
+                        func.count(User.telegram_id).filter(
+                            User.created_at >= periods["today"]
+                        ),
+                        func.count(User.telegram_id).filter(
+                            User.created_at >= periods["month"]
+                        ),
+                        func.count(User.telegram_id).filter(
+                            User.created_at >= periods["year"]
+                        ),
+                        func.count(User.telegram_id).filter(User.has_started.is_(True)),
+                        func.count(User.telegram_id).filter(User.is_blocked.is_(True)),
                     )
                 )
-                or 0
-            )
-            users_month = int(
-                await session.scalar(
-                    select(func.count(User.telegram_id)).where(
-                        User.created_at >= periods["month"]
-                    )
-                )
-                or 0
-            )
-            users_year = int(
-                await session.scalar(
-                    select(func.count(User.telegram_id)).where(User.created_at >= periods["year"])
-                )
-                or 0
-            )
-            active_recipients = int(
-                await session.scalar(
-                    select(func.count(User.telegram_id)).where(User.has_started.is_(True))
-                )
-                or 0
-            )
-            blocked_users = int(
-                await session.scalar(
-                    select(func.count(User.telegram_id)).where(User.is_blocked.is_(True))
-                )
-                or 0
-            )
+            ).one()
+            (
+                users,
+                users_today,
+                users_month,
+                users_year,
+                active_recipients,
+                blocked_users,
+            ) = (int(value or 0) for value in user_metrics)
             orders = int(financials["all"]["orders"])
             orders_today = int(financials["today"]["orders"])
             orders_month = int(financials["month"]["orders"])

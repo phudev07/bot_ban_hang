@@ -94,7 +94,7 @@ def test_enabled_sumistore_requires_api_id() -> None:
         sumistore_api_id="TAPI-test-only",
     )
     assert settings.sumistore_markup == 5_000
-    assert settings.supplier_ui_cache_seconds == 10
+    assert settings.supplier_ui_cache_seconds == 60
 
     with pytest.raises(ValidationError):
         base_settings(supplier_ui_cache_seconds=0)

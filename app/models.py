@@ -504,6 +504,12 @@ class Order(Base):
             "api_order_request_id",
             "id",
         ),
+        Index(
+            "ix_orders_user_batch_history",
+            "user_id",
+            "batch_code",
+            "id",
+        ),
     )
 
     id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)

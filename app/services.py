@@ -8,7 +8,7 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 
 from aiogram.types import User as TelegramUser
-from sqlalchemy import case, func, or_, select
+from sqlalchemy import String, case, cast, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from sqlalchemy.orm import selectinload
 
@@ -3203,24 +3203,49 @@ async def _process_sepay_payment(
 
 
 async def recent_orders(session: AsyncSession, user_id: int, limit: int = 10) -> list[Order]:
-    result = list(await session.scalars(
-        select(Order)
-        .where(Order.user_id == user_id)
-        .options(selectinload(Order.product), selectinload(Order.inventory_item))
-        .order_by(Order.id.desc())
-        .limit(max(1, limit) * 100)
-    ))
-    selected_keys: list[str] = []
-    selected_key_set: set[str] = set()
-    for order in result:
-        key = order.shop_order_code
-        if key in selected_key_set:
-            continue
-        if len(selected_keys) >= limit:
-            break
-        selected_keys.append(key)
-        selected_key_set.add(key)
-    return [order for order in result if order.shop_order_code in selected_key_set]
+    group_key = case(
+        (Order.batch_code.is_not(None), Order.batch_code),
+        else_=cast(Order.id, String),
+    )
+    group_rows = list(
+        (
+            await session.execute(
+                select(
+                    group_key.label("group_key"),
+                    func.max(Order.batch_code).label("batch_code"),
+                    func.max(Order.id).label("latest_order_id"),
+                )
+                .where(Order.user_id == user_id)
+                .group_by(group_key)
+                .order_by(func.max(Order.id).desc())
+                .limit(max(1, int(limit)))
+            )
+        ).all()
+    )
+    if not group_rows:
+        return []
+    batch_codes = [str(batch_code) for _, batch_code, _ in group_rows if batch_code]
+    legacy_ids = [
+        int(latest_order_id)
+        for _, batch_code, latest_order_id in group_rows
+        if batch_code is None
+    ]
+    conditions = []
+    if batch_codes:
+        conditions.append(Order.batch_code.in_(batch_codes))
+    if legacy_ids:
+        conditions.append(Order.id.in_(legacy_ids))
+    return list(
+        await session.scalars(
+            select(Order)
+            .where(
+                Order.user_id == user_id,
+                or_(*conditions),
+            )
+            .options(selectinload(Order.product), selectinload(Order.inventory_item))
+            .order_by(Order.id.desc())
+        )
+    )
 
 
 async def order_bundle(session: AsyncSession, user_id: int, order_id: int) -> list[Order]:
