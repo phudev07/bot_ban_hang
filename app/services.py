@@ -34,6 +34,7 @@ from app.models import (
     InventoryItem,
     Order,
     PaymentTransaction,
+    Preorder,
     Product,
     QuantityDiscount,
     SmsRental,
@@ -1165,6 +1166,9 @@ async def purchase_product(
     supplier_idempotency_key: str | None = None,
     expected_flash_sale_id: int | None = None,
     max_unit_price: int | None = None,
+    preorder_id: int | None = None,
+    expected_base_unit_price: int | None = None,
+    fixed_unit_price: int | None = None,
 ) -> PurchaseResult:
     async with session_factory() as session:
         product = await session.get(Product, product_id)
@@ -1207,6 +1211,9 @@ async def purchase_product(
                 supplier_idempotency_key=supplier_idempotency_key,
                 expected_flash_sale_id=expected_flash_sale_id,
                 max_unit_price=max_unit_price,
+                preorder_id=preorder_id,
+                expected_base_unit_price=expected_base_unit_price,
+                fixed_unit_price=fixed_unit_price,
             )
     return await _purchase_product(
         session_factory,
@@ -1229,6 +1236,9 @@ async def purchase_product(
         supplier_idempotency_key=supplier_idempotency_key,
         expected_flash_sale_id=expected_flash_sale_id,
         max_unit_price=max_unit_price,
+        preorder_id=preorder_id,
+        expected_base_unit_price=expected_base_unit_price,
+        fixed_unit_price=fixed_unit_price,
     )
 
 
@@ -1254,9 +1264,49 @@ async def _purchase_product(
     supplier_idempotency_key: str | None,
     expected_flash_sale_id: int | None,
     max_unit_price: int | None,
+    preorder_id: int | None,
+    expected_base_unit_price: int | None,
+    fixed_unit_price: int | None,
 ) -> PurchaseResult:
     async with session_factory() as session:
         async with session.begin():
+            preorder: Preorder | None = None
+            if preorder_id is not None:
+                preorder = await session.scalar(
+                    select(Preorder)
+                    .where(Preorder.id == preorder_id)
+                    .with_for_update()
+                )
+                if (
+                    preorder is None
+                    or preorder.user_id != telegram_id
+                    or preorder.product_id != product_id
+                    or preorder.quantity != quantity
+                    or preorder.status == "cancelled"
+                ):
+                    return PurchaseResult(False, "preorder_unavailable")
+                existing_orders = list(
+                    await session.scalars(
+                        select(Order)
+                        .where(Order.preorder_id == preorder_id)
+                        .options(selectinload(Order.inventory_item))
+                        .order_by(Order.id)
+                    )
+                )
+                if existing_orders:
+                    return PurchaseResult(
+                        True,
+                        "completed",
+                        orders=existing_orders,
+                        secrets=[
+                            cipher.decrypt(order.inventory_item.encrypted_secret)
+                            for order in existing_orders
+                        ],
+                        total_amount=sum(int(order.amount) for order in existing_orders),
+                        discount_amount=sum(
+                            int(order.discount_amount) for order in existing_orders
+                        ),
+                    )
             user = await session.scalar(
                 select(User).where(User.telegram_id == telegram_id).with_for_update()
             )
@@ -1378,18 +1428,33 @@ async def _purchase_product(
                                 else "out_of_stock"
                             ),
                         )
+            if (
+                expected_base_unit_price is not None
+                and int(product.price) != int(expected_base_unit_price)
+            ):
+                return PurchaseResult(False, "price_changed")
+            if fixed_unit_price is not None and int(fixed_unit_price) <= 0:
+                return PurchaseResult(False, "invalid_price")
             try:
-                pricing = await product_pricing(
-                    session,
-                    product,
-                    coupon_code=coupon_code,
-                    coupon_id=coupon_id,
-                    quantity=quantity,
-                    user_id=user.telegram_id,
-                    lock_coupon=bool(coupon_code or coupon_id is not None),
-                    lock_flash_sale=True,
-                    expected_flash_sale_id=expected_flash_sale_id,
-                    raise_coupon_error=True,
+                pricing = (
+                    ProductPricing(
+                        original_unit_price=int(fixed_unit_price),
+                        discount_per_unit=0,
+                        final_unit_price=int(fixed_unit_price),
+                    )
+                    if fixed_unit_price is not None
+                    else await product_pricing(
+                        session,
+                        product,
+                        coupon_code=coupon_code,
+                        coupon_id=coupon_id,
+                        quantity=quantity,
+                        user_id=user.telegram_id,
+                        lock_coupon=bool(coupon_code or coupon_id is not None),
+                        lock_flash_sale=True,
+                        expected_flash_sale_id=expected_flash_sale_id,
+                        raise_coupon_error=True,
+                    )
                 )
             except CouponValidationError as exc:
                 return PurchaseResult(False, exc.code)
@@ -1408,11 +1473,42 @@ async def _purchase_product(
                 and flash_sale_remaining(pricing.flash_sale) < quantity
             ):
                 return PurchaseResult(False, "out_of_stock")
-            multi_quote = (
-                price_supplier_plan(product, multi_plan, pricing)
-                if multi_plan
-                else None
-            )
+            multi_quote = None
+            if multi_plan:
+                if fixed_unit_price is None:
+                    multi_quote = price_supplier_plan(product, multi_plan, pricing)
+                else:
+                    if expected_base_unit_price is None:
+                        return PurchaseResult(False, "invalid_price")
+                    if any(
+                        (
+                            int(product.price)
+                            if product.price_lock_enabled
+                            else int(route.snapshot.unit_price)
+                            + max(0, int(product.supplier_markup))
+                        )
+                        > int(expected_base_unit_price)
+                        for route, _route_quantity in multi_plan
+                    ):
+                        return PurchaseResult(False, "price_changed")
+                    multi_quote = MultiSupplierQuote(
+                        allocations=tuple(
+                            SupplierAllocationPricing(
+                                route=route,
+                                quantity=route_quantity,
+                                original_unit_price=int(expected_base_unit_price),
+                                final_unit_price=int(fixed_unit_price),
+                                discount_per_unit=0,
+                                coupon_discount_per_unit=0,
+                                quantity_discount_per_unit=0,
+                            )
+                            for route, route_quantity in multi_plan
+                        ),
+                        total_amount=int(fixed_unit_price) * quantity,
+                        discount_amount=0,
+                        coupon_discount_amount=0,
+                        quantity_discount_amount=0,
+                    )
             unsafe_quote_cost = (
                 next(
                     (
@@ -1514,6 +1610,7 @@ async def _purchase_product(
                             sales_channel=sales_channel,
                             api_client_id=api_client_id,
                             api_order_request_id=api_order_request_id,
+                            preorder_id=preorder_id,
                             status="completed",
                             delivered_at=now,
                             product=product,
@@ -1692,6 +1789,20 @@ async def _purchase_product(
                 if not multi_plan:
                     cost_unit_price = supplier_purchases[0][1]
                     if (
+                        fixed_unit_price is not None
+                        and expected_base_unit_price is not None
+                        and cost_unit_price + max(0, int(product.supplier_markup))
+                        > int(expected_base_unit_price)
+                    ):
+                        await preserve_supplier_purchase_for_resale(
+                            session,
+                            product,
+                            supplier_purchase,
+                            cipher,
+                            cost_unit_price,
+                        )
+                        return PurchaseResult(False, "price_changed")
+                    if (
                         pricing.flash_sale is not None
                         and stop_unsafe_flash_sale(
                             pricing.flash_sale,
@@ -1786,6 +1897,7 @@ async def _purchase_product(
                             sales_channel=sales_channel,
                             api_client_id=api_client_id,
                             api_order_request_id=api_order_request_id,
+                            preorder_id=preorder_id,
                             status="completed",
                             delivered_at=now,
                             product=product,
@@ -1892,6 +2004,7 @@ async def _purchase_product(
                     sales_channel=sales_channel,
                     api_client_id=api_client_id,
                     api_order_request_id=api_order_request_id,
+                    preorder_id=preorder_id,
                     status="completed",
                     delivered_at=now,
                     product=product,

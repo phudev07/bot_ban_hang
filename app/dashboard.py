@@ -47,6 +47,7 @@ from app.models import (
     InventoryItem,
     Order,
     PaymentTransaction,
+    Preorder,
     Product,
     ProductAlertDelivery,
     ProductPriceAlert,
@@ -4331,6 +4332,98 @@ def create_dashboard_router(
                     flash(request, "Đã cập nhật trạng thái khách hàng.")
         return RedirectResponse("/admin/users", status_code=303)
 
+    @router.get("/admin/preorders", response_class=HTMLResponse)
+    async def preorders_page(
+        request: Request,
+        q: str = "",
+        status: str = "all",
+        page: int = 1,
+    ) -> Response:
+        if not is_admin(request):
+            return redirect_to_login()
+        conditions = []
+        normalized_query = q.strip()
+        if status in {"pending", "processing", "completed", "cancelled"}:
+            conditions.append(Preorder.status == status)
+        if normalized_query:
+            needle = f"%{normalized_query}%"
+            username_needle = f"%{normalized_query.lstrip('@').strip()}%"
+            numeric_query = normalized_query.upper().removeprefix("PO")
+            search_conditions = [
+                cast(User.telegram_id, String).ilike(needle),
+                User.full_name.ilike(needle),
+                User.username.ilike(username_needle),
+                Preorder.product_name_vi.ilike(needle),
+                Preorder.product_name_en.ilike(needle),
+                Preorder.completed_order_code.ilike(needle),
+            ]
+            if numeric_query.isdigit():
+                search_conditions.append(Preorder.id == int(numeric_query))
+            conditions.append(or_(*search_conditions))
+
+        async with session_factory() as session:
+            counts = dict(
+                (
+                    row_status,
+                    int(row_count),
+                )
+                for row_status, row_count in await session.execute(
+                    select(Preorder.status, func.count(Preorder.id)).group_by(
+                        Preorder.status
+                    )
+                )
+            )
+            pending_value = int(
+                await session.scalar(
+                    select(func.coalesce(func.sum(Preorder.total_amount), 0)).where(
+                        Preorder.status.in_(("pending", "processing"))
+                    )
+                )
+                or 0
+            )
+            count_statement = (
+                select(func.count(Preorder.id))
+                .select_from(Preorder)
+                .join(User, User.telegram_id == Preorder.user_id)
+                .join(Product, Product.id == Preorder.product_id)
+            )
+            if conditions:
+                count_statement = count_statement.where(*conditions)
+            preorder_count = int(await session.scalar(count_statement) or 0)
+            pager = admin_pager(request, preorder_count, page)
+            statement = (
+                select(Preorder, User, Product)
+                .join(User, User.telegram_id == Preorder.user_id)
+                .join(Product, Product.id == Preorder.product_id)
+                .order_by(Preorder.id.desc())
+                .offset(pager.offset)
+                .limit(ADMIN_PAGE_SIZE)
+            )
+            if conditions:
+                statement = statement.where(*conditions)
+            rows = list(await session.execute(statement))
+
+        return templates.TemplateResponse(
+            request,
+            "preorders.html",
+            page_context(
+                request,
+                "Đơn đặt trước",
+                "preorders",
+                rows=rows,
+                query=q,
+                status=status,
+                pager=pager,
+                stats={
+                    "pending": counts.get("pending", 0),
+                    "processing": counts.get("processing", 0),
+                    "completed": counts.get("completed", 0),
+                    "cancelled": counts.get("cancelled", 0),
+                    "pending_value": pending_value,
+                },
+            ),
+        )
+
     @router.get("/admin/orders", response_class=HTMLResponse)
     async def orders_page(
         request: Request,
@@ -4367,7 +4460,7 @@ def create_dashboard_router(
             conditions.append(Order.status == status)
         if source in SELLABLE_FULFILLMENT_SOURCES:
             conditions.append(order_supplier_provider_expression() == source)
-        if channel in {"telegram", "api"}:
+        if channel in {"telegram", "api", "preorder"}:
             conditions.append(Order.sales_channel == channel)
         if period == "today":
             conditions.append(Order.created_at >= periods["today"])

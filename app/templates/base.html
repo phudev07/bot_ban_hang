@@ -26,6 +26,7 @@
           <span class="nav-group-title">Vận hành</span>
           <a class="{{ 'active' if section == 'dashboard' else '' }}" href="/admin" {{ 'aria-current=page' if section == 'dashboard' else '' }}><span class="nav-icon">TQ</span><b>Tổng quan</b></a>
           <a class="{{ 'active' if section == 'orders' else '' }}" href="/admin/orders" {{ 'aria-current=page' if section == 'orders' else '' }}><span class="nav-icon">ĐH</span><b>Đơn hàng</b></a>
+          <a class="{{ 'active' if section == 'preorders' else '' }}" href="/admin/preorders" {{ 'aria-current=page' if section == 'preorders' else '' }}><span class="nav-icon">ĐT</span><b>Đặt trước</b></a>
           <a class="{{ 'active' if section == 'payments' else '' }}" href="/admin/payments" {{ 'aria-current=page' if section == 'payments' else '' }}><span class="nav-icon">DT</span><b>Dòng tiền</b></a>
           <a class="{{ 'active' if section == 'sms-rentals' else '' }}" href="/admin/sms-rentals" {{ 'aria-current=page' if section == 'sms-rentals' else '' }}><span class="nav-icon">SMS</span><b>Thuê số SMS</b></a>
         </div>

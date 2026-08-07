@@ -50,6 +50,8 @@ class Settings(BaseSettings):
     broadcast_rate_per_second: int = 20
     broadcast_concurrency: int = 12
     broadcast_batch_size: int = 100
+    preorder_worker_seconds: int = 5
+    preorder_max_active_per_user: int = 5
 
     sumistore_enabled: bool = False
     sumistore_base_url: str = "https://sumistore.me/api"
@@ -249,6 +251,10 @@ class Settings(BaseSettings):
             raise ValueError("Broadcast concurrency must be between 2 and 20")
         if not 10 <= self.broadcast_batch_size <= 500:
             raise ValueError("Broadcast batch size must be between 10 and 500")
+        if not 2 <= self.preorder_worker_seconds <= 60:
+            raise ValueError("Preorder worker interval must be between 2 and 60 seconds")
+        if not 1 <= self.preorder_max_active_per_user <= 20:
+            raise ValueError("Active preorder limit must be between 1 and 20")
         if (
             self.public_api_global_rate_limit_per_minute
             < self.public_api_ip_rate_limit_per_minute

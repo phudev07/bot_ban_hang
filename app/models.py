@@ -10,6 +10,7 @@ from sqlalchemy import (
     Text,
     UniqueConstraint,
     func,
+    text,
 )
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -397,6 +398,92 @@ class InventoryDuplicateAlert(Base):
     )
 
 
+class Preorder(Base):
+    __tablename__ = "preorders"
+    __table_args__ = (
+        Index(
+            "ix_preorders_product_queue",
+            "product_id",
+            "status",
+            "next_attempt_at",
+            "created_at",
+            "id",
+        ),
+        Index(
+            "ix_preorders_notification_queue",
+            "notification_status",
+            "updated_at",
+            "id",
+        ),
+        Index(
+            "uq_preorders_user_product_active",
+            "user_id",
+            "product_id",
+            unique=True,
+            postgresql_where=text("status IN ('pending', 'processing')"),
+            sqlite_where=text("status IN ('pending', 'processing')"),
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    user_id: Mapped[int] = mapped_column(
+        ForeignKey("users.telegram_id", ondelete="CASCADE"), index=True
+    )
+    product_id: Mapped[int] = mapped_column(
+        ForeignKey("products.id", ondelete="CASCADE"), index=True
+    )
+    product_name_vi: Mapped[str] = mapped_column(String(255))
+    product_name_en: Mapped[str] = mapped_column(String(255))
+    quantity: Mapped[int]
+    base_unit_price: Mapped[int] = mapped_column(BigInteger)
+    preorder_unit_price: Mapped[int] = mapped_column(BigInteger)
+    total_amount: Mapped[int] = mapped_column(BigInteger)
+    status: Mapped[str] = mapped_column(
+        String(20), default="pending", server_default="pending", index=True
+    )
+    cancel_reason: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    completed_order_code: Mapped[str | None] = mapped_column(
+        String(32), nullable=True, index=True
+    )
+    attempt_count: Mapped[int] = mapped_column(default=0, server_default="0")
+    last_error: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    next_attempt_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True, index=True
+    )
+    processing_started_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    notification_status: Mapped[str] = mapped_column(
+        String(20), default="none", server_default="none", index=True
+    )
+    notification_attempt_count: Mapped[int] = mapped_column(default=0, server_default="0")
+    notification_last_error: Mapped[str | None] = mapped_column(
+        String(500), nullable=True
+    )
+    notified_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), index=True
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
+    completed_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    cancelled_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+
+    user: Mapped[User] = relationship()
+    product: Mapped[Product] = relationship()
+
+    @property
+    def code(self) -> str:
+        return f"PO{self.id:06d}"
+
+
 class Order(Base):
     __tablename__ = "orders"
     __table_args__ = (
@@ -437,6 +524,9 @@ class Order(Base):
     )
     api_order_request_id: Mapped[int | None] = mapped_column(
         ForeignKey("api_order_requests.id", ondelete="SET NULL"), nullable=True, index=True
+    )
+    preorder_id: Mapped[int | None] = mapped_column(
+        ForeignKey("preorders.id", ondelete="SET NULL"), nullable=True, index=True
     )
     status: Mapped[str] = mapped_column(String(20), default="completed")
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())

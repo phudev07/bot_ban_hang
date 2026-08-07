@@ -1,0 +1,41 @@
+{% extends "base.html" %}
+{% from "_pagination.html" import render_pager %}
+{% block content %}
+<section class="mini-metrics">
+  <article><span>Đang chờ</span><strong>{{ stats.pending }}</strong><small>xếp FIFO theo từng sản phẩm</small></article>
+  <article><span>Đang giao</span><strong>{{ stats.processing }}</strong><small>đã được worker nhận xử lý</small></article>
+  <article><span>Đã giao</span><strong>{{ stats.completed }}</strong><small>đã trừ ví và trả hàng</small></article>
+  <article><span>Đã hủy</span><strong>{{ stats.cancelled }}</strong><small>không trừ tiền</small></article>
+  <article><span>Giá trị đang chờ</span><strong>{{ stats.pending_value|vnd }}</strong><small>chưa giữ tiền trong ví khách</small></article>
+</section>
+
+<section class="panel filter-panel">
+  <form class="filter-grid" method="get">
+    <label class="wide">Tìm nhanh<input name="q" value="{{ query }}" placeholder="Mã đặt trước, ID, username, sản phẩm"></label>
+    <label>Trạng thái<select name="status"><option value="all">Tất cả</option><option value="pending" {{ 'selected' if status == 'pending' else '' }}>Đang chờ</option><option value="processing" {{ 'selected' if status == 'processing' else '' }}>Đang giao</option><option value="completed" {{ 'selected' if status == 'completed' else '' }}>Đã giao</option><option value="cancelled" {{ 'selected' if status == 'cancelled' else '' }}>Đã hủy</option></select></label>
+    <button class="button primary">Lọc đặt trước</button>
+    <a class="button quiet" href="/admin/preorders">Đặt lại</a>
+  </form>
+</section>
+
+<section class="panel">
+  <div class="panel-head"><div><span>PREORDER QUEUE</span><h2>Hàng chờ giao tự động</h2></div><small>100 đơn mỗi trang · không giữ tiền</small></div>
+  <div class="table-wrap"><table><thead><tr><th>Mã đặt trước</th><th>Khách hàng</th><th>Sản phẩm</th><th>Số lượng</th><th>Giá lúc đặt</th><th>Giá +5%</th><th>Tổng dự kiến</th><th>Trạng thái</th><th>Kết quả</th><th>Thời gian</th></tr></thead><tbody>
+  {% for preorder, user, product in rows %}
+  <tr>
+    <td><strong><code>{{ preorder.code }}</code></strong><small>ID #{{ preorder.id }} · thử {{ preorder.attempt_count }} lần</small></td>
+    <td><a class="text-link" href="/admin/users/{{ user.telegram_id }}"><strong>{{ user.full_name }}</strong></a><small>@{{ user.username or '—' }} · {{ user.telegram_id }}</small></td>
+    <td><strong>{{ preorder.product_name_vi }}</strong><small>SP #{{ preorder.product_id }}</small></td>
+    <td><strong>{{ preorder.quantity }}</strong></td>
+    <td>{{ preorder.base_unit_price|vnd }}/1</td>
+    <td><strong>{{ preorder.preorder_unit_price|vnd }}/1</strong></td>
+    <td><strong>{{ preorder.total_amount|vnd }}</strong></td>
+    <td><span class="status {{ 'on' if preorder.status == 'completed' else 'wait' if preorder.status in ('pending', 'processing') else 'off' }}">{{ {'pending':'Đang chờ','processing':'Đang giao','completed':'Đã giao','cancelled':'Đã hủy'}.get(preorder.status, preorder.status) }}</span><small>{{ preorder.last_error or '—' }}</small></td>
+    <td>{% if preorder.completed_order_code %}<a class="text-link" href="/admin/orders?q={{ preorder.completed_order_code }}"><code>{{ preorder.completed_order_code }}</code></a>{% else %}<span>{{ preorder.cancel_reason or '—' }}</span>{% endif %}<small>TB: {{ preorder.notification_status }}</small></td>
+    <td>{{ preorder.created_at|localtime }}<small>Cập nhật: {{ preorder.updated_at|localtime }}</small></td>
+  </tr>
+  {% else %}<tr><td colspan="10" class="empty">Không có đơn đặt trước phù hợp.</td></tr>{% endfor %}
+  </tbody></table></div>
+  {{ render_pager(pager, 'đơn đặt trước') }}
+</section>
+{% endblock %}

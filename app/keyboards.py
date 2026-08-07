@@ -8,7 +8,7 @@ from aiogram.utils.keyboard import InlineKeyboardBuilder
 from urllib.parse import quote
 
 from app.i18n import tr
-from app.models import Category, Order, Product
+from app.models import Category, Order, Preorder, Product
 from app.utils import format_vnd, sanitize_customer_text
 
 
@@ -46,6 +46,9 @@ def main_menu(
     if sms_enabled:
         builder.row(InlineKeyboardButton(text=tr(language, "sms"), callback_data="menu:sms"))
     builder.row(
+        InlineKeyboardButton(text=tr(language, "preorder"), callback_data="menu:preorders")
+    )
+    builder.row(
         InlineKeyboardButton(text=tr(language, "orders"), callback_data="menu:orders"),
         InlineKeyboardButton(text=tr(language, "profile"), callback_data="menu:profile"),
     )
@@ -61,6 +64,131 @@ def main_menu(
     )
     builder.row(InlineKeyboardButton(text=tr(language, "language"), callback_data="menu:language"))
     return builder.as_markup()
+
+
+def preorder_products_menu(
+    products: list[Product],
+    language: str,
+) -> InlineKeyboardMarkup:
+    rows: list[list[InlineKeyboardButton]] = []
+    for product in products:
+        name = sanitize_customer_text(
+            product.name_en if language == "en" else product.name_vi
+        )
+        unit_price = (max(0, int(product.price)) * 105 + 99) // 100
+        rows.append(
+            [
+                InlineKeyboardButton(
+                    text=f"📦 {name} · {format_vnd(unit_price)}/1",
+                    callback_data=f"preorder:product:{product.id}",
+                )
+            ]
+        )
+    rows.append(
+        [
+            InlineKeyboardButton(
+                text="🧾 Đơn đặt trước của tôi"
+                if language == "vi"
+                else "🧾 My preorders",
+                callback_data="preorder:history",
+            )
+        ]
+    )
+    rows.append([InlineKeyboardButton(text=tr(language, "back"), callback_data="back:menu")])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+def preorder_confirmation_menu(
+    language: str,
+    product_id: int,
+    quantity: int,
+    base_unit_price: int,
+) -> InlineKeyboardMarkup:
+    confirm = "✅ Xác nhận đặt trước" if language == "vi" else "✅ Confirm preorder"
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(
+                    text=confirm,
+                    callback_data=(
+                        f"preorder:confirm:{product_id}:{quantity}:{base_unit_price}"
+                    ),
+                )
+            ],
+            [
+                InlineKeyboardButton(
+                    text=tr(language, "back"), callback_data="menu:preorders"
+                )
+            ],
+        ]
+    )
+
+
+def preorder_history_menu(
+    preorders: list[Preorder],
+    language: str,
+) -> InlineKeyboardMarkup:
+    rows: list[list[InlineKeyboardButton]] = []
+    for preorder in preorders:
+        name = sanitize_customer_text(
+            preorder.product_name_en if language == "en" else preorder.product_name_vi
+        )
+        status = {
+            "pending": "Đang chờ" if language == "vi" else "Pending",
+            "processing": "Đang giao" if language == "vi" else "Processing",
+            "completed": "Đã giao" if language == "vi" else "Delivered",
+            "cancelled": "Đã hủy" if language == "vi" else "Cancelled",
+        }.get(preorder.status, preorder.status)
+        rows.append(
+            [
+                InlineKeyboardButton(
+                    text=f"{preorder.code} · {name} · {status}",
+                    callback_data=f"preorder:detail:{preorder.id}",
+                )
+            ]
+        )
+    rows.append(
+        [
+            InlineKeyboardButton(
+                text="📦 Đặt trước thêm" if language == "vi" else "📦 New preorder",
+                callback_data="menu:preorders",
+            )
+        ]
+    )
+    rows.append([InlineKeyboardButton(text=tr(language, "back"), callback_data="back:menu")])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+def preorder_detail_menu(preorder: Preorder, language: str) -> InlineKeyboardMarkup:
+    rows: list[list[InlineKeyboardButton]] = []
+    if preorder.status == "pending":
+        rows.append(
+            [
+                InlineKeyboardButton(
+                    text="❌ Hủy đơn đặt trước"
+                    if language == "vi"
+                    else "❌ Cancel preorder",
+                    callback_data=f"preorder:cancel:{preorder.id}",
+                )
+            ]
+        )
+    if preorder.completed_order_code:
+        rows.append(
+            [
+                InlineKeyboardButton(
+                    text="📦 Mở đơn đã giao" if language == "vi" else "📦 Open delivery",
+                    callback_data=f"preorder:order:{preorder.id}",
+                )
+            ]
+        )
+    rows.append(
+        [
+            InlineKeyboardButton(
+                text=tr(language, "back"), callback_data="preorder:history"
+            )
+        ]
+    )
+    return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
 def sms_rental_menu(

@@ -64,6 +64,7 @@ async def queue_supplier_recovery(
     request_key: str,
     started_at: datetime,
     error_code: str,
+    expires_after: timedelta = RECOVERY_WINDOW,
 ) -> SupplierRecoveryRequest | None:
     if provider != "sumistore" or quantity < 1:
         return None
@@ -92,7 +93,7 @@ async def queue_supplier_recovery(
         status="pending",
         error_code=error_code,
         started_at=started_at,
-        expires_at=started_at + RECOVERY_WINDOW,
+        expires_at=started_at + expires_after,
     )
     session.add(request)
     await session.flush()

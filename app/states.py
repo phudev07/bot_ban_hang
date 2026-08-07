@@ -18,3 +18,7 @@ class BroadcastStates(StatesGroup):
 
 class ProductDescriptionStates(StatesGroup):
     waiting_for_content = State()
+
+
+class PreorderStates(StatesGroup):
+    waiting_for_quantity = State()

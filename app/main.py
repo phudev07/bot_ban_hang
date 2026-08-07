@@ -47,6 +47,7 @@ from app.models import ApiRequestAudit, Category, Product
 from app.retired_catalog import retire_discontinued_api_catalog
 from app.maintenance import ensure_sms_rental_maintenance
 from app.payment_expiry import payment_expiry_worker
+from app.preorders import preorder_worker
 from app.rate_limit import BotSpamProtectionMiddleware
 from app.rentsim import RentSimClient, create_rentsim_client
 from app.sms_customer_messages import poll_notification_text
@@ -76,6 +77,25 @@ from app.utils import SecretCipher, format_vnd
 async def initialize_database(engine, session_factory, seed_demo_data: bool) -> None:
     async with engine.begin() as connection:
         await connection.run_sync(Base.metadata.create_all)
+        await connection.execute(
+            text(
+                "ALTER TABLE orders ADD COLUMN IF NOT EXISTS "
+                "preorder_id INTEGER NULL REFERENCES preorders(id) ON DELETE SET NULL"
+            )
+        )
+        await connection.execute(
+            text(
+                "CREATE INDEX IF NOT EXISTS ix_orders_preorder_id "
+                "ON orders (preorder_id)"
+            )
+        )
+        await connection.execute(
+            text(
+                "CREATE UNIQUE INDEX IF NOT EXISTS uq_preorders_user_product_active "
+                "ON preorders (user_id, product_id) "
+                "WHERE status IN ('pending', 'processing')"
+            )
+        )
         await connection.execute(
             text(
                 "ALTER TABLE broadcast_logs ADD COLUMN IF NOT EXISTS "
@@ -1427,6 +1447,7 @@ async def main() -> None:
         BotCommand(command="start", description="Mở menu chính"),
         BotCommand(command="muanhanh", description="Mua nhanh sản phẩm"),
         BotCommand(command="naptien", description="Nạp tiền tự động"),
+        BotCommand(command="dattruoc", description="Đặt trước mặt hàng đang hết"),
         BotCommand(command="donmua", description="Xem đơn đã mua"),
         BotCommand(command="hoso", description="Xem hồ sơ và số dư"),
         BotCommand(command="donchat", description="Dọn chat và mở menu mới"),
@@ -1467,6 +1488,20 @@ async def main() -> None:
             session_factory,
             bot,
             settings.payment_expiry_sweep_seconds,
+        )
+    )
+    preorder_task = asyncio.create_task(
+        preorder_worker(
+            session_factory,
+            bot,
+            cipher,
+            supplier_client,
+            lehai_client,
+            canboso_client,
+            nce_client,
+            haji_client,
+            interval_seconds=settings.preorder_worker_seconds,
+            referral_commission_percent=settings.referral_commission_percent,
         )
     )
     notification_limiter = BroadcastRateLimiter(settings.broadcast_rate_per_second)
@@ -1628,6 +1663,9 @@ async def main() -> None:
         payment_expiry_task.cancel()
         with contextlib.suppress(asyncio.CancelledError):
             await payment_expiry_task
+        preorder_task.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await preorder_task
         if supplier_task is not None:
             supplier_task.cancel()
             with contextlib.suppress(asyncio.CancelledError):

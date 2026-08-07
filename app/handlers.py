@@ -34,6 +34,10 @@ from app.keyboards import (
     language_menu,
     main_menu,
     order_history_menu,
+    preorder_confirmation_menu,
+    preorder_detail_menu,
+    preorder_history_menu,
+    preorder_products_menu,
     product_detail,
     products_menu,
     purchase_payment_options,
@@ -47,10 +51,20 @@ from app.keyboards import (
 )
 from app.lehai_suppliers import LeHaiPremiumClient
 from app.maintenance import sms_rental_maintenance_enabled
-from app.models import ApiClient, Product, QuantityDiscount, User
+from app.models import ApiClient, Order, Product, QuantityDiscount, User
 from app.partner_services import ensure_api_client, referral_stats, rotate_api_secret
 from app.payment_expiry import register_deposit_message
 from app.product_tutorials import send_purchase_tutorials
+from app.preorders import (
+    PreorderError,
+    cancel_user_preorder,
+    create_preorder,
+    preorder_detail_text,
+    preorder_quote,
+    preorderable_products,
+    recent_user_preorders,
+    user_preorder,
+)
 from app.rentsim import RentSimClient
 from app.services import (
     active_categories,
@@ -78,7 +92,7 @@ from app.sms_rentals import (
     rent_sms_number,
     sms_availability,
 )
-from app.states import DepositStates, PurchaseStates
+from app.states import DepositStates, PreorderStates, PurchaseStates
 from app.suppliers import (
     EXTERNAL_FULFILLMENT_SOURCES,
     ExternalSupplierClient,
@@ -375,6 +389,61 @@ def create_router(
         )
         await message.answer(text, reply_markup=deposit_amounts(user.language))
 
+    async def send_preorder_menu(message: Message, session: AsyncSession) -> None:
+        user = await get_or_create_user(message, session)
+        products = await preorderable_products(session)
+        if user.language == "en":
+            text = (
+                "📦 <b>Preorder out-of-stock products</b>\n\n"
+                "The preorder price is the current normal price plus 5%. Your wallet is "
+                "checked now but charged only after a successful delivery. If the product "
+                "price changes or your balance is insufficient when stock returns, the "
+                "preorder is cancelled automatically."
+            )
+            if not products:
+                text += "\n\nThere are currently no out-of-stock products open for preorder."
+        else:
+            text = (
+                "📦 <b>Đặt trước mặt hàng đang hết</b>\n\n"
+                "Giá đặt trước bằng giá thường hiện tại cộng 5%. Bot kiểm tra ví ngay lúc "
+                "đặt nhưng chỉ trừ tiền sau khi lấy hàng và giao thành công. Nếu giá thay đổi "
+                "hoặc ví không đủ khi hàng về, đơn sẽ tự hủy."
+            )
+            if not products:
+                text += "\n\nHiện không có mặt hàng hết kho nào đang nhận đặt trước."
+        await message.answer(
+            text,
+            reply_markup=preorder_products_menu(products, user.language),
+        )
+
+    def preorder_error_message(code: str, language: str) -> str:
+        vi_messages = {
+            "not_found": "Không tìm thấy mặt hàng hoặc đơn đặt trước.",
+            "blocked": "Tài khoản của bạn đang bị hạn chế giao dịch.",
+            "not_available": "Mặt hàng này hiện không nhận đặt trước.",
+            "price_changed": "Giá mặt hàng vừa thay đổi. Hãy mở lại mục đặt trước để xem giá mới.",
+            "invalid_quantity": "Số lượng đặt trước không hợp lệ.",
+            "in_stock": "Mặt hàng đã có hàng. Bạn có thể mua ngay trong mục Mua nhanh.",
+            "duplicate": "Bạn đã có một đơn đang chờ cho mặt hàng này.",
+            "active_limit": "Bạn đã đạt giới hạn đơn đặt trước đang chờ.",
+            "insufficient": "Số dư ví hiện tại không đủ cho tổng tiền đặt trước.",
+            "too_late": "Đơn đang được giao hoặc đã kết thúc nên không thể hủy.",
+        }
+        en_messages = {
+            "not_found": "The product or preorder was not found.",
+            "blocked": "Your account is currently restricted.",
+            "not_available": "This product is not open for preorder.",
+            "price_changed": "The price just changed. Reopen preorders to see the new price.",
+            "invalid_quantity": "The preorder quantity is invalid.",
+            "in_stock": "This product is back in stock. You can buy it from Quick buy.",
+            "duplicate": "You already have an active preorder for this product.",
+            "active_limit": "You have reached the active preorder limit.",
+            "insufficient": "Your current wallet balance is insufficient for this preorder.",
+            "too_late": "This preorder is being fulfilled or has ended and cannot be cancelled.",
+        }
+        messages = vi_messages if language == "vi" else en_messages
+        return messages.get(code, "Không thể xử lý đơn đặt trước. Vui lòng thử lại.")
+
     @router.message(CommandStart())
     async def start(
         message: Message,
@@ -403,6 +472,15 @@ def create_router(
     @router.message(Command("naptien"))
     async def deposit_command(message: Message, session: AsyncSession) -> None:
         await send_deposit_menu(message, session)
+
+    @router.message(Command("dattruoc"))
+    async def preorder_command(
+        message: Message,
+        session: AsyncSession,
+        state: FSMContext,
+    ) -> None:
+        await state.clear()
+        await send_preorder_menu(message, session)
 
     @router.message(F.text.in_({"☰ Menu", "Menu"}))
     async def quick_menu_button(
@@ -580,6 +658,309 @@ def create_router(
                     "back:menu",
                     flash_prices,
                     origin="quick",
+                ),
+            )
+        await callback.answer()
+
+    @router.callback_query(F.data == "menu:preorders")
+    async def show_preorders(
+        callback: CallbackQuery,
+        session: AsyncSession,
+        state: FSMContext,
+    ) -> None:
+        await state.clear()
+        user = await get_or_create_user(callback, session)
+        products = await preorderable_products(session)
+        if user.language == "en":
+            text = (
+                "📦 <b>Preorder out-of-stock products</b>\n\n"
+                "Price: current normal price +5%. No money is held now; your wallet is "
+                "charged only after delivery."
+            )
+            if not products:
+                text += "\n\nNo out-of-stock products are open for preorder right now."
+        else:
+            text = (
+                "📦 <b>Đặt trước mặt hàng đang hết</b>\n\n"
+                "Giá: giá thường hiện tại +5%. Bot không giữ hay trừ tiền lúc đặt; chỉ trừ "
+                "sau khi giao hàng thành công."
+            )
+            if not products:
+                text += "\n\nHiện không có mặt hàng hết kho nào đang nhận đặt trước."
+        if callback.message:
+            await edit_or_send_text(
+                callback.message,
+                text,
+                reply_markup=preorder_products_menu(products, user.language),
+            )
+        await callback.answer()
+
+    @router.callback_query(F.data.startswith("preorder:product:"))
+    async def choose_preorder_product(
+        callback: CallbackQuery,
+        session: AsyncSession,
+        state: FSMContext,
+    ) -> None:
+        user = await get_or_create_user(callback, session)
+        try:
+            product_id = int(callback.data.rsplit(":", 1)[1])
+        except (TypeError, ValueError):
+            await callback.answer("Mặt hàng không hợp lệ.", show_alert=True)
+            return
+        products = await preorderable_products(session)
+        product = next((item for item in products if item.id == product_id), None)
+        if product is None:
+            await callback.answer(
+                preorder_error_message("not_available", user.language),
+                show_alert=True,
+            )
+            return
+        maximum = max(1, int(product.max_quantity)) if product.allow_quantity else 1
+        await state.set_state(PreorderStates.waiting_for_quantity)
+        await state.update_data(preorder_product_id=product.id)
+        name = sanitize_customer_text(
+            product.name_en if user.language == "en" else product.name_vi
+        )
+        text = (
+            f"📦 <b>Preorder {escape(name)}</b>\n\n"
+            f"Enter the quantity from 1 to {maximum}."
+            if user.language == "en"
+            else f"📦 <b>Đặt trước {escape(name)}</b>\n\n"
+            f"Nhập số lượng cần đặt từ 1 đến {maximum}."
+        )
+        if callback.message:
+            await callback.message.edit_text(text, reply_markup=back_menu(user.language))
+        await callback.answer()
+
+    @router.message(PreorderStates.waiting_for_quantity)
+    async def receive_preorder_quantity(
+        message: Message,
+        session: AsyncSession,
+        state: FSMContext,
+    ) -> None:
+        user = await get_or_create_user(message, session)
+        raw_quantity = (message.text or "").strip()
+        try:
+            quantity = int(raw_quantity)
+        except ValueError:
+            await message.answer(
+                "Vui lòng nhập số lượng bằng số nguyên."
+                if user.language == "vi"
+                else "Please enter a whole number."
+            )
+            return
+        data = await state.get_data()
+        product_id = int(data.get("preorder_product_id") or 0)
+        products = await preorderable_products(session)
+        product = next((item for item in products if item.id == product_id), None)
+        if product is None:
+            await state.clear()
+            await message.answer(
+                preorder_error_message("not_available", user.language),
+                reply_markup=back_menu(user.language),
+            )
+            return
+        maximum = max(1, int(product.max_quantity)) if product.allow_quantity else 1
+        if quantity < 1 or quantity > maximum:
+            await message.answer(
+                f"Số lượng phải từ 1 đến {maximum}."
+                if user.language == "vi"
+                else f"Quantity must be between 1 and {maximum}."
+            )
+            return
+        quote = preorder_quote(product, quantity)
+        if int(user.balance) < quote.total_amount:
+            await state.clear()
+            text = (
+                f"❌ <b>Số dư ví chưa đủ</b>\n\n"
+                f"• Cần: <b>{format_vnd(quote.total_amount)}</b>\n"
+                f"• Hiện có: <b>{format_vnd(user.balance)}</b>\n\n"
+                "Hãy nạp thêm tiền rồi đặt lại. Bot chưa trừ tiền."
+                if user.language == "vi"
+                else f"❌ <b>Insufficient wallet balance</b>\n\n"
+                f"• Required: <b>{format_vnd(quote.total_amount)}</b>\n"
+                f"• Available: <b>{format_vnd(user.balance)}</b>\n\n"
+                "Deposit funds and try again. No money was deducted."
+            )
+            await message.answer(text, reply_markup=back_menu(user.language))
+            return
+        await state.clear()
+        name = sanitize_customer_text(
+            product.name_en if user.language == "en" else product.name_vi
+        )
+        text = (
+            f"📦 <b>Confirm preorder</b>\n\n"
+            f"• Product: <b>{escape(name)}</b>\n"
+            f"• Normal price: <b>{format_vnd(quote.base_unit_price)}/1</b>\n"
+            f"• Preorder price (+5%): <b>{format_vnd(quote.preorder_unit_price)}/1</b>\n"
+            f"• Quantity: <b>{quantity}</b>\n"
+            f"• Expected total: <b>{format_vnd(quote.total_amount)}</b>\n"
+            f"• Wallet: <b>{format_vnd(user.balance)}</b>\n\n"
+            "No money is deducted now."
+            if user.language == "en"
+            else f"📦 <b>Xác nhận đặt trước</b>\n\n"
+            f"• Sản phẩm: <b>{escape(name)}</b>\n"
+            f"• Giá thường: <b>{format_vnd(quote.base_unit_price)}/1</b>\n"
+            f"• Giá đặt trước (+5%): <b>{format_vnd(quote.preorder_unit_price)}/1</b>\n"
+            f"• Số lượng: <b>{quantity}</b>\n"
+            f"• Tổng dự kiến: <b>{format_vnd(quote.total_amount)}</b>\n"
+            f"• Số dư ví: <b>{format_vnd(user.balance)}</b>\n\n"
+            "Xác nhận lúc này chưa trừ tiền."
+        )
+        await message.answer(
+            text,
+            reply_markup=preorder_confirmation_menu(
+                user.language,
+                product.id,
+                quantity,
+                quote.base_unit_price,
+            ),
+        )
+
+    @router.callback_query(F.data.startswith("preorder:confirm:"))
+    async def confirm_preorder(callback: CallbackQuery, session: AsyncSession) -> None:
+        user = await get_or_create_user(callback, session)
+        language = user.language
+        try:
+            _prefix, _confirm, product_id, quantity, base_price = callback.data.split(":")
+            product_id_value = int(product_id)
+            quantity_value = int(quantity)
+            base_price_value = int(base_price)
+        except (AttributeError, TypeError, ValueError):
+            await callback.answer("Dữ liệu đặt trước không hợp lệ.", show_alert=True)
+            return
+        try:
+            preorder = await create_preorder(
+                session,
+                user.telegram_id,
+                product_id_value,
+                quantity_value,
+                expected_base_unit_price=base_price_value,
+                max_active_per_user=settings.preorder_max_active_per_user,
+            )
+            await session.commit()
+        except PreorderError as exc:
+            if session.in_transaction():
+                await session.rollback()
+            await callback.answer(
+                preorder_error_message(exc.code, language),
+                show_alert=True,
+            )
+            return
+        if callback.message:
+            await callback.message.edit_text(
+                preorder_detail_text(preorder, language),
+                reply_markup=preorder_detail_menu(preorder, language),
+            )
+        await callback.answer(
+            "Đặt trước thành công" if language == "vi" else "Preorder created"
+        )
+
+    @router.callback_query(F.data == "preorder:history")
+    async def show_preorder_history(callback: CallbackQuery, session: AsyncSession) -> None:
+        user = await get_or_create_user(callback, session)
+        preorders = await recent_user_preorders(session, user.telegram_id)
+        text = (
+            "🧾 <b>Đơn đặt trước của tôi</b>\n\nChọn một đơn để xem trạng thái."
+            if user.language == "vi"
+            else "🧾 <b>My preorders</b>\n\nChoose a preorder to view its status."
+        )
+        if not preorders:
+            text = (
+                "🧾 Bạn chưa có đơn đặt trước nào."
+                if user.language == "vi"
+                else "🧾 You have no preorders yet."
+            )
+        if callback.message:
+            await callback.message.edit_text(
+                text,
+                reply_markup=preorder_history_menu(preorders, user.language),
+            )
+        await callback.answer()
+
+    @router.callback_query(F.data.startswith("preorder:detail:"))
+    async def show_preorder_detail(callback: CallbackQuery, session: AsyncSession) -> None:
+        user = await get_or_create_user(callback, session)
+        preorder_id = int(callback.data.rsplit(":", 1)[1])
+        preorder = await user_preorder(session, user.telegram_id, preorder_id)
+        if preorder is None:
+            await callback.answer(
+                preorder_error_message("not_found", user.language), show_alert=True
+            )
+            return
+        if callback.message:
+            await callback.message.edit_text(
+                preorder_detail_text(preorder, user.language),
+                reply_markup=preorder_detail_menu(preorder, user.language),
+            )
+        await callback.answer()
+
+    @router.callback_query(F.data.startswith("preorder:cancel:"))
+    async def cancel_preorder_callback(
+        callback: CallbackQuery,
+        session: AsyncSession,
+    ) -> None:
+        user = await get_or_create_user(callback, session)
+        preorder_id = int(callback.data.rsplit(":", 1)[1])
+        try:
+            preorder = await cancel_user_preorder(
+                session,
+                user.telegram_id,
+                preorder_id,
+            )
+            await session.commit()
+        except PreorderError as exc:
+            await session.rollback()
+            await callback.answer(
+                preorder_error_message(exc.code, user.language), show_alert=True
+            )
+            return
+        if callback.message:
+            await callback.message.edit_text(
+                preorder_detail_text(preorder, user.language),
+                reply_markup=preorder_detail_menu(preorder, user.language),
+            )
+        await callback.answer("Đã hủy đơn" if user.language == "vi" else "Cancelled")
+
+    @router.callback_query(F.data.startswith("preorder:order:"))
+    async def open_preorder_order(callback: CallbackQuery, session: AsyncSession) -> None:
+        user = await get_or_create_user(callback, session)
+        preorder_id = int(callback.data.rsplit(":", 1)[1])
+        preorder = await user_preorder(session, user.telegram_id, preorder_id)
+        if preorder is None or preorder.status != "completed":
+            await callback.answer(
+                preorder_error_message("not_found", user.language), show_alert=True
+            )
+            return
+        order_id = await session.scalar(
+            select(Order.id)
+            .where(
+                Order.preorder_id == preorder.id,
+                Order.user_id == user.telegram_id,
+            )
+            .order_by(Order.id)
+            .limit(1)
+        )
+        if order_id is None:
+            await callback.answer("Không tìm thấy đơn đã giao.", show_alert=True)
+            return
+        orders = await order_bundle(session, user.telegram_id, order_id)
+        order_ids, shop_order_code, product_name, secrets, total_amount = bundle_values(
+            orders, user
+        )
+        if callback.message:
+            await callback.message.edit_text(
+                delivery_text(
+                    shop_order_code=shop_order_code,
+                    product_name=product_name,
+                    secrets=secrets,
+                    total_amount=total_amount,
+                    language=user.language,
+                ),
+                reply_markup=delivery_keyboard(
+                    primary_order_id=min(order_ids),
+                    secrets=secrets,
+                    language=user.language,
                 ),
             )
         await callback.answer()
