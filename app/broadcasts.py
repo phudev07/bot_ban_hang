@@ -119,7 +119,6 @@ class StockAlertPayload:
     recipients: tuple[tuple[int, str], ...]
     flash_sale_price: int | None = None
     flash_sale_remaining: int | None = None
-    preorder_fulfilled_quantity: int = 0
 
 
 @dataclass(frozen=True)
@@ -180,19 +179,6 @@ def sale_alert_text(payload: SaleAlertPayload, language: str) -> str:
 
 
 def stock_alert_text(payload: StockAlertPayload, language: str) -> str:
-    preorder_line = (
-        (
-            f"📦 Automatically allocated to preorders: "
-            f"<b>{payload.preorder_fulfilled_quantity}</b>\n"
-        )
-        if language == "en" and payload.preorder_fulfilled_quantity > 0
-        else (
-            f"📦 Đã ưu tiên giao đơn đặt trước: "
-            f"<b>{payload.preorder_fulfilled_quantity}</b>\n"
-        )
-        if payload.preorder_fulfilled_quantity > 0
-        else ""
-    )
     if (
         payload.flash_sale_price is not None
         and payload.flash_sale_remaining is not None
@@ -205,7 +191,6 @@ def stock_alert_text(payload: StockAlertPayload, language: str) -> str:
                 f"<b>{safe_customer_html(payload.name_en)}</b>\n"
                 f"🔥 Flash Sale price: <b>{format_vnd(payload.flash_sale_price)}</b>\n"
                 f"📦 Available now: <b>{payload.stock}</b>\n"
-                f"{preorder_line}"
                 f"⚡ Flash Sale orders left: <b>{payload.flash_sale_remaining}</b>\n\n"
                 "🛒 Flash Sale quantity is limited. Buy now while the offer is active."
             )
@@ -215,7 +200,6 @@ def stock_alert_text(payload: StockAlertPayload, language: str) -> str:
             f"<b>{safe_customer_html(payload.name_vi)}</b>\n"
             f"🔥 Giá Flash Sale: <b>{format_vnd(payload.flash_sale_price)}</b>\n"
             f"📦 Kho vừa có: <b>{payload.stock}</b>\n"
-            f"{preorder_line}"
             f"⚡ Còn lại: <b>{payload.flash_sale_remaining} đơn Flash Sale</b>\n\n"
             "🛒 Số lượng Flash Sale có hạn. Mua ngay khi ưu đãi đang còn."
         )
@@ -225,8 +209,7 @@ def stock_alert_text(payload: StockAlertPayload, language: str) -> str:
             f"📋 Product: {product_brand_emoji(payload.name_en)} "
             f"<b>{safe_customer_html(payload.name_en)}</b>\n"
             f"💰 Current price: <b>{format_vnd(payload.price)}</b>\n"
-            f"📦 Available now: <b>{payload.stock}</b>\n"
-            f"{preorder_line}\n"
+            f"📦 Available now: <b>{payload.stock}</b>\n\n"
             "🛒 Stock can sell out quickly. Buy now while it is available."
         )
     return (
@@ -234,8 +217,7 @@ def stock_alert_text(payload: StockAlertPayload, language: str) -> str:
         f"📋 Sản phẩm: {product_brand_emoji(payload.name_vi)} "
         f"<b>{safe_customer_html(payload.name_vi)}</b>\n"
         f"💰 Giá hiện tại: <b>{format_vnd(payload.price)}</b>\n"
-        f"📦 Kho vừa có: <b>{payload.stock}</b>\n"
-        f"{preorder_line}\n"
+        f"📦 Kho vừa có: <b>{payload.stock}</b>\n\n"
         "🛒 Số lượng có thể hết nhanh. Mua ngay khi hàng đang còn."
     )
 
@@ -1140,7 +1122,6 @@ async def _claim_stock_alert(
                 recipients=(),
                 flash_sale_price=(notification_price if campaign is not None else None),
                 flash_sale_remaining=remaining_flash_sale,
-                preorder_fulfilled_quantity=preorder_fulfilled_quantity,
             )
             # Snapshot the outgoing content so the admin history remains an
             # accurate audit trail even after the product name or price changes.

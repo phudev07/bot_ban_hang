@@ -236,7 +236,7 @@ def test_stock_alert_is_sent_when_preorders_consume_all_new_stock() -> None:
         ) == 1
         assert len(bot.calls) == 1
         assert "Kho vừa có: <b>2</b>" in bot.calls[0][1]
-        assert "Đã ưu tiên giao đơn đặt trước: <b>2</b>" in bot.calls[0][1]
+        assert "đơn đặt trước" not in bot.calls[0][1].lower()
 
         async with sessions() as session:
             alert = await session.scalar(select(ProductStockAlert))
