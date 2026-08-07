@@ -1,0 +1,189 @@
+import re
+from typing import Any
+
+from aiogram import Bot
+from aiogram.methods import TelegramMethod
+from aiogram.types import InlineKeyboardMarkup, ReplyKeyboardMarkup
+
+
+# Brand emoji are owned by the shop bot; functional emoji use either that pack or
+# Telegram's animated topic-icon set. Keeping the IDs here makes all bot surfaces
+# consistent without storing media on the VPS.
+CHATGPT_EMOJI_ID = "6318861731049249862"
+NETFLIX_EMOJI_ID = "6318993625199943827"
+GOOGLE_EMOJI_ID = "6318611020923282334"
+GEMINI_EMOJI_ID = "6212797771372563847"
+
+EMOJI_IDS = {
+    "📣": "5309984423003823246",
+    "🔥": "5312241539987020022",
+    "💎": "5309958691854754293",
+    "💰": "5350452584119279096",
+    "🏠": "5312486108309757006",
+    "🎬": "5368653135101310687",
+    "📺": "5350513667144163474",
+    "🛒": "5431492767249342908",
+    "✅": "5237699328843200968",
+    "🤖": CHATGPT_EMOJI_ID,
+    "⚡": "6316501981527548390",
+    "💳": "6316515106947604084",
+    "📦": "6319054961627897586",
+    "🎁": "6318662315717699390",
+    "📲": "6318667181915644211",
+    "🧾": "6318777966302078833",
+    "🔑": "6316630461179241860",
+    "👤": "6318961052167970642",
+    "🛠": "6318738796200338411",
+    "📘": "6318935282364195868",
+    "📤": "6318885018361934425",
+    "🔄": "6318601949952351745",
+    "🧹": "6316660590374823460",
+    "🌐": "6318871179977302808",
+    "💬": "6318680500609228119",
+    "📋": "6318926426141629977",
+}
+
+_PROTECTED_HTML = re.compile(
+    r"(<(?:pre|code|tg-emoji)\b[^>]*>.*?</(?:pre|code|tg-emoji)>)",
+    flags=re.IGNORECASE | re.DOTALL,
+)
+
+
+def custom_emoji(fallback: str, emoji_id: str) -> str:
+    return f'<tg-emoji emoji-id="{emoji_id}">{fallback}</tg-emoji>'
+
+
+def product_brand_emoji_id(name: str) -> str:
+    normalized = " ".join(name.casefold().split())
+    if "netflix" in normalized:
+        return NETFLIX_EMOJI_ID
+    if any(marker in normalized for marker in ("gemini", "veo", "antigravity")):
+        return GEMINI_EMOJI_ID
+    if "18m" in normalized and any(
+        marker in normalized for marker in ("gg", "google", "jio")
+    ):
+        return GEMINI_EMOJI_ID
+    if any(marker in normalized for marker in ("chatgpt", "openai", "gpt")):
+        return CHATGPT_EMOJI_ID
+    if any(marker in normalized for marker in ("google", "pixel", "gg pro")):
+        return GOOGLE_EMOJI_ID
+    return EMOJI_IDS["📦"]
+
+
+def product_brand_emoji(name: str) -> str:
+    emoji_id = product_brand_emoji_id(name)
+    fallback = (
+        "🎬"
+        if emoji_id == NETFLIX_EMOJI_ID
+        else "✨"
+        if emoji_id == GEMINI_EMOJI_ID
+        else "🔎"
+        if emoji_id == GOOGLE_EMOJI_ID
+        else "🤖"
+        if emoji_id == CHATGPT_EMOJI_ID
+        else "📦"
+    )
+    return custom_emoji(fallback, emoji_id)
+
+
+def animate_html(text: str) -> str:
+    """Replace supported emoji outside code blocks with Telegram custom emoji."""
+    if not text:
+        return text
+    parts = _PROTECTED_HTML.split(text)
+    for index in range(0, len(parts), 2):
+        part = parts[index]
+        for fallback, emoji_id in EMOJI_IDS.items():
+            part = re.sub(
+                re.escape(fallback) + "\ufe0f?",
+                lambda match, current_id=emoji_id: custom_emoji(
+                    match.group(0), current_id
+                ),
+                part,
+            )
+        parts[index] = part
+    return "".join(parts)
+
+
+def button_emoji_id(text: str) -> str | None:
+    normalized = " ".join(text.casefold().split())
+    if any(
+        marker in normalized
+        for marker in (
+            "netflix",
+            "chatgpt",
+            "openai",
+            "gpt",
+            "gemini",
+            "veo",
+            "antigravity",
+            "pixel",
+            "gg pro",
+        )
+    ):
+        return product_brand_emoji_id(text)
+    for fallback, emoji_id in EMOJI_IDS.items():
+        if fallback in text:
+            return emoji_id
+    keyword_icons = (
+        (("mua nhanh", "quick buy", "buy now"), EMOJI_IDS["🛒"]),
+        (("nạp tiền", "deposit", "payment", "thanh toán"), EMOJI_IDS["💳"]),
+        (("lấy code", "my codes", "code"), EMOJI_IDS["🔑"]),
+        (("mặt hàng", "products", "stock"), EMOJI_IDS["📦"]),
+        (("thuê số", "rent sms", "rent now"), EMOJI_IDS["📲"]),
+        (("đơn mua", "orders", "history"), EMOJI_IDS["🧾"]),
+        (("hồ sơ", "profile"), EMOJI_IDS["👤"]),
+        (("api đấu kho", "warehouse api"), EMOJI_IDS["🌐"]),
+        (("giới thiệu", "referral", "coupon"), EMOJI_IDS["🎁"]),
+        (("hỗ trợ", "support"), EMOJI_IDS["💬"]),
+        (("xóa hội thoại", "clear chat"), EMOJI_IDS["🧹"]),
+        (("ngôn ngữ", "language"), EMOJI_IDS["🌐"]),
+        (("menu",), EMOJI_IDS["📋"]),
+        (("quay lại", "back"), EMOJI_IDS["🏠"]),
+    )
+    for markers, emoji_id in keyword_icons:
+        if any(marker in normalized for marker in markers):
+            return emoji_id
+    return None
+
+
+def _strip_animated_prefix(text: str) -> str:
+    stripped = text.lstrip()
+    for fallback in sorted(EMOJI_IDS, key=len, reverse=True):
+        variants = (fallback + "️", fallback)
+        for variant in variants:
+            if stripped.startswith(variant):
+                return stripped[len(variant) :].lstrip()
+    return text
+
+
+def decorate_keyboard(markup: Any) -> None:
+    if not isinstance(markup, (InlineKeyboardMarkup, ReplyKeyboardMarkup)):
+        return
+    for row in markup.inline_keyboard if isinstance(markup, InlineKeyboardMarkup) else markup.keyboard:
+        for button in row:
+            if button.icon_custom_emoji_id:
+                continue
+            emoji_id = button_emoji_id(button.text)
+            if emoji_id:
+                button.icon_custom_emoji_id = emoji_id
+                button.text = _strip_animated_prefix(button.text)
+
+
+def prepare_telegram_method(method: TelegramMethod[Any]) -> None:
+    if hasattr(method, "parse_mode"):
+        for field in ("text", "caption"):
+            value = getattr(method, field, None)
+            if isinstance(value, str):
+                setattr(method, field, animate_html(value))
+    decorate_keyboard(getattr(method, "reply_markup", None))
+
+
+class AnimatedEmojiBot(Bot):
+    async def __call__(
+        self,
+        method: TelegramMethod[Any],
+        request_timeout: int | None = None,
+    ) -> Any:
+        prepare_telegram_method(method)
+        return await super().__call__(method, request_timeout=request_timeout)

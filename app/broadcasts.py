@@ -11,6 +11,7 @@ from sqlalchemy import func, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.flash_sales import active_flash_sale, flash_sale_remaining, stop_unsafe_flash_sale
+from app.custom_emoji import product_brand_emoji
 from app.models import (
     BroadcastDelivery,
     BroadcastLog,
@@ -158,7 +159,8 @@ def sale_alert_text(payload: SaleAlertPayload, language: str) -> str:
     if language == "en":
         return (
             "🔥 <b>PRODUCT PRICE DROP</b>\n\n"
-            f"• Product: <b>{safe_customer_html(payload.name_en)}</b>\n"
+            f"• Product: {product_brand_emoji(payload.name_en)} "
+            f"<b>{safe_customer_html(payload.name_en)}</b>\n"
             f"• Previous price: <s>{format_vnd(payload.old_price)}</s>\n"
             f"• Sale price: <b>{format_vnd(payload.new_price)}</b>\n"
             f"• Available now: <b>{payload.stock}</b>\n\n"
@@ -166,7 +168,8 @@ def sale_alert_text(payload: SaleAlertPayload, language: str) -> str:
         )
     return (
         "🔥 <b>MẶT HÀNG VỪA GIẢM GIÁ</b>\n\n"
-        f"• Sản phẩm: <b>{safe_customer_html(payload.name_vi)}</b>\n"
+        f"• Sản phẩm: {product_brand_emoji(payload.name_vi)} "
+        f"<b>{safe_customer_html(payload.name_vi)}</b>\n"
         f"• Giá trước: <s>{format_vnd(payload.old_price)}</s>\n"
         f"• Giá sale còn: <b>{format_vnd(payload.new_price)}</b>\n"
         f"• Kho hiện có: <b>{payload.stock}</b>\n\n"
@@ -183,7 +186,8 @@ def stock_alert_text(payload: StockAlertPayload, language: str) -> str:
         if language == "en":
             return (
                 "📦 <b>PRODUCT BACK IN STOCK · FLASH SALE</b>\n\n"
-                f"• Product: <b>{safe_customer_html(payload.name_en)}</b>\n"
+                f"• Product: {product_brand_emoji(payload.name_en)} "
+                f"<b>{safe_customer_html(payload.name_en)}</b>\n"
                 f"• Flash Sale price: <b>{format_vnd(payload.flash_sale_price)}</b>\n"
                 f"• Available now: <b>{payload.stock}</b>\n"
                 f"• Flash Sale orders left: <b>{payload.flash_sale_remaining}</b>\n\n"
@@ -191,7 +195,8 @@ def stock_alert_text(payload: StockAlertPayload, language: str) -> str:
             )
         return (
             "📦 <b>HÀNG MỚI VỀ · FLASH SALE</b>\n\n"
-            f"• Sản phẩm: <b>{safe_customer_html(payload.name_vi)}</b>\n"
+            f"• Sản phẩm: {product_brand_emoji(payload.name_vi)} "
+            f"<b>{safe_customer_html(payload.name_vi)}</b>\n"
             f"• Giá Flash Sale: <b>{format_vnd(payload.flash_sale_price)}</b>\n"
             f"• Kho vừa có: <b>{payload.stock}</b>\n"
             f"• Còn lại: <b>{payload.flash_sale_remaining} đơn Flash Sale</b>\n\n"
@@ -200,14 +205,16 @@ def stock_alert_text(payload: StockAlertPayload, language: str) -> str:
     if language == "en":
         return (
             "📦 <b>PRODUCT BACK IN STOCK</b>\n\n"
-            f"• Product: <b>{safe_customer_html(payload.name_en)}</b>\n"
+            f"• Product: {product_brand_emoji(payload.name_en)} "
+            f"<b>{safe_customer_html(payload.name_en)}</b>\n"
             f"• Current price: <b>{format_vnd(payload.price)}</b>\n"
             f"• Available now: <b>{payload.stock}</b>\n\n"
             "Stock can sell out quickly. Buy now while it is available."
         )
     return (
         "📦 <b>HÀNG MỚI VỀ</b>\n\n"
-        f"• Sản phẩm: <b>{safe_customer_html(payload.name_vi)}</b>\n"
+        f"• Sản phẩm: {product_brand_emoji(payload.name_vi)} "
+        f"<b>{safe_customer_html(payload.name_vi)}</b>\n"
         f"• Giá hiện tại: <b>{format_vnd(payload.price)}</b>\n"
         f"• Kho vừa có: <b>{payload.stock}</b>\n\n"
         "Số lượng có thể hết nhanh. Mua ngay khi hàng đang còn."

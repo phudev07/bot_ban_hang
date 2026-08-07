@@ -7,6 +7,7 @@ and server logs.
 
 from html import escape
 
+from app.custom_emoji import product_brand_emoji
 from app.utils import format_vnd, safe_customer_html
 
 
@@ -24,7 +25,7 @@ def storefront_text(
             else "• Status: <b>temporarily unavailable</b>"
         )
         return (
-            "📲 <b>Rent a ChatGPT SMS number</b>\n\n"
+            f"{product_brand_emoji('ChatGPT')} <b>Rent a ChatGPT SMS number</b>\n\n"
             "• Country: <b>Cambodia</b>\n"
             f"• Price: <b>{format_vnd(sale_price)}</b>\n"
             f"{status}\n\n"
@@ -40,7 +41,7 @@ def storefront_text(
         else "• Trạng thái: <b>đang tạm gián đoạn</b>"
     )
     return (
-        "📲 <b>Thuê số nhận SMS ChatGPT</b>\n\n"
+        f"{product_brand_emoji('ChatGPT')} <b>Thuê số nhận SMS ChatGPT</b>\n\n"
         "• Quốc gia: <b>Cambodia</b>\n"
         f"• Giá thuê: <b>{format_vnd(sale_price)}</b>\n"
         f"{status}\n\n"

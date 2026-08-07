@@ -24,6 +24,7 @@ from sqlalchemy.orm import aliased
 
 from app.canboso_suppliers import CanbosoClient
 from app.config import Settings
+from app.custom_emoji import product_brand_emoji
 from app.haji_suppliers import HajiClient
 from app.inventory_dedup import filter_duplicate_inventory
 from app.lehai_suppliers import LeHaiPremiumClient
@@ -645,7 +646,7 @@ def default_flash_sale_message(
 ) -> str:
     return (
         "⚡ <b>FLASH SALE GIỚI HẠN</b>\n\n"
-        f"• Sản phẩm: <b>{escape(product_name)}</b>\n"
+        f"• Sản phẩm: {product_brand_emoji(product_name)} <b>{escape(product_name)}</b>\n"
         f"• Giá cũ: <s>{format_vnd(original_price)}</s>\n"
         f"• Giá Flash Sale: <b>{format_vnd(sale_price)}</b>\n"
         f"• Số lượng ưu đãi: <b>{quantity}</b>\n\n"

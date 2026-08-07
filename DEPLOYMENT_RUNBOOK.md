@@ -116,6 +116,9 @@ and binds port 8080 only to localhost. Caddy is the public reverse proxy.
 - The optional "notify stock without source top-up" switch has a per-product 10-minute
   notification cooldown and sends only the latest stock increase.
 - Direct QR purchases that cannot be fulfilled are credited to the customer's wallet.
+- Main-bot messages and keyboards use the custom emoji IDs in `app/custom_emoji.py`.
+  The brand pack is `vietshare_brands_by_phptool_bot`; do not delete it because ChatGPT,
+  Netflix, and Google logo IDs are referenced by production messages.
 
 ## 6. Standard local workflow
 

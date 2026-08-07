@@ -5,6 +5,7 @@ from aiogram.types import (
     InlineKeyboardMarkup,
 )
 
+from app.custom_emoji import product_brand_emoji
 from app.utils import format_vnd, safe_html, sanitize_customer_text
 
 
@@ -22,6 +23,7 @@ def delivery_text(
     paid_by_qr: bool = False,
 ) -> str:
     product_name = sanitize_customer_text(product_name)
+    brand_emoji = product_brand_emoji(product_name)
     preview = secrets[:MAX_MESSAGE_PREVIEW]
     items = "\n".join(safe_html(secret) for secret in preview)
     account_block = f"<pre>{items}</pre>"
@@ -38,7 +40,7 @@ def delivery_text(
         return (
             f"✅ <b>{title}</b>\n\n"
             f"• Shop order: <code>{safe_html(shop_order_code)}</code>\n"
-            f"• Product: <b>{safe_html(product_name)}</b>\n"
+            f"• Product: {brand_emoji} <b>{safe_html(product_name)}</b>\n"
             f"• Quantity: <b>{len(secrets)}</b>\n"
             f"• Total: <b>{format_vnd(total_amount)}</b>\n\n"
             f"<b>Your accounts/codes</b>\n{account_block}\n\n"
@@ -49,7 +51,7 @@ def delivery_text(
     return (
         f"✅ <b>{title}</b>\n\n"
         f"• Mã đơn shop: <code>{safe_html(shop_order_code)}</code>\n"
-        f"• Sản phẩm: <b>{safe_html(product_name)}</b>\n"
+        f"• Sản phẩm: {brand_emoji} <b>{safe_html(product_name)}</b>\n"
         f"• Số lượng: <b>{len(secrets)}</b>\n"
         f"• Tổng tiền: <b>{format_vnd(total_amount)}</b>\n\n"
         f"<b>Tài khoản/code của bạn</b>\n{account_block}\n\n"

@@ -12,6 +12,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.chat_cleanup import delete_recent_messages
 from app.config import Settings
+from app.custom_emoji import product_brand_emoji
 from app.database import release_session_connection
 from app.delivery import (
     delivery_file,
@@ -910,8 +911,8 @@ def create_router(
                 f"<s>{format_vnd(product.price)}</s> → <b>{format_vnd(display_price)}</b>"
             )
         text = (
-            f"📦 <b>{safe_customer_html(name)}</b>\n\n"
-            f"📝 {labels[2]}: {safe_customer_html(description or '—')}\n\n"
+            f"{product_brand_emoji(name)} <b>{safe_customer_html(name)}</b>\n\n"
+            f"📋 {labels[2]}: {safe_customer_html(description or '—')}\n\n"
             f"💵 {labels[0]}: {price_text}\n"
             f"📊 {labels[1]}: <b>{stock}</b>"
         )
@@ -1060,7 +1061,8 @@ def create_router(
                     )
                     text = (
                         "💳 <b>Số dư chưa đủ</b>\n\n"
-                        f"Sản phẩm: <b>{safe_customer_html(product.name_vi)}</b>\n"
+                        f"Sản phẩm: {product_brand_emoji(product.name_vi)} "
+                        f"<b>{safe_customer_html(product.name_vi)}</b>\n"
                         f"Số lượng: <b>{quantity}</b>\n"
                         f"{coupon_line_vi}"
                         f"{quantity_line_vi}"
@@ -1070,7 +1072,8 @@ def create_router(
                         "Số dư hiện có vẫn được giữ nguyên."
                         if user.language == "vi"
                         else "💳 <b>Insufficient balance</b>\n\n"
-                        f"Product: <b>{safe_customer_html(product.name_en)}</b>\n"
+                        f"Product: {product_brand_emoji(product.name_en)} "
+                        f"<b>{safe_customer_html(product.name_en)}</b>\n"
                         f"Quantity: <b>{quantity}</b>\n"
                         f"{coupon_line_en}"
                         f"{quantity_line_en}"
@@ -1182,10 +1185,12 @@ def create_router(
         await state.set_state(PurchaseStates.waiting_for_coupon)
         await state.update_data(product_id=product.id)
         prompt = (
-            f"🏷 <b>Nhập mã giảm giá</b>\n\nSản phẩm: <b>{safe_customer_html(product.name_vi)}</b>\n"
+            f"🏷 <b>Nhập mã giảm giá</b>\n\nSản phẩm: "
+            f"{product_brand_emoji(product.name_vi)} <b>{safe_customer_html(product.name_vi)}</b>\n"
             "Gửi mã giảm giá bạn muốn sử dụng."
             if user.language == "vi"
             else f"🏷 <b>Apply a discount code</b>\n\nProduct: "
+            f"{product_brand_emoji(product.name_en)} "
             f"<b>{safe_customer_html(product.name_en)}</b>\nSend the code you want to use."
         )
         if callback.message:
@@ -1320,13 +1325,15 @@ def create_router(
             return
         text = (
             f"🧮 <b>Chọn số lượng</b>\n\n"
-            f"• Sản phẩm: <b>{safe_customer_html(product.name_vi)}</b>\n"
+            f"• Sản phẩm: {product_brand_emoji(product.name_vi)} "
+            f"<b>{safe_customer_html(product.name_vi)}</b>\n"
             f"• Đơn giá: <b>{format_vnd(display_price)}</b>\n"
             f"• Còn hàng: <b>{stock}</b>\n"
             f"• Tối đa mỗi lần: <b>{maximum}</b>"
             if user.language == "vi"
             else f"🧮 <b>Choose quantity</b>\n\n"
-            f"• Product: <b>{safe_customer_html(product.name_en)}</b>\n"
+            f"• Product: {product_brand_emoji(product.name_en)} "
+            f"<b>{safe_customer_html(product.name_en)}</b>\n"
             f"• Unit price: <b>{format_vnd(display_price)}</b>\n"
             f"• In stock: <b>{stock}</b>\n"
             f"• Maximum per order: <b>{maximum}</b>"
@@ -1807,7 +1814,8 @@ def create_router(
         )
         text = (
             "🧾 <b>Thanh toán sản phẩm</b>\n\n"
-            f"• Sản phẩm: <b>{safe_customer_html(product_name)}</b>\n"
+            f"• Sản phẩm: {product_brand_emoji(product_name)} "
+            f"<b>{safe_customer_html(product_name)}</b>\n"
             f"• Số lượng: <b>{quantity}</b>\n"
             f"{price_breakdown_vi}"
             f"{coupon_line_vi}"
@@ -1822,7 +1830,8 @@ def create_router(
             "\n\n⏳ QR chỉ có hiệu lực 5 phút. Quá hạn bot sẽ xóa tin nhắn và giao dịch thất bại."
             if user.language == "vi"
             else "🧾 <b>Product payment</b>\n\n"
-            f"• Product: <b>{safe_customer_html(product_name)}</b>\n"
+            f"• Product: {product_brand_emoji(product_name)} "
+            f"<b>{safe_customer_html(product_name)}</b>\n"
             f"• Quantity: <b>{quantity}</b>\n"
             f"{price_breakdown_en}"
             f"{coupon_line_en}"

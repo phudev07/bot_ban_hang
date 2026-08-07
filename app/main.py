@@ -23,6 +23,7 @@ from app.broadcasts import (
 )
 from app.canboso_suppliers import create_canboso_client
 from app.config import get_settings
+from app.custom_emoji import AnimatedEmojiBot
 from app.database import Base, DatabaseSessionMiddleware, create_database
 from app.handlers import create_router
 from app.haji_suppliers import (
@@ -1360,7 +1361,7 @@ async def main() -> None:
             "Recorded historical duplicate inventory alerts: count=%s",
             historical_duplicates,
         )
-    bot = Bot(
+    bot = AnimatedEmojiBot(
         token=settings.bot_token.get_secret_value(),
         default=DefaultBotProperties(parse_mode=ParseMode.HTML),
     )
