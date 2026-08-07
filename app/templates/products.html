@@ -1,5 +1,4 @@
 {% extends "base.html" %}
-{% from "_telegram_description_editor.html" import telegram_description_editor %}
 {% block content %}
 <section class="page-intro compact-intro"><div><span>DANH MỤC BÁN HÀNG</span><h2>Giá bán, giá vốn và lợi nhuận trên cùng một dòng.</h2><p>Sản phẩm API lấy giá vốn động từ nguồn; giá bán bằng giá vốn cộng phần chênh bạn đặt.</p></div><div class="quick-actions"><a href="/admin/inventory">Nhập kho local</a><a href="/admin/discounts">Quản lý mã giảm giá</a></div></section>
 <section class="panel form-panel"><div class="panel-head"><div><span>NEW PRODUCT</span><h2>Thêm sản phẩm</h2></div></div>
@@ -15,8 +14,7 @@
     <label class="check"><input type="checkbox" name="sale_notifications_enabled" value="1" checked><span>Bật thông báo Sale tự động</span></label>
     <label class="check"><input type="checkbox" name="stock_notifications_enabled" value="1" checked><span>Bật thông báo hàng về</span></label>
     <label class="check wide"><input type="checkbox" name="notify_stock_without_balance_topup" value="1"><span>Báo hàng về khi tồn API tăng, kể cả không nạp tiền nguồn; mỗi lần báo cách nhau ít nhất 10 phút</span></label>
-    {{ telegram_description_editor('description_vi', 'Mô tả trong bot · Tiếng Việt') }}
-    {{ telegram_description_editor('description_en', 'Mô tả trong bot · Tiếng Anh') }}
+    <label class="wide">Mô tả<textarea name="description_vi" rows="3"></textarea></label><label class="wide">Mô tả tiếng Anh<textarea name="description_en" rows="3"></textarea></label>
     <label class="check wide"><input type="checkbox" name="allow_quantity" value="1" checked><span>Cho phép khách chọn nhiều số lượng</span></label>
     <button class="button primary" type="submit">Thêm sản phẩm</button>
   </form>
@@ -40,5 +38,4 @@
 </tr>
 {% else %}<tr><td colspan="9" class="empty">Không có sản phẩm thuộc bộ lọc “{{ product_filter_label }}”.</td></tr>{% endfor %}
 </tbody></table></div></section>
-{% include "_telegram_description_editor_script.html" %}
 {% endblock %}
