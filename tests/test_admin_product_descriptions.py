@@ -1,10 +1,13 @@
 import asyncio
+from datetime import UTC, datetime
 from types import SimpleNamespace
 
+from aiogram.enums import ChatType, MessageEntityType
+from aiogram.types import Chat, Message, MessageEntity, User as TelegramUser
 from cryptography.fernet import Fernet
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
-from app.admin import create_admin_router
+from app.admin import custom_emoji_ids, create_admin_router
 from app.config import Settings
 from app.database import Base
 from app.models import Category, Product
@@ -57,6 +60,33 @@ class FakeCallback:
 
     async def answer(self, text: str = "", **kwargs: object) -> None:
         self.answers.append((text, kwargs))
+
+
+def test_custom_emoji_ids_extracts_and_deduplicates_telegram_entities() -> None:
+    emoji_id = "6318653047178274387"
+    message = Message(
+        message_id=1,
+        date=datetime.now(UTC),
+        chat=Chat(id=42, type=ChatType.PRIVATE),
+        from_user=TelegramUser(id=42, is_bot=False, first_name="Admin"),
+        text="🤖🤖",
+        entities=[
+            MessageEntity(
+                type=MessageEntityType.CUSTOM_EMOJI,
+                offset=0,
+                length=2,
+                custom_emoji_id=emoji_id,
+            ),
+            MessageEntity(
+                type=MessageEntityType.CUSTOM_EMOJI,
+                offset=2,
+                length=2,
+                custom_emoji_id=emoji_id,
+            ),
+        ],
+    )
+
+    assert custom_emoji_ids(message) == [emoji_id]
 
 
 def test_admin_sends_formatted_telegram_description_with_custom_emoji(tmp_path) -> None:

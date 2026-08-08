@@ -1,8 +1,10 @@
 from html import escape
+import logging
 
 from aiogram import Bot, F, Router
+from aiogram.enums import MessageEntityType
 from aiogram.exceptions import TelegramBadRequest
-from aiogram.filters import Command
+from aiogram.filters import BaseFilter, Command
 from aiogram.fsm.context import FSMContext
 from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message
 from sqlalchemy import func, select
@@ -21,6 +23,33 @@ from app.utils import (
     parse_vnd,
     safe_customer_telegram_html,
 )
+
+
+logger = logging.getLogger(__name__)
+
+
+def custom_emoji_ids(message: Message) -> list[str]:
+    entities = [*(message.entities or []), *(message.caption_entities or [])]
+    return list(
+        dict.fromkeys(
+            entity.custom_emoji_id
+            for entity in entities
+            if entity.type == MessageEntityType.CUSTOM_EMOJI
+            and entity.custom_emoji_id
+        )
+    )
+
+
+class AdminCustomEmojiFilter(BaseFilter):
+    def __init__(self, admin_ids: set[int]) -> None:
+        self.admin_ids = admin_ids
+
+    async def __call__(self, message: Message) -> bool:
+        return bool(
+            message.from_user
+            and message.from_user.id in self.admin_ids
+            and custom_emoji_ids(message)
+        )
 
 
 def create_admin_router(settings: Settings, cipher: SecretCipher) -> Router:
@@ -706,6 +735,21 @@ def create_admin_router(settings: Settings, cipher: SecretCipher) -> Router:
             f"{escape(product.name_vi)} với vốn {format_vnd(cost_amount)}/món; "
             f"bỏ qua {duplicate_check.duplicate_count} món nghi ngờ/trùng. "
             "Chi tiết nằm tại Admin → Nhập kho."
+        )
+
+    @router.message(AdminCustomEmojiFilter(set(settings.admin_ids)))
+    async def capture_admin_custom_emoji(message: Message) -> None:
+        emoji_ids = custom_emoji_ids(message)
+        logger.info(
+            "Admin custom emoji captured: user_id=%s emoji_ids=%s",
+            message.from_user.id if message.from_user else None,
+            ",".join(emoji_ids),
+        )
+        formatted_ids = "\n".join(f"<code>{emoji_id}</code>" for emoji_id in emoji_ids)
+        await message.answer(
+            "✅ <b>Đã nhận emoji Telegram</b>\n\n"
+            f"Custom emoji ID:\n{formatted_ids}\n\n"
+            "Bạn có thể gửi ID này để thay emoji thương hiệu trong bot."
         )
 
     return router
