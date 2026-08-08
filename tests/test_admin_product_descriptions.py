@@ -63,7 +63,7 @@ class FakeCallback:
 
 
 def test_custom_emoji_ids_extracts_and_deduplicates_telegram_entities() -> None:
-    emoji_id = "6318653047178274387"
+    emoji_id = "5310259124817134249"
     message = Message(
         message_id=1,
         date=datetime.now(UTC),

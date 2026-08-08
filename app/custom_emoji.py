@@ -9,7 +9,7 @@ from aiogram.types import InlineKeyboardMarkup, ReplyKeyboardMarkup
 # Brand emoji are owned by the shop bot; functional emoji use either that pack or
 # Telegram's animated topic-icon set. Keeping the IDs here makes all bot surfaces
 # consistent without storing media on the VPS.
-CHATGPT_EMOJI_ID = "6318653047178274387"
+CHATGPT_EMOJI_ID = "5310259124817134249"
 NETFLIX_EMOJI_ID = "5318911503938634641"
 GOOGLE_EMOJI_ID = "6319109310144062723"
 GEMINI_EMOJI_ID = "6212797771372563847"
