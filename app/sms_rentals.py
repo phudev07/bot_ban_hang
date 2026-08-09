@@ -16,8 +16,8 @@ from app.wallet_ledger import apply_wallet_change
 ACTIVE_SMS_STATUSES = ("requesting", "pending", "unknown")
 
 SMS_SOURCE_BY_PROVIDER = {"autosms": "1", "rentsim": "855"}
-SMS_COUNTRY_VI = {"autosms": "+1", "rentsim": "+855"}
-SMS_COUNTRY_EN = {"autosms": "+1", "rentsim": "+855"}
+SMS_COUNTRY_VI = {"autosms": "+1 American", "rentsim": "+855 Cambodia"}
+SMS_COUNTRY_EN = {"autosms": "+1 American", "rentsim": "+855 Cambodia"}
 
 
 class SmsProviderClient(Protocol):

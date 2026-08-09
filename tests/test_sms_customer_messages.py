@@ -78,15 +78,15 @@ def test_sms_storefront_uses_shop_neutral_status(language: str) -> None:
 def test_multi_source_sms_storefront_names_countries_without_providers(language: str) -> None:
     sources = [
         SimpleNamespace(
-            country_vi="+1",
-            country_en="+1",
+            country_vi="+1 American",
+            country_en="+1 American",
             connected=True,
             effective_stock=5,
             sale_price=2_000,
         ),
         SimpleNamespace(
-            country_vi="+855",
-            country_en="+855",
+            country_vi="+855 Cambodia",
+            country_en="+855 Cambodia",
             connected=False,
             effective_stock=0,
             sale_price=2_000,
@@ -102,6 +102,10 @@ def test_multi_source_sms_storefront_names_countries_without_providers(language:
 
     assert_upstream_details_hidden(text)
     assert "2.000" in text
+    assert "American" in text
+    assert "Cambodia" in text
+    assert "+1" not in text
+    assert "+855" not in text
 
 
 @pytest.mark.parametrize("language", ["vi", "en"])

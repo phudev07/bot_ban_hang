@@ -23,6 +23,8 @@ def storefront_text(
         source_lines = []
         for source in sources:
             country = source.country_en if language == "en" else source.country_vi
+            # The stock summary stays compact; dialing codes are shown on rent buttons.
+            country_name = country.split(" ", 1)[1] if country.startswith("+") else country
             if source.connected and source.effective_stock > 0:
                 availability = (
                     f"{source.effective_stock} available"
@@ -32,7 +34,7 @@ def storefront_text(
             else:
                 availability = "unavailable" if language == "en" else "tạm hết số"
             source_lines.append(
-                f"• <b>{escape(country)}</b>: {format_vnd(source.sale_price)} · {availability}"
+                f"• <b>{escape(country_name)}</b>: {format_vnd(source.sale_price)} · {availability}"
             )
         source_text = "\n".join(source_lines)
         if language == "en":
