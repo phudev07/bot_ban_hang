@@ -328,8 +328,11 @@ after updating `.env`:
 ```powershell
 $key = (Get-Clipboard -Raw).Trim()
 $encodedKey = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($key))
-$encodedKey | ssh -i "$HOME\.ssh\codex_vps" root@160.191.243.91 `
-  "install -m 600 /dev/stdin /tmp/autosms-key.b64"
+$temporaryKey = Join-Path $env:TEMP "autosms-key.b64"
+[IO.File]::WriteAllText($temporaryKey, $encodedKey, [Text.Encoding]::ASCII)
+scp -q -i "$HOME\.ssh\codex_vps" $temporaryKey `
+  "root@160.191.243.91:/tmp/autosms-key.b64"
+Remove-Item -LiteralPath $temporaryKey
 
 ssh -i "$HOME\.ssh\codex_vps" root@160.191.243.91 `
   "cd /opt/telegram-sepay-shop && python3 deploy/set_autosms_key.py .env /tmp/autosms-key.b64 && docker compose up -d --force-recreate app"
