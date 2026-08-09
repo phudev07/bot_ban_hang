@@ -659,6 +659,13 @@ class SmsRental(Base):
         Index("ix_sms_rentals_status_last_checked", "status", "last_checked_at", "id"),
         Index("ix_sms_rentals_status_requested", "status", "requested_at", "id"),
         Index("ix_sms_rentals_user_requested", "user_id", "requested_at", "id"),
+        Index(
+            "ix_sms_rentals_provider_status_checked",
+            "provider",
+            "status",
+            "last_checked_at",
+            "id",
+        ),
     )
 
     id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)

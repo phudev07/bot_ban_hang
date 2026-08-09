@@ -22,6 +22,7 @@ from sqlalchemy import String, case, cast, delete, func, literal, or_, select, u
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from sqlalchemy.orm import aliased
 
+from app.autosms import AutoSmsClient
 from app.canboso_suppliers import CanbosoClient
 from app.config import Settings
 from app.custom_emoji import product_brand_emoji
@@ -75,7 +76,12 @@ from app.services import (
     supplier_client_for_product,
 )
 from app.price_alerts import release_price_lock_if_inventory_empty
-from app.sms_rentals import SmsAvailability, sms_availability
+from app.sms_rentals import (
+    SmsAvailability,
+    sms_availability,
+    sms_country_name,
+    sms_source_key,
+)
 from app.stock_alerts import queue_inventory_stock_alert, stock_alert_mode
 from app.supplier_audit import PROVIDER, reconcile_supplier_balance, record_supplier_purchase
 from app.suppliers import (
@@ -696,6 +702,7 @@ def create_dashboard_router(
     canboso_client: CanbosoClient | None = None,
     nce_client: ExternalSupplierClient | None = None,
     haji_client: HajiClient | None = None,
+    autosms_client: AutoSmsClient | None = None,
 ) -> APIRouter:
     router = APIRouter()
     route_cache: dict[tuple[str, ...], tuple[float, SupplierRouteFetch]] = {}
@@ -5357,6 +5364,7 @@ def create_dashboard_router(
     async def sms_rentals_page(
         request: Request,
         status: str = "all",
+        provider: str = "all",
         q: str = "",
         page: int = 1,
     ) -> Response:
@@ -5367,8 +5375,13 @@ def create_dashboard_router(
             if status in {"all", "pending", "unknown", "success", "refunded"}
             else "all"
         )
+        selected_provider = (
+            provider if provider in {"all", "autosms", "rentsim"} else "all"
+        )
         search = q.strip()[:100]
         rental_conditions = []
+        if selected_provider != "all":
+            rental_conditions.append(SmsRental.provider == selected_provider)
         if selected_status == "pending":
             rental_conditions.append(
                 SmsRental.status.in_(("requesting", "pending"))
@@ -5385,6 +5398,7 @@ def create_dashboard_router(
                     SmsRental.provider_order_id.ilike(pattern),
                     SmsRental.phone_number.ilike(pattern),
                     SmsRental.otp_code.ilike(pattern),
+                    SmsRental.provider.ilike(pattern),
                     User.full_name.ilike(pattern),
                     User.username.ilike(pattern),
                 )
@@ -5463,20 +5477,45 @@ def create_dashboard_router(
                 )
                 or 0
             )
-        availability = (
-            SmsAvailability(
-                False,
-                unit_cost=settings.rentsim_fallback_price,
-                sale_price=settings.rentsim_fallback_price + settings.rentsim_markup,
-                error_code="MAINTENANCE",
-            )
-            if maintenance_enabled
-            else await sms_availability(
+        source_configs = [
+            (
+                "autosms",
+                autosms_client,
+                settings.autosms_markup,
+                settings.autosms_fallback_price,
+            ),
+            (
+                "rentsim",
                 rentsim_client,
                 settings.rentsim_markup,
-                fallback_unit_cost=settings.rentsim_fallback_price,
-            )
-        )
+                settings.rentsim_fallback_price,
+            ),
+        ]
+        availabilities: list[SmsAvailability] = []
+        for source_provider, source_client, markup, fallback_price in source_configs:
+            if source_client is None:
+                continue
+            if maintenance_enabled:
+                availabilities.append(
+                    SmsAvailability(
+                        False,
+                        provider=source_provider,
+                        source_key=sms_source_key(source_provider),
+                        country_vi=sms_country_name(source_provider, "vi"),
+                        country_en=sms_country_name(source_provider, "en"),
+                        unit_cost=fallback_price,
+                        sale_price=fallback_price + markup,
+                        error_code="MAINTENANCE",
+                    )
+                )
+            else:
+                availabilities.append(
+                    await sms_availability(
+                        source_client,
+                        markup,
+                        fallback_unit_cost=fallback_price,
+                    )
+                )
         total, pending, unknown, success, refunded, users, revenue, cost, refund_total = (
             int(value) for value in metrics
         )
@@ -5491,8 +5530,9 @@ def create_dashboard_router(
                 selected_status=selected_status,
                 search=search,
                 pager=pager,
-                availability=availability,
+                availabilities=availabilities,
                 maintenance_enabled=maintenance_enabled,
+                selected_provider=selected_provider,
                 stats={
                     "total": total,
                     "pending": pending,

@@ -13,6 +13,7 @@ from redis.asyncio import Redis
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from starlette.middleware.sessions import SessionMiddleware
 
+from app.autosms import AutoSmsClient
 from app.config import Settings
 from app.canboso_suppliers import CanbosoClient
 from app.dashboard import create_dashboard_router
@@ -61,6 +62,7 @@ def create_api(
     canboso_client: CanbosoClient | None = None,
     nce_client: ExternalSupplierClient | None = None,
     haji_client: HajiClient | None = None,
+    autosms_client: AutoSmsClient | None = None,
 ) -> FastAPI:
     owned_api_redis = api_redis is None
     api_redis_client = api_redis or Redis.from_url(settings.redis_url, decode_responses=True)
@@ -236,6 +238,7 @@ def create_api(
                 canboso_client=canboso_client,
                 nce_client=nce_client,
                 haji_client=haji_client,
+                autosms_client=autosms_client,
             )
         )
 
@@ -413,7 +416,7 @@ def create_api(
                     "Số dư đã được cập nhật, bạn có thể mua hàng ngay.",
                     reply_markup=main_menu(
                         result.language,
-                        sms_enabled=rentsim_client is not None,
+                        sms_enabled=(rentsim_client is not None or autosms_client is not None),
                     ),
                 )
             except Exception:
@@ -478,7 +481,7 @@ def create_api(
                     text,
                     reply_markup=main_menu(
                         result.language,
-                        sms_enabled=rentsim_client is not None,
+                        sms_enabled=(rentsim_client is not None or autosms_client is not None),
                     ),
                 )
             except Exception:
@@ -525,7 +528,7 @@ def create_api(
                     rejected_message,
                     reply_markup=main_menu(
                         result.language,
-                        sms_enabled=rentsim_client is not None,
+                        sms_enabled=(rentsim_client is not None or autosms_client is not None),
                     ),
                 )
             except Exception:

@@ -1,3 +1,6 @@
+from dataclasses import dataclass
+from urllib.parse import quote
+
 from aiogram.types import (
     InlineKeyboardButton,
     InlineKeyboardMarkup,
@@ -5,11 +8,20 @@ from aiogram.types import (
     ReplyKeyboardMarkup,
 )
 from aiogram.utils.keyboard import InlineKeyboardBuilder
-from urllib.parse import quote
 
 from app.i18n import tr
 from app.models import Category, Order, Preorder, Product
 from app.utils import format_vnd, sanitize_customer_text
+
+
+@dataclass(frozen=True)
+class SmsRentalSourceButton:
+    key: str
+    country_vi: str
+    country_en: str
+    price: int
+    stock: int
+    connected: bool
 
 
 def quick_access_keyboard(language: str) -> ReplyKeyboardMarkup:
@@ -193,13 +205,33 @@ def preorder_detail_menu(preorder: Preorder, language: str) -> InlineKeyboardMar
 
 def sms_rental_menu(
     language: str,
-    price: int,
-    stock: int,
+    price: int = 0,
+    stock: int = 0,
     *,
-    connected: bool,
+    connected: bool = False,
+    sources: list[SmsRentalSourceButton] | None = None,
 ) -> InlineKeyboardMarkup:
     rows: list[list[InlineKeyboardButton]] = []
-    if connected and stock > 0:
+    if sources is not None:
+        for source in sources:
+            if not source.connected or source.stock <= 0:
+                continue
+            country = source.country_vi if language == "vi" else source.country_en
+            flag = "🇺🇸" if source.key == "1" else "🇰🇭"
+            rent_label = (
+                f"{flag} Thuê số {country} · {format_vnd(source.price)}"
+                if language == "vi"
+                else f"{flag} Rent {country} number · {format_vnd(source.price)}"
+            )
+            rows.append(
+                [
+                    InlineKeyboardButton(
+                        text=rent_label,
+                        callback_data=f"sms:rent:{source.key}",
+                    )
+                ]
+            )
+    elif connected and stock > 0:
         rent_label = (
             f"📲 Thuê số ngay · {format_vnd(price)}"
             if language == "vi"
@@ -218,7 +250,11 @@ def sms_rental_menu(
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
-def sms_waiting_menu(language: str, price: int) -> InlineKeyboardMarkup:
+def sms_waiting_menu(
+    language: str,
+    price: int,
+    source_key: str | None = None,
+) -> InlineKeyboardMarkup:
     rent_label = (
         f"📲 Thuê số khác · {format_vnd(price)}"
         if language == "vi"
@@ -226,7 +262,14 @@ def sms_waiting_menu(language: str, price: int) -> InlineKeyboardMarkup:
     )
     return InlineKeyboardMarkup(
         inline_keyboard=[
-            [InlineKeyboardButton(text=rent_label, callback_data="sms:rent")],
+            [
+                InlineKeyboardButton(
+                    text=rent_label,
+                    callback_data=(
+                        f"sms:rent:{source_key}" if source_key else "sms:rent"
+                    ),
+                )
+            ],
             [
                 InlineKeyboardButton(
                     text="🧾 Lịch sử thuê" if language == "vi" else "🧾 Rental history",

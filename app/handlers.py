@@ -11,6 +11,7 @@ from aiogram.types import CallbackQuery, ErrorEvent, Message, ReplyKeyboardRemov
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+from app.autosms import AutoSmsClient
 from app.chat_cleanup import delete_recent_messages
 from app.config import Settings
 from app.custom_emoji import product_brand_emoji
@@ -44,6 +45,7 @@ from app.keyboards import (
     quick_access_keyboard,
     quantity_menu,
     referral_menu,
+    SmsRentalSourceButton,
     sms_rental_menu,
     sms_waiting_menu,
     warehouse_api_menu,
@@ -91,6 +93,7 @@ from app.sms_rentals import (
     recent_sms_rentals,
     rent_sms_number,
     sms_availability,
+    sms_country_name,
 )
 from app.states import DepositStates, PreorderStates, PurchaseStates
 from app.suppliers import (
@@ -294,6 +297,7 @@ def create_router(
     canboso_client: ExternalSupplierClient | None = None,
     nce_client: ExternalSupplierClient | None = None,
     haji_client: HajiClient | None = None,
+    autosms_client: AutoSmsClient | None = None,
 ) -> Router:
     router = Router(name="customer")
     bot_username_cache: str | None = None
@@ -301,6 +305,52 @@ def create_router(
     warehouse_docs_url = (
         f"{settings.shop_api_base_url.rstrip('/').removesuffix('/v1')}/docs"
     )
+    sms_sources = {
+        key: value
+        for key, value in (("1", autosms_client), ("855", rentsim_client))
+        if value is not None
+    }
+    sms_enabled = bool(sms_sources)
+
+    def sms_source_settings(source_key: str) -> tuple[int, int, int]:
+        if source_key == "1":
+            return (
+                settings.autosms_markup,
+                settings.autosms_fallback_price,
+                settings.autosms_cooldown_seconds,
+            )
+        return (
+            settings.rentsim_markup,
+            settings.rentsim_fallback_price,
+            settings.rentsim_cooldown_seconds,
+        )
+
+    async def current_sms_availabilities(*, force: bool = False):
+        values = []
+        for source_key, client in sms_sources.items():
+            markup, fallback_price, _ = sms_source_settings(source_key)
+            values.append(
+                await sms_availability(
+                    client,
+                    markup,
+                    fallback_unit_cost=fallback_price,
+                    force=force,
+                )
+            )
+        return values
+
+    def sms_source_buttons(availabilities) -> list[SmsRentalSourceButton]:
+        return [
+            SmsRentalSourceButton(
+                key=item.source_key,
+                country_vi=item.country_vi,
+                country_en=item.country_en,
+                price=item.sale_price,
+                stock=item.effective_stock,
+                connected=item.connected,
+            )
+            for item in availabilities
+        ]
 
     async def bot_username(bot: Bot) -> str:
         nonlocal bot_username_cache
@@ -473,7 +523,7 @@ def create_router(
             message,
             user,
             settings,
-            sms_enabled=rentsim_client is not None,
+            sms_enabled=sms_enabled,
         )
 
     @router.message(Command("muanhanh"))
@@ -505,7 +555,7 @@ def create_router(
             home_text(user, settings),
             reply_markup=main_menu(
                 user.language,
-                sms_enabled=rentsim_client is not None,
+                sms_enabled=sms_enabled,
             ),
             disable_web_page_preview=True,
         )
@@ -600,7 +650,7 @@ def create_router(
                 home_text(user, settings),
                 reply_markup=main_menu(
                     user.language,
-                    sms_enabled=rentsim_client is not None,
+                    sms_enabled=sms_enabled,
                 ),
                 disable_web_page_preview=True,
             )
@@ -1049,22 +1099,22 @@ def create_router(
                     text,
                     reply_markup=sms_rental_menu(
                         user.language,
-                        settings.rentsim_fallback_price + settings.rentsim_markup,
-                        0,
-                        connected=False,
+                        sources=[],
                     ),
                 )
             return
-        availability = await sms_availability(
-            rentsim_client,
-            settings.rentsim_markup,
-            fallback_unit_cost=settings.rentsim_fallback_price,
-        )
+        availabilities = await current_sms_availabilities()
+        first = availabilities[0] if availabilities else None
         text = storefront_text(
             user.language,
-            connected=availability.connected,
-            sale_price=availability.sale_price,
-            effective_stock=availability.effective_stock,
+            connected=any(item.connected for item in availabilities),
+            sale_price=(
+                first.sale_price
+                if first is not None
+                else settings.autosms_fallback_price + settings.autosms_markup
+            ),
+            effective_stock=sum(item.effective_stock for item in availabilities),
+            sources=availabilities,
         )
         if callback.message:
             await edit_or_send_text(
@@ -1072,13 +1122,11 @@ def create_router(
                 text,
                 reply_markup=sms_rental_menu(
                     user.language,
-                    availability.sale_price,
-                    availability.effective_stock,
-                    connected=availability.connected,
+                    sources=sms_source_buttons(availabilities),
                 ),
             )
 
-    @router.callback_query(F.data == "sms:rent")
+    @router.callback_query(F.data.startswith("sms:rent"))
     async def rent_sms(
         callback: CallbackQuery,
         session: AsyncSession,
@@ -1104,18 +1152,59 @@ def create_router(
                     ),
                     reply_markup=sms_rental_menu(
                         user.language,
-                        settings.rentsim_fallback_price + settings.rentsim_markup,
-                        0,
-                        connected=False,
+                        sources=[],
                     ),
                 )
             return
+        parts = (callback.data or "").split(":")
+        source_key = parts[2] if len(parts) >= 3 else ""
+        client = sms_sources.get(source_key)
+        if client is None:
+            availabilities = await current_sms_availabilities()
+            selected = next(
+                (
+                    item
+                    for item in availabilities
+                    if item.connected and item.effective_stock > 0
+                ),
+                None,
+            )
+            if selected is None:
+                await callback.answer(
+                    (
+                        "Hiện cả hai khu vực đều tạm hết số."
+                        if user.language == "vi"
+                        else "Both locations are currently out of numbers."
+                    ),
+                    show_alert=True,
+                )
+                if callback.message:
+                    await edit_or_send_text(
+                        callback.message,
+                        storefront_text(
+                            user.language,
+                            connected=False,
+                            sale_price=settings.autosms_fallback_price
+                            + settings.autosms_markup,
+                            effective_stock=0,
+                            sources=availabilities,
+                        ),
+                        reply_markup=sms_rental_menu(
+                            user.language,
+                            sources=sms_source_buttons(availabilities),
+                        ),
+                    )
+                return
+            source_key = selected.source_key
+            client = sms_sources[source_key]
+        markup, _fallback_price, cooldown_seconds = sms_source_settings(source_key)
+        country = sms_country_name(client.provider, user.language)
         await callback.answer("⏳ Đang lấy số...")
         loading_text = (
-            "⏳ <b>Getting a ChatGPT number...</b>\n\n"
+            f"⏳ <b>Getting a ChatGPT number with country code {escape(country)}...</b>\n\n"
             "The bot is reserving your rental. Please wait and do not tap the rent button again."
             if user.language == "en"
-            else "⏳ <b>Đang lấy số ChatGPT...</b>\n\n"
+            else f"⏳ <b>Đang lấy số ChatGPT mã {escape(country)}...</b>\n\n"
             "Bot đang kết nối nguồn và giữ lượt thuê cho bạn. Vui lòng chờ, không bấm lại nút thuê số."
         )
         if callback.message:
@@ -1123,9 +1212,9 @@ def create_router(
         result = await rent_sms_number(
             session_factory,
             user.telegram_id,
-            rentsim_client,
-            markup=settings.rentsim_markup,
-            cooldown_seconds=settings.rentsim_cooldown_seconds,
+            client,
+            markup=markup,
+            cooldown_seconds=cooldown_seconds,
             referral_commission_percent=settings.referral_commission_percent,
         )
         if not result.ok:
@@ -1149,7 +1238,7 @@ def create_router(
             "📲 <b>SMS number rented</b>\n\n"
             f"• Order: <code>{escape(result.shop_order_code or '')}</code>\n"
             "• Service: <b>ChatGPT</b>\n"
-            "• Country: <b>Cambodia</b>\n"
+            f"• Country code: <b>{escape(country)}</b>\n"
             f"• Number: <code>{escape(result.phone_number)}</code>\n"
             f"• Charged: <b>{format_vnd(result.sale_amount)}</b>\n"
             f"• Wallet balance: <b>{format_vnd(result.balance)}</b>"
@@ -1157,7 +1246,7 @@ def create_router(
             else "📲 <b>Đã thuê số nhận SMS</b>\n\n"
             f"• Mã đơn: <code>{escape(result.shop_order_code or '')}</code>\n"
             "• Dịch vụ: <b>ChatGPT</b>\n"
-            "• Quốc gia: <b>Cambodia</b>\n"
+            f"• Mã quốc gia: <b>{escape(country)}</b>\n"
             f"• Số điện thoại: <code>{escape(result.phone_number)}</code>\n"
             f"• Đã trừ: <b>{format_vnd(result.sale_amount)}</b>\n"
             f"• Số dư ví: <b>{format_vnd(result.balance)}</b>"
@@ -1186,7 +1275,11 @@ def create_router(
             if callback.message:
                 await callback.message.answer(
                     otp_text,
-                    reply_markup=sms_waiting_menu(user.language, result.sale_amount),
+                    reply_markup=sms_waiting_menu(
+                        user.language,
+                        result.sale_amount,
+                        source_key,
+                    ),
                 )
             return
         waiting_text = (
@@ -1205,7 +1298,11 @@ def create_router(
         if callback.message:
             waiting_message = await callback.message.answer(
                 waiting_text,
-                reply_markup=sms_waiting_menu(user.language, result.sale_amount),
+                reply_markup=sms_waiting_menu(
+                    user.language,
+                    result.sale_amount,
+                    source_key,
+                ),
             )
             attached = await attach_sms_waiting_message(
                 session_factory,
@@ -1250,21 +1347,17 @@ def create_router(
                         "unknown": "under review",
                     }.get(rental.status, rental.status)
                 code = f" · OTP {escape(rental.otp_code)}" if rental.otp_code else ""
+                country = sms_country_name(rental.provider, user.language)
                 lines.append(
                     f"• <code>{escape(rental.shop_order_code or f'SMS{rental.id}')}</code> · "
-                    f"<code>{escape(rental.phone_number or '—')}</code> · {status}{code}"
+                    f"{escape(country)} · <code>{escape(rental.phone_number or '—')}</code> · "
+                    f"{status}{code}"
                 )
             title = "🧾 <b>Lịch sử thuê số</b>" if user.language == "vi" else "🧾 <b>SMS rental history</b>"
             text = f"{title}\n\n" + "\n".join(lines)
         maintenance_enabled = await sms_rental_maintenance_enabled(session)
-        availability = (
-            await sms_availability(
-                rentsim_client,
-                settings.rentsim_markup,
-                fallback_unit_cost=settings.rentsim_fallback_price,
-            )
-            if not maintenance_enabled
-            else None
+        availabilities = (
+            await current_sms_availabilities() if not maintenance_enabled else []
         )
         if callback.message:
             await edit_or_send_text(
@@ -1272,15 +1365,7 @@ def create_router(
                 text,
                 reply_markup=sms_rental_menu(
                     user.language,
-                    (
-                        availability.sale_price
-                        if availability is not None
-                        else settings.rentsim_fallback_price + settings.rentsim_markup
-                    ),
-                    availability.effective_stock if availability is not None else 0,
-                    connected=(
-                        availability.connected if availability is not None else False
-                    ),
+                    sources=sms_source_buttons(availabilities),
                 ),
             )
 
@@ -2739,7 +2824,7 @@ def create_router(
                 home_text(user, settings),
                 reply_markup=main_menu(
                     user.language,
-                    sms_enabled=rentsim_client is not None,
+                    sms_enabled=sms_enabled,
                 ),
                 disable_web_page_preview=True,
             )
@@ -2766,7 +2851,7 @@ def create_router(
                 home_text(user, settings),
                 reply_markup=main_menu(
                     user.language,
-                    sms_enabled=rentsim_client is not None,
+                    sms_enabled=sms_enabled,
                 ),
                 disable_web_page_preview=True,
             )

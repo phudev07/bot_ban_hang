@@ -100,7 +100,7 @@ and binds port 8080 only to localhost. Caddy is the public reverse proxy.
   can show both Sumi and Le Hai.
 - Supplier cost is saved at delivery time. Dashboard profit is revenue minus cost minus
   referral commission.
-- Sumi, Le Hai, Canboso, Haji, and RentSim keys live only in production `.env`.
+- Sumi, Le Hai, Canboso, Haji, RentSim, and AutoSMS keys live only in production `.env`.
 - The discontinued Codex/Claude catalog is archived at startup. Historical order rows stay
   intact for support and accounting, but the products are not shown or sold.
 - Warehouse API partners receive shop product IDs and shop selling prices, never supplier
@@ -320,6 +320,23 @@ ssh -i "$HOME\.ssh\codex_vps" root@160.191.243.91 `
 
 Use `GET /api/v2/me` and `GET /api/v2/catalog` for verification. Do not call
 `POST /api/v2/orders` as a smoke test because it creates a real paid order.
+
+Enable or rotate AutoSMS from the Windows clipboard without printing the key. The helper
+accepts a temporary base64 file, enables the US `+1` ChatGPT source, and deletes that file
+after updating `.env`:
+
+```powershell
+$key = (Get-Clipboard -Raw).Trim()
+$encodedKey = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($key))
+$encodedKey | ssh -i "$HOME\.ssh\codex_vps" root@160.191.243.91 `
+  "install -m 600 /dev/stdin /tmp/autosms-key.b64"
+
+ssh -i "$HOME\.ssh\codex_vps" root@160.191.243.91 `
+  "cd /opt/telegram-sepay-shop && python3 deploy/set_autosms_key.py .env /tmp/autosms-key.b64 && docker compose up -d --force-recreate app"
+```
+
+Verify only with `GET https://autosms.site/api/balance?key=...` or the SMS dashboard.
+Do not call `/api/buy-number/us/chatgpt` as a smoke test because it creates a paid rental.
 
 ## 11. Caddy and Cloudflare
 

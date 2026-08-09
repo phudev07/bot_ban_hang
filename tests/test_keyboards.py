@@ -6,6 +6,8 @@ from app.keyboards import (
     purchase_payment_options,
     quick_access_keyboard,
     quantity_menu,
+    sms_rental_menu,
+    SmsRentalSourceButton,
     warehouse_api_menu,
 )
 from app.models import Order, Product
@@ -98,6 +100,54 @@ def test_main_menu_hides_sms_until_provider_is_configured() -> None:
     callbacks = [button.callback_data for row in keyboard.inline_keyboard for button in row]
 
     assert "menu:sms" not in callbacks
+
+
+def test_sms_menu_shows_one_button_per_available_country() -> None:
+    keyboard = sms_rental_menu(
+        "vi",
+        sources=[
+            SmsRentalSourceButton("1", "+1", "+1", 2_000, 5, True),
+            SmsRentalSourceButton("855", "+855", "+855", 2_000, 3, True),
+        ],
+    )
+    buttons = [button for row in keyboard.inline_keyboard for button in row]
+    callbacks = [button.callback_data for button in buttons]
+
+    assert callbacks[:2] == ["sms:rent:1", "sms:rent:855"]
+    assert "🇺🇸 Thuê số +1 · 2.000đ" == buttons[0].text
+    assert "🇰🇭 Thuê số +855 · 2.000đ" == buttons[1].text
+
+
+def test_sms_menu_hides_each_country_without_available_stock() -> None:
+    one_available = sms_rental_menu(
+        "vi",
+        sources=[
+            SmsRentalSourceButton("1", "+1", "+1", 2_000, 0, True),
+            SmsRentalSourceButton("855", "+855", "+855", 2_000, 2, True),
+        ],
+    )
+    none_available = sms_rental_menu(
+        "vi",
+        sources=[
+            SmsRentalSourceButton("1", "+1", "+1", 2_000, 0, True),
+            SmsRentalSourceButton("855", "+855", "+855", 2_000, 0, False),
+        ],
+    )
+
+    one_callbacks = [
+        button.callback_data
+        for row in one_available.inline_keyboard
+        for button in row
+    ]
+    none_callbacks = [
+        button.callback_data
+        for row in none_available.inline_keyboard
+        for button in row
+    ]
+    assert "sms:rent:1" not in one_callbacks
+    assert "sms:rent:855" in one_callbacks
+    assert "sms:rent:1" not in none_callbacks
+    assert "sms:rent:855" not in none_callbacks
 
 
 def test_quick_access_keyboard_is_one_persistent_row() -> None:

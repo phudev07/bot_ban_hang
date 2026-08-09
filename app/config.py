@@ -111,6 +111,20 @@ class Settings(BaseSettings):
     rentsim_request_recovery_seconds: int = 120
     rentsim_pending_alert_seconds: int = 900
 
+    autosms_enabled: bool = False
+    autosms_base_url: str = "https://autosms.site"
+    autosms_api_key: SecretStr = SecretStr("")
+    autosms_country_id: str = "us"
+    autosms_service_id: str = "chatgpt"
+    autosms_markup: int = 1_000
+    autosms_fallback_price: int = 1_000
+    autosms_timeout_seconds: float = 15
+    autosms_poll_seconds: int = 5
+    autosms_cooldown_seconds: int = 60
+    autosms_snapshot_cache_seconds: int = 10
+    autosms_request_recovery_seconds: int = 120
+    autosms_pending_alert_seconds: int = 900
+
     shop_api_enabled: bool = True
     shop_api_base_url: str = "https://token.vietshare.site/v1"
     shop_api_rate_limit_per_minute: int = 60
@@ -218,6 +232,24 @@ class Settings(BaseSettings):
             raise ValueError("RentSim request recovery must be between 60 and 600 seconds")
         if not 60 <= self.rentsim_pending_alert_seconds <= 86_400:
             raise ValueError("RentSim pending alert must be between 60 seconds and 24 hours")
+        if self.autosms_enabled and not self.autosms_api_key.get_secret_value():
+            raise ValueError("AutoSMS is enabled but API key is missing")
+        if (
+            self.autosms_markup < 0
+            or self.autosms_fallback_price <= 0
+            or self.autosms_timeout_seconds <= 0
+        ):
+            raise ValueError("AutoSMS price or timeout configuration is invalid")
+        if not 2 <= self.autosms_poll_seconds <= 60:
+            raise ValueError("AutoSMS polling interval must be between 2 and 60 seconds")
+        if not 10 <= self.autosms_cooldown_seconds <= 600:
+            raise ValueError("AutoSMS cooldown must be between 10 and 600 seconds")
+        if not 1 <= self.autosms_snapshot_cache_seconds <= 60:
+            raise ValueError("AutoSMS snapshot cache must be between 1 and 60 seconds")
+        if not 60 <= self.autosms_request_recovery_seconds <= 600:
+            raise ValueError("AutoSMS request recovery must be between 60 and 600 seconds")
+        if not 60 <= self.autosms_pending_alert_seconds <= 86_400:
+            raise ValueError("AutoSMS pending alert must be between 60 seconds and 24 hours")
         if self.shop_api_rate_limit_per_minute < 1:
             raise ValueError("Shop API rate limit must be positive")
         if self.shop_api_signature_tolerance_seconds < 30:

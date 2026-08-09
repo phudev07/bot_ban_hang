@@ -15,6 +15,7 @@ from sqlalchemy import delete, select, text
 
 from app.admin import create_admin_router
 from app.api import create_api
+from app.autosms import create_autosms_client
 from app.broadcasts import (
     BroadcastRateLimiter,
     backfill_stock_alert_messages,
@@ -49,12 +50,14 @@ from app.maintenance import ensure_sms_rental_maintenance
 from app.payment_expiry import payment_expiry_worker
 from app.preorders import preorder_worker
 from app.rate_limit import BotSpamProtectionMiddleware
-from app.rentsim import RentSimClient, create_rentsim_client
+from app.rentsim import create_rentsim_client
 from app.sms_customer_messages import poll_notification_text
 from app.sms_rentals import (
     mark_sms_review_alerted,
     pending_sms_review_alerts,
     poll_pending_sms_rentals,
+    sms_source_key,
+    SmsProviderClient,
 )
 from app.supplier_audit import (
     mark_supplier_alerted,
@@ -269,6 +272,18 @@ async def initialize_database(engine, session_factory, seed_demo_data: bool) -> 
             text(
                 "ALTER TABLE sms_rentals ADD COLUMN IF NOT EXISTS "
                 "rental_message_id BIGINT NULL"
+            )
+        )
+        await connection.execute(
+            text(
+                "ALTER TABLE sms_rentals ADD COLUMN IF NOT EXISTS "
+                "provider VARCHAR(24) NOT NULL DEFAULT 'rentsim'"
+            )
+        )
+        await connection.execute(
+            text(
+                "CREATE INDEX IF NOT EXISTS ix_sms_rentals_provider_status_checked "
+                "ON sms_rentals (provider, status, last_checked_at, id)"
             )
         )
         await connection.execute(
@@ -1186,9 +1201,9 @@ async def supplier_audit_worker(
         await asyncio.sleep(max(10, interval_seconds))
 
 
-async def rentsim_otp_worker(
+async def sms_otp_worker(
     session_factory,
-    client: RentSimClient,
+    client: SmsProviderClient,
     bot: Bot,
     admin_ids: tuple[int, ...],
     poll_seconds: int,
@@ -1196,6 +1211,7 @@ async def rentsim_otp_worker(
     request_recovery_seconds: int,
     pending_alert_seconds: int,
 ) -> None:
+    provider_label = "AutoSMS" if client.provider == "autosms" else "RentSim"
     while True:
         try:
             notifications = await poll_pending_sms_rentals(
@@ -1207,7 +1223,11 @@ async def rentsim_otp_worker(
             )
             for item in notifications:
                 text = poll_notification_text(item)
-                markup = sms_waiting_menu(item.language, item.sale_amount)
+                markup = sms_waiting_menu(
+                    item.language,
+                    item.sale_amount,
+                    sms_source_key(item.provider),
+                )
                 try:
                     if item.status == "refunded":
                         # Keep the refund visible as a separate notification instead
@@ -1243,17 +1263,20 @@ async def rentsim_otp_worker(
                         await bot.send_message(item.user_id, text, reply_markup=markup)
                     except Exception:
                         logging.getLogger(__name__).exception(
-                            "Could not send fallback RentSim result for rental %s",
+                            "Could not send fallback %s result for rental %s",
+                            provider_label,
                             item.rental_id,
                         )
                 except Exception:
                     logging.getLogger(__name__).exception(
-                        "Could not deliver RentSim OTP result for rental %s",
+                        "Could not deliver %s OTP result for rental %s",
+                        provider_label,
                         item.rental_id,
                     )
             review_alerts = await pending_sms_review_alerts(
                 session_factory,
                 pending_alert_seconds=pending_alert_seconds,
+                provider=client.provider,
             )
             for review in review_alerts:
                 before = (
@@ -1280,6 +1303,7 @@ async def rentsim_otp_worker(
                     f"• Số dư nguồn trước/sau: <b>{before} → {after}</b>\n"
                     f"• Lỗi gần nhất: <code>{escape(review.last_error or '—')}</code>\n"
                     f"• Đã kiểm tra OTP: <b>{review.poll_attempts}</b> lần\n\n"
+                    f"• Nguồn: <b>{provider_label}</b>\n\n"
                     "Không hoàn thủ công nếu chưa xác minh đúng đơn tại nguồn."
                 )
                 delivered = False
@@ -1296,7 +1320,9 @@ async def rentsim_otp_worker(
                 if delivered:
                     await mark_sms_review_alerted(session_factory, review.rental_id)
         except Exception:
-            logging.getLogger(__name__).exception("Could not poll RentSim OTP orders")
+            logging.getLogger(__name__).exception(
+                "Could not poll %s OTP orders", provider_label
+            )
         await asyncio.sleep(max(2, poll_seconds))
 
 
@@ -1402,6 +1428,7 @@ async def main() -> None:
         markup=settings.haji_markup,
     )
     rentsim_client = create_rentsim_client(settings)
+    autosms_client = create_autosms_client(settings)
 
     cipher = SecretCipher(settings.inventory_encryption_key.get_secret_value())
     fingerprinted_items = await backfill_inventory_fingerprints(session_factory, cipher)
@@ -1447,6 +1474,7 @@ async def main() -> None:
             canboso_client=canboso_client,
             nce_client=nce_client,
             haji_client=haji_client,
+            autosms_client=autosms_client,
         )
     )
 
@@ -1463,6 +1491,7 @@ async def main() -> None:
         canboso_client=canboso_client,
         nce_client=nce_client,
         haji_client=haji_client,
+        autosms_client=autosms_client,
     )
     server = uvicorn.Server(
         uvicorn.Config(
@@ -1655,7 +1684,7 @@ async def main() -> None:
     )
     rentsim_task = (
         asyncio.create_task(
-            rentsim_otp_worker(
+            sms_otp_worker(
                 session_factory,
                 rentsim_client,
                 bot,
@@ -1667,6 +1696,22 @@ async def main() -> None:
             )
         )
         if rentsim_client is not None
+        else None
+    )
+    autosms_task = (
+        asyncio.create_task(
+            sms_otp_worker(
+                session_factory,
+                autosms_client,
+                bot,
+                settings.admin_ids,
+                settings.autosms_poll_seconds,
+                settings.referral_commission_percent,
+                settings.autosms_request_recovery_seconds,
+                settings.autosms_pending_alert_seconds,
+            )
+        )
+        if autosms_client is not None
         else None
     )
     sale_alert_task = asyncio.create_task(
@@ -1734,6 +1779,10 @@ async def main() -> None:
             rentsim_task.cancel()
             with contextlib.suppress(asyncio.CancelledError):
                 await rentsim_task
+        if autosms_task is not None:
+            autosms_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await autosms_task
         sale_alert_task.cancel()
         with contextlib.suppress(asyncio.CancelledError):
             await sale_alert_task
@@ -1747,6 +1796,7 @@ async def main() -> None:
             nce_client,
             haji_client,
             rentsim_client,
+            autosms_client,
         ):
             if external_client is not None:
                 await external_client.aclose()

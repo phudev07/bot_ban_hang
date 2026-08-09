@@ -23,10 +23,11 @@ class RentSimSnapshot:
     unit_price: int
     source_stock: int
     balance: int
+    availability_blocked: bool = False
 
     @property
     def effective_stock(self) -> int:
-        if self.unit_price <= 0:
+        if self.unit_price <= 0 or self.availability_blocked:
             return 0
         # RentSim's catalog stock is stale (kh2 can rent while reporting zero),
         # so wallet capacity is the only reliable pre-purchase estimate.
@@ -41,6 +42,7 @@ class RentSimRental:
     phone_number_display: str
     country_code: str
     service_name: str
+    unit_price: int = 0
     otp_code: str = ""
     otp_content: str = ""
 
@@ -215,6 +217,22 @@ class RentSimClient:
         self._snapshot_at = 0.0
 
     @staticmethod
+    def rent_error_is_ambiguous(code: str) -> bool:
+        if code == "PROVIDER_UNAVAILABLE":
+            return False
+        if code == "INVALID_RESPONSE":
+            return True
+        # RentSim uses HTTP 500 when no number was created.
+        if code == "PROVIDER_HTTP_500":
+            return False
+        if not code.startswith("PROVIDER_HTTP_"):
+            return False
+        try:
+            return int(code.rsplit("_", 1)[1]) >= 500
+        except ValueError:
+            return False
+
+    @staticmethod
     def _otp_fields(payload: dict[str, object]) -> tuple[str, str]:
         content = str(payload.get("content") or "").strip()
         code = str(payload.get("code") or "").strip()
@@ -251,6 +269,7 @@ class RentSimClient:
             phone_number_display=str(payload.get("phonenoprefix") or phone_number),
             country_code=str(payload.get("coutrycode") or payload.get("countrycode") or ""),
             service_name=str(payload.get("serviceName") or self.service_id),
+            unit_price=0,
             otp_code=otp_code,
             otp_content=otp_content,
         )

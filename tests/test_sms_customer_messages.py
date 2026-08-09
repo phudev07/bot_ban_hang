@@ -11,6 +11,7 @@ from app.sms_customer_messages import (
 
 BANNED_CUSTOMER_TERMS = (
     "rentsim",
+    "autosms",
     "provider_http",
     "provider unavailable",
     "provider connection",
@@ -71,6 +72,36 @@ def test_sms_storefront_uses_shop_neutral_status(language: str) -> None:
     )
 
     assert_upstream_details_hidden(text)
+
+
+@pytest.mark.parametrize("language", ["vi", "en"])
+def test_multi_source_sms_storefront_names_countries_without_providers(language: str) -> None:
+    sources = [
+        SimpleNamespace(
+            country_vi="+1",
+            country_en="+1",
+            connected=True,
+            effective_stock=5,
+            sale_price=2_000,
+        ),
+        SimpleNamespace(
+            country_vi="+855",
+            country_en="+855",
+            connected=False,
+            effective_stock=0,
+            sale_price=2_000,
+        ),
+    ]
+    text = storefront_text(
+        language,
+        connected=True,
+        sale_price=2_000,
+        effective_stock=5,
+        sources=sources,
+    )
+
+    assert_upstream_details_hidden(text)
+    assert "2.000" in text
 
 
 @pytest.mark.parametrize("language", ["vi", "en"])

@@ -1,5 +1,7 @@
+import asyncio
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
+from typing import Protocol
 
 from sqlalchemy import and_, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
@@ -7,12 +9,30 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from app.models import BalanceAdjustment, SmsRental, User
 from app.maintenance import sms_maintenance_operation, sms_rental_maintenance_enabled
 from app.partner_services import award_referral_commission
-from app.rentsim import RentSimClient, RentSimError, RentSimSnapshot
+from app.rentsim import RentSimError, RentSimSnapshot
 from app.wallet_ledger import apply_wallet_change
 
 
 ACTIVE_SMS_STATUSES = ("requesting", "pending", "unknown")
-AMBIGUOUS_RENT_ERRORS = {"INVALID_RESPONSE"}
+
+SMS_SOURCE_BY_PROVIDER = {"autosms": "1", "rentsim": "855"}
+SMS_COUNTRY_VI = {"autosms": "+1", "rentsim": "+855"}
+SMS_COUNTRY_EN = {"autosms": "+1", "rentsim": "+855"}
+
+
+class SmsProviderClient(Protocol):
+    provider: str
+    balance_lock: asyncio.Lock
+
+    async def fetch_snapshot(self, *, force: bool = False) -> RentSimSnapshot: ...
+
+    async def fetch_balance(self) -> int: ...
+
+    async def rent(self): ...
+
+    async def fetch_otp(self, order_id: str): ...
+
+    def rent_error_is_ambiguous(self, code: str) -> bool: ...
 
 
 def _as_utc(value: datetime | None) -> datetime | None:
@@ -26,6 +46,10 @@ def _as_utc(value: datetime | None) -> datetime | None:
 @dataclass(frozen=True)
 class SmsAvailability:
     connected: bool
+    provider: str = ""
+    source_key: str = ""
+    country_vi: str = ""
+    country_en: str = ""
     service_name: str = "ChatGPT"
     server_id: str = "kh2"
     unit_cost: int = 0
@@ -53,6 +77,7 @@ class SmsRentResult:
     retry_after: int = 0
     provider_balance_before: int | None = None
     provider_balance_after: int | None = None
+    provider: str = ""
 
 
 @dataclass(frozen=True)
@@ -70,6 +95,7 @@ class SmsPollNotification:
     otp_code: str = ""
     otp_content: str = ""
     failure_reason: str = ""
+    provider: str = "rentsim"
 
 
 @dataclass(frozen=True)
@@ -84,29 +110,25 @@ class SmsReviewAlert:
     provider_balance_after: int | None
     last_error: str
     poll_attempts: int
+    provider: str = "rentsim"
 
 
-def _is_ambiguous_rent_error(code: str) -> bool:
-    # A provider connection failure does not return an order ID or phone
-    # number, so the shop treats it as a failed rental and refunds the user.
-    if code == "PROVIDER_UNAVAILABLE":
-        return False
-    if code in AMBIGUOUS_RENT_ERRORS:
-        return True
-    # RentSim uses HTTP 500 when the rent request itself fails before an
-    # order/phone number is created. This is refundable, not ambiguous.
-    if code == "PROVIDER_HTTP_500":
-        return False
-    if not code.startswith("PROVIDER_HTTP_"):
-        return False
-    try:
-        return int(code.rsplit("_", 1)[1]) >= 500
-    except ValueError:
-        return False
+def sms_source_key(provider: str) -> str:
+    return SMS_SOURCE_BY_PROVIDER.get(provider, provider)
+
+
+def sms_country_name(provider: str, language: str) -> str:
+    names = SMS_COUNTRY_EN if language == "en" else SMS_COUNTRY_VI
+    return names.get(provider, "+1")
+
+
+def _is_ambiguous_rent_error(client: SmsProviderClient, code: str) -> bool:
+    checker = getattr(client, "rent_error_is_ambiguous", None)
+    return bool(checker(code)) if checker is not None else code == "INVALID_RESPONSE"
 
 
 async def sms_availability(
-    client: RentSimClient | None,
+    client: SmsProviderClient | None,
     markup: int,
     *,
     fallback_unit_cost: int = 1_000,
@@ -131,6 +153,10 @@ async def sms_availability(
         )
     return SmsAvailability(
         True,
+        provider=client.provider,
+        source_key=sms_source_key(client.provider),
+        country_vi=sms_country_name(client.provider, "vi"),
+        country_en=sms_country_name(client.provider, "en"),
         service_name=snapshot.service_name,
         server_id=snapshot.server_id,
         unit_cost=snapshot.unit_price,
@@ -171,7 +197,7 @@ async def _refund_sms_rental(
     session.add(
         BalanceAdjustment(
             user_id=user.telegram_id,
-            admin_username="system:rentsim",
+            admin_username=f"system:{rental.provider}",
             amount=rental.sale_amount,
             reason=(
                 f"Hoàn ví thuê số SMS {rental.shop_order_code or rental.id}: {reason}"
@@ -223,7 +249,7 @@ async def _complete_sms_success(
 async def rent_sms_number(
     session_factory: async_sessionmaker[AsyncSession],
     user_id: int,
-    client: RentSimClient | None,
+    client: SmsProviderClient | None,
     *,
     markup: int = 1_000,
     cooldown_seconds: int = 60,
@@ -248,7 +274,7 @@ async def rent_sms_number(
 async def _rent_sms_number_unlocked(
     session_factory: async_sessionmaker[AsyncSession],
     user_id: int,
-    client: RentSimClient | None,
+    client: SmsProviderClient | None,
     *,
     markup: int = 1_000,
     cooldown_seconds: int = 60,
@@ -340,6 +366,7 @@ async def _rent_sms_number_unlocked(
                     )
                 rental = SmsRental(
                     user_id=user.telegram_id,
+                    provider=client.provider,
                     service_id=snapshot.service_id,
                     service_name=snapshot.service_name,
                     server_id=snapshot.server_id,
@@ -369,8 +396,10 @@ async def _rent_sms_number_unlocked(
         try:
             provider_rental = await client.rent()
         except RentSimError as exc:
-            ambiguous_result = _is_ambiguous_rent_error(exc.code)
-            provider_error_refunded = exc.code == "PROVIDER_HTTP_500"
+            ambiguous_result = _is_ambiguous_rent_error(client, exc.code)
+            provider_error_refunded = (
+                client.provider == "rentsim" and exc.code == "PROVIDER_HTTP_500"
+            )
             provider_balance_after: int | None = None
             if ambiguous_result:
                 try:
@@ -429,6 +458,69 @@ async def _rent_sms_number_unlocked(
                 status="unknown" if ambiguous_result else "refunded",
                 provider_balance_before=snapshot.balance,
                 provider_balance_after=provider_balance_after,
+                provider=client.provider,
+            )
+
+        actual_cost = int(provider_rental.unit_price or snapshot.unit_price)
+        actual_sale_amount = actual_cost + max(0, markup)
+        if actual_sale_amount > sale_amount:
+            cancel = getattr(client, "cancel", None)
+            cancellation_confirmed = False
+            if cancel is not None:
+                try:
+                    cancellation_confirmed = bool(
+                        await cancel(provider_rental.order_id)
+                    )
+                except RentSimError:
+                    pass
+            async with session_factory() as session:
+                async with session.begin():
+                    rental = await session.scalar(
+                        select(SmsRental)
+                        .where(SmsRental.id == rental_id)
+                        .with_for_update()
+                    )
+                    user = await session.scalar(
+                        select(User).where(User.telegram_id == user_id).with_for_update()
+                    )
+                    if rental is not None and user is not None:
+                        rental.provider_order_id = provider_rental.order_id
+                        rental.phone_number = provider_rental.phone_number
+                        rental.phone_number_display = provider_rental.phone_number_display
+                        rental.country_code = provider_rental.country_code
+                        rental.cost_amount = actual_cost
+                        rental.last_error = "provider_price_changed"
+                        if cancellation_confirmed:
+                            await _refund_sms_rental(
+                                session,
+                                rental,
+                                user,
+                                reason="provider_price_changed",
+                                now=datetime.now(UTC),
+                            )
+                        else:
+                            _mark_unknown_sms_rental(
+                                rental,
+                                reason="provider_price_changed_cancel_unconfirmed",
+                            )
+                        current_balance = user.balance
+                    else:
+                        current_balance = balance_after_charge
+            return SmsRentResult(
+                False,
+                (
+                    "price_changed_refunded"
+                    if cancellation_confirmed
+                    else "provider_result_unknown"
+                ),
+                rental_id=rental_id,
+                shop_order_code=f"SMS{rental_id}",
+                phone_number=provider_rental.phone_number,
+                sale_amount=sale_amount,
+                cost_amount=actual_cost,
+                balance=current_balance,
+                status="refunded" if cancellation_confirmed else "unknown",
+                provider=client.provider,
             )
 
         async with session_factory() as session:
@@ -446,6 +538,21 @@ async def _rent_sms_number_unlocked(
                 rental.phone_number_display = provider_rental.phone_number_display
                 rental.country_code = provider_rental.country_code
                 rental.service_name = provider_rental.service_name or rental.service_name
+                if actual_cost > 0:
+                    rental.cost_amount = actual_cost
+                if actual_sale_amount < rental.sale_amount:
+                    price_difference = rental.sale_amount - actual_sale_amount
+                    apply_wallet_change(
+                        session,
+                        user,
+                        price_difference,
+                        kind="sms_price_adjustment",
+                        event_key=f"sms_price_adjustment:{rental.id}",
+                        reference_type="sms_rental",
+                        reference_id=rental.shop_order_code or f"SMS{rental.id}",
+                        description="Điều chỉnh giá thuê số theo giá nguồn thực tế",
+                    )
+                    rental.sale_amount = actual_sale_amount
                 rental.status = provider_rental.status
                 if provider_rental.status == "success":
                     await _complete_sms_success(
@@ -471,6 +578,7 @@ async def _rent_sms_number_unlocked(
                     status=rental.status,
                     otp_code=rental.otp_code or "",
                     otp_content=rental.otp_content or "",
+                    provider=rental.provider,
                 )
 
 
@@ -549,6 +657,7 @@ async def refund_sms_rental(
                 sale_amount=rental.sale_amount,
                 balance=user.balance,
                 language=user.language,
+                provider=rental.provider,
             )
 
 
@@ -573,23 +682,27 @@ async def pending_sms_review_alerts(
     pending_alert_seconds: int = 900,
     limit: int = 50,
     now: datetime | None = None,
+    provider: str | None = None,
 ) -> list[SmsReviewAlert]:
     checked_at = now or datetime.now(UTC)
     pending_before = checked_at - timedelta(seconds=max(60, pending_alert_seconds))
     async with session_factory() as session:
+        conditions = [
+            SmsRental.review_alerted_at.is_(None),
+            or_(
+                SmsRental.status == "unknown",
+                and_(
+                    SmsRental.status == "pending",
+                    SmsRental.requested_at <= pending_before,
+                ),
+            ),
+        ]
+        if provider:
+            conditions.append(SmsRental.provider == provider)
         rentals = list(
             await session.scalars(
                 select(SmsRental)
-                .where(
-                    SmsRental.review_alerted_at.is_(None),
-                    or_(
-                        SmsRental.status == "unknown",
-                        and_(
-                            SmsRental.status == "pending",
-                            SmsRental.requested_at <= pending_before,
-                        ),
-                    ),
-                )
+                .where(*conditions)
                 .order_by(SmsRental.id)
                 .limit(limit)
             )
@@ -606,6 +719,7 @@ async def pending_sms_review_alerts(
             provider_balance_after=rental.provider_balance_after,
             last_error=rental.last_error or rental.failure_reason or "",
             poll_attempts=rental.poll_attempts,
+            provider=rental.provider,
         )
         for rental in rentals
     ]
@@ -630,7 +744,7 @@ async def mark_sms_review_alerted(
 
 async def poll_pending_sms_rentals(
     session_factory: async_sessionmaker[AsyncSession],
-    client: RentSimClient,
+    client: SmsProviderClient,
     *,
     poll_seconds: int = 5,
     referral_commission_percent: int = 2,
@@ -642,6 +756,7 @@ async def poll_pending_sms_rentals(
     due_before = checked_at - timedelta(seconds=max(2, poll_seconds))
     stale_before = checked_at - timedelta(seconds=max(60, request_recovery_seconds))
     notifications: list[SmsPollNotification] = []
+    provider = client.provider
 
     # RentSim HTTP 500 means no rental order was created. Reconcile older rows
     # by their own provider result, never by the shared provider wallet delta.
@@ -651,6 +766,7 @@ async def poll_pending_sms_rentals(
             await session.scalars(
                 select(SmsRental.id)
                 .where(
+                    SmsRental.provider == "rentsim",
                     SmsRental.status == "unknown",
                     SmsRental.provider_order_id.is_(None),
                     SmsRental.phone_number.is_(None),
@@ -668,6 +784,7 @@ async def poll_pending_sms_rentals(
                     select(SmsRental)
                     .where(
                         SmsRental.id == rental_id,
+                        SmsRental.provider == "rentsim",
                         SmsRental.status == "unknown",
                         SmsRental.provider_order_id.is_(None),
                         SmsRental.phone_number.is_(None),
@@ -702,6 +819,7 @@ async def poll_pending_sms_rentals(
                         balance=user.balance,
                         language=user.language,
                         failure_reason=rental.failure_reason or "",
+                        provider=rental.provider,
                     )
                 )
 
@@ -710,6 +828,7 @@ async def poll_pending_sms_rentals(
             await session.scalars(
                 select(SmsRental.id)
                 .where(
+                    SmsRental.provider == provider,
                     SmsRental.status == "requesting",
                     SmsRental.requested_at <= stale_before,
                 )
@@ -724,6 +843,7 @@ async def poll_pending_sms_rentals(
                     select(SmsRental)
                     .where(
                         SmsRental.id == rental_id,
+                        SmsRental.provider == provider,
                         SmsRental.status == "requesting",
                     )
                     .with_for_update()
@@ -751,6 +871,7 @@ async def poll_pending_sms_rentals(
                         sale_amount=rental.sale_amount,
                         balance=user.balance,
                         language=user.language,
+                        provider=rental.provider,
                     )
                 )
     async with session_factory() as session:
@@ -758,6 +879,7 @@ async def poll_pending_sms_rentals(
             await session.scalars(
                 select(SmsRental.id)
                 .where(
+                    SmsRental.provider == provider,
                     SmsRental.status == "pending",
                     or_(
                         SmsRental.last_checked_at.is_(None),
@@ -781,7 +903,11 @@ async def poll_pending_sms_rentals(
                 async with session.begin():
                     rental = await session.scalar(
                         select(SmsRental)
-                        .where(SmsRental.id == rental_id, SmsRental.status == "pending")
+                        .where(
+                            SmsRental.id == rental_id,
+                            SmsRental.provider == provider,
+                            SmsRental.status == "pending",
+                        )
                         .with_for_update()
                     )
                     if rental is not None:
@@ -796,7 +922,11 @@ async def poll_pending_sms_rentals(
             async with session.begin():
                 rental = await session.scalar(
                     select(SmsRental)
-                    .where(SmsRental.id == rental_id, SmsRental.status == "pending")
+                    .where(
+                        SmsRental.id == rental_id,
+                        SmsRental.provider == provider,
+                        SmsRental.status == "pending",
+                    )
                     .with_for_update()
                 )
                 if rental is None:
@@ -843,6 +973,7 @@ async def poll_pending_sms_rentals(
                         language=user.language,
                         otp_code=rental.otp_code or "",
                         otp_content=rental.otp_content or "",
+                        provider=rental.provider,
                     )
                 )
     return notifications

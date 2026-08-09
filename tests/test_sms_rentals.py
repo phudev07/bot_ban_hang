@@ -25,20 +25,29 @@ from app.sms_rentals import (
 
 
 class FakeRentSim:
-    def __init__(self) -> None:
+    def __init__(self, provider: str = "rentsim") -> None:
+        self.provider = provider
         self.balance_lock = asyncio.Lock()
         self.rent_count = 0
         self.otp_status = "pending"
         self.rent_error: str | None = None
         self.balance_after = 49_000
+        self.snapshot_price = 1_000
+        self.rental_price = 0
+        self.cancel_count = 0
+        self.cancel_result = True
+
+    @staticmethod
+    def rent_error_is_ambiguous(code: str) -> bool:
+        return code == "INVALID_RESPONSE"
 
     async def fetch_snapshot(self, *, force: bool = False) -> RentSimSnapshot:
         assert force is True
         return RentSimSnapshot(
             service_id="chatgpt",
             service_name="ChatGPT",
-            server_id="kh2",
-            unit_price=1_000,
+            server_id="us" if self.provider == "autosms" else "kh2",
+            unit_price=self.snapshot_price,
             source_stock=50,
             balance=50_000,
         )
@@ -49,13 +58,22 @@ class FakeRentSim:
         if self.rent_error:
             raise RentSimError(self.rent_error)
         return RentSimRental(
-            order_id=f"ORDER-{self.rent_count}",
+            order_id=f"{self.provider.upper()}-ORDER-{self.rent_count}",
             status="pending",
-            phone_number=f"+85500000{self.rent_count}",
+            phone_number=(
+                f"+15550000{self.rent_count}"
+                if self.provider == "autosms"
+                else f"+85500000{self.rent_count}"
+            ),
             phone_number_display=f"000 00{self.rent_count}",
-            country_code="+855",
+            country_code="+1" if self.provider == "autosms" else "+855",
             service_name="ChatGPT",
+            unit_price=self.rental_price,
         )
+
+    async def cancel(self, _order_id: str) -> bool:
+        self.cancel_count += 1
+        return self.cancel_result
 
     async def fetch_balance(self) -> int:
         return self.balance_after
@@ -150,6 +168,134 @@ def test_sms_rental_charges_wallet_enforces_cooldown_and_unlocks_after_otp() -> 
             assert referrer is not None and referrer.balance == 40
             assert reward is not None and reward.shop_order_code == rentals[0].shop_order_code
             assert [rental.status for rental in rentals] == ["success", "pending"]
+            assert [rental.provider for rental in rentals] == ["rentsim", "rentsim"]
+        await engine.dispose()
+
+    asyncio.run(scenario())
+
+
+def test_sms_poll_worker_only_processes_its_own_provider_orders() -> None:
+    async def scenario() -> None:
+        engine, sessions = await make_database()
+        now = datetime.now(UTC)
+        async with sessions() as session:
+            session.add(User(telegram_id=1010, full_name="Buyer", balance=10_000))
+            session.add_all(
+                [
+                    SmsRental(
+                        user_id=1010,
+                        shop_order_code="SMS-KH",
+                        provider="rentsim",
+                        provider_order_id="RENTSIM-ORDER",
+                        status="pending",
+                        sale_amount=2_000,
+                        cost_amount=1_000,
+                        requested_at=now - timedelta(seconds=10),
+                    ),
+                    SmsRental(
+                        user_id=1010,
+                        shop_order_code="SMS-US",
+                        provider="autosms",
+                        provider_order_id="AUTOSMS-ORDER",
+                        status="pending",
+                        sale_amount=2_000,
+                        cost_amount=1_000,
+                        requested_at=now - timedelta(seconds=10),
+                    ),
+                ]
+            )
+            await session.commit()
+
+        client = FakeRentSim(provider="autosms")
+        client.otp_status = "success"
+        notifications = await poll_pending_sms_rentals(
+            sessions,
+            client,  # type: ignore[arg-type]
+            now=now,
+        )
+
+        assert [item.shop_order_code for item in notifications] == ["SMS-US"]
+        assert notifications[0].provider == "autosms"
+        async with sessions() as session:
+            rentals = list(await session.scalars(select(SmsRental).order_by(SmsRental.id)))
+            assert [rental.status for rental in rentals] == ["pending", "success"]
+        await engine.dispose()
+
+    asyncio.run(scenario())
+
+
+def test_autosms_lower_actual_price_refunds_only_the_difference() -> None:
+    async def scenario() -> None:
+        engine, sessions = await make_database()
+        client = FakeRentSim(provider="autosms")
+        client.snapshot_price = 1_000
+        client.rental_price = 800
+        async with sessions() as session:
+            session.add(User(telegram_id=1020, full_name="Buyer", balance=5_000))
+            await session.commit()
+
+        result = await rent_sms_number(
+            sessions,
+            1020,
+            client,  # type: ignore[arg-type]
+        )
+
+        assert result.ok is True
+        assert result.sale_amount == 1_800
+        assert result.cost_amount == 800
+        assert result.balance == 3_200
+        async with sessions() as session:
+            rental = await session.scalar(select(SmsRental))
+            transactions = list(
+                await session.scalars(
+                    select(WalletTransaction).order_by(WalletTransaction.id)
+                )
+            )
+            assert rental is not None and rental.provider == "autosms"
+            assert [item.kind for item in transactions] == [
+                "sms_rental",
+                "sms_price_adjustment",
+            ]
+            assert [item.amount for item in transactions] == [-2_000, 200]
+        await engine.dispose()
+
+    asyncio.run(scenario())
+
+
+def test_autosms_higher_actual_price_cancels_and_refunds_full_charge() -> None:
+    async def scenario() -> None:
+        engine, sessions = await make_database()
+        client = FakeRentSim(provider="autosms")
+        client.snapshot_price = 1_000
+        client.rental_price = 1_200
+        async with sessions() as session:
+            session.add(User(telegram_id=1030, full_name="Buyer", balance=5_000))
+            await session.commit()
+
+        result = await rent_sms_number(
+            sessions,
+            1030,
+            client,  # type: ignore[arg-type]
+        )
+
+        assert result.ok is False
+        assert result.message == "price_changed_refunded"
+        assert result.status == "refunded"
+        assert result.balance == 5_000
+        assert client.cancel_count == 1
+        async with sessions() as session:
+            rental = await session.scalar(select(SmsRental))
+            transactions = list(
+                await session.scalars(
+                    select(WalletTransaction).order_by(WalletTransaction.id)
+                )
+            )
+            assert rental is not None and rental.failure_reason == "provider_price_changed"
+            assert [item.kind for item in transactions] == [
+                "sms_rental",
+                "sms_refund",
+            ]
+            assert [item.amount for item in transactions] == [-2_000, 2_000]
         await engine.dispose()
 
     asyncio.run(scenario())

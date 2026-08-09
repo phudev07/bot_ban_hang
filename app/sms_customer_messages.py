@@ -17,7 +17,45 @@ def storefront_text(
     connected: bool,
     sale_price: int,
     effective_stock: int,
+    sources: list[object] | None = None,
 ) -> str:
+    if sources:
+        source_lines = []
+        for source in sources:
+            country = source.country_en if language == "en" else source.country_vi
+            if source.connected and source.effective_stock > 0:
+                availability = (
+                    f"{source.effective_stock} available"
+                    if language == "en"
+                    else f"còn {source.effective_stock} số"
+                )
+            else:
+                availability = "unavailable" if language == "en" else "tạm hết số"
+            source_lines.append(
+                f"• <b>{escape(country)}</b>: {format_vnd(source.sale_price)} · {availability}"
+            )
+        source_text = "\n".join(source_lines)
+        if language == "en":
+            return (
+                f"{product_brand_emoji('ChatGPT')} <b>Rent a ChatGPT SMS number</b>\n\n"
+                f"{source_text}\n\n"
+                "Only locations with available numbers have a rent button below. Wallet "
+                "balance only; direct QR payment is unavailable.\n"
+                "If no OTP arrives, you can rent another number after 60 seconds. Numbers "
+                "without an OTP are refunded to your wallet.\n\n"
+                "An OTP may arrive late. If an older number later receives a code, both "
+                "rentals are charged."
+            )
+        return (
+            f"{product_brand_emoji('ChatGPT')} <b>Thuê số nhận SMS ChatGPT</b>\n\n"
+            f"{source_text}\n\n"
+            "Chỉ khu vực đang còn số mới hiện nút thuê bên dưới. Chỉ thanh toán bằng số dư "
+            "ví, không có QR thanh toán trực tiếp.\n"
+            "Nếu không có OTP có thể thuê số khác sau 60 giây. Các số không nhận được OTP "
+            "sẽ được hoàn tiền về ví.\n\n"
+            "OTP có thể về chậm. Nếu số cũ nhận được mã sau khi bạn đã thuê số mới thì cả "
+            "hai lượt thuê đều được tính phí."
+        )
     if language == "en":
         status = (
             f"• Available now: <b>{effective_stock}</b>"
@@ -68,7 +106,7 @@ def rental_failure_text(
             "maintenance": "SMS rentals are under maintenance. Please try again later.",
             "disabled": "SMS rental is not available yet.",
             "out_of_stock": (
-                "ChatGPT Cambodia numbers are currently unavailable. Your wallet was not "
+                "ChatGPT numbers from this location are currently unavailable. Your wallet was not "
                 "charged or has already been refunded."
             ),
             "insufficient": (
@@ -92,6 +130,10 @@ def rental_failure_text(
                 "The rental could not be confirmed. Your full rental amount has been refunded. "
                 "Please try again after 60 seconds."
             ),
+            "price_changed_refunded": (
+                "The rental price changed before delivery. The number was cancelled and your "
+                "full rental amount was refunded. Please reopen SMS rentals to see the new price."
+            ),
         }
         default = (
             "The rental could not be completed. Your wallet has been refunded."
@@ -103,7 +145,7 @@ def rental_failure_text(
             "maintenance": "Dịch vụ thuê số đang bảo trì. Vui lòng quay lại sau.",
             "disabled": "Chức năng thuê số hiện chưa sẵn sàng.",
             "out_of_stock": (
-                "Số ChatGPT Cambodia hiện chưa có. Ví không bị trừ hoặc tiền giữ đã được hoàn lại."
+                "Số ChatGPT tại khu vực này hiện chưa có. Ví không bị trừ hoặc tiền giữ đã được hoàn lại."
             ),
             "insufficient": (
                 f"Ví cần {format_vnd(sale_amount)} nhưng hiện có {format_vnd(balance)}. "
@@ -126,6 +168,10 @@ def rental_failure_text(
             "provider_error_refunded": (
                 "Lượt thuê chưa được xác nhận nên toàn bộ tiền đã được hoàn vào ví. "
                 "Bạn thử thuê lại sau 60 giây."
+            ),
+            "price_changed_refunded": (
+                "Giá thuê vừa thay đổi trước khi giao số. Đơn nguồn đã được hủy và toàn bộ tiền "
+                "đã hoàn về ví; hãy mở lại mục thuê số để xem giá mới."
             ),
         }
         default = (
