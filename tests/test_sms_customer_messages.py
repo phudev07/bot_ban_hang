@@ -43,6 +43,7 @@ def assert_upstream_details_hidden(text: str) -> None:
         ("provider_result_unknown", "unknown"),
         ("provider_error_refunded", "refunded"),
         ("https://rentsim.net/provider_http_500?server=kh2", "refunded"),
+        ("https://autosms.site/api/orders/source provider_http_503", "refunded"),
     ],
 )
 def test_sms_rental_failures_never_expose_upstream_details(

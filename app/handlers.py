@@ -1264,12 +1264,12 @@ def create_router(
             otp_text = (
                 "✅ <b>OTP received</b>\n\n"
                 f"• Code: <code>{escape(result.otp_code or '—')}</code>\n"
-                f"• Message: {escape(result.otp_content or '—')}\n\n"
+                f"• Message: {safe_customer_html(result.otp_content or '—')}\n\n"
                 "You can rent another number after 60 seconds from this rental."
                 if user.language == "en"
                 else "✅ <b>Đã nhận được OTP</b>\n\n"
                 f"• Mã OTP: <code>{escape(result.otp_code or '—')}</code>\n"
-                f"• Nội dung: {escape(result.otp_content or '—')}\n\n"
+                f"• Nội dung: {safe_customer_html(result.otp_content or '—')}\n\n"
                 "Bạn có thể thuê số tiếp theo sau khi đủ 60 giây tính từ lượt thuê này."
             )
             if callback.message:

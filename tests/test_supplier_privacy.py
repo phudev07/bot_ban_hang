@@ -14,6 +14,9 @@ SUPPLIER_MARKERS = (
     "rentsim",
     "rent sim",
     "sentsim",
+    "autosms",
+    "auto sms",
+    "autosms.site",
     "canboso",
     "haji",
     "api.haji.in.net",
@@ -33,10 +36,11 @@ def assert_no_supplier_markers(text: str) -> None:
 
 def test_customer_text_redacts_all_supplier_identities_and_source_markers() -> None:
     text = sanitize_customer_text(
-        "SumiStore / Sumi / Lê Hải Premium / lehai / RentSim / Sentsim / Canboso / NCE "
+        "SumiStore / Sumi / Lê Hải Premium / lehai / RentSim / Sentsim / AutoSMS / Canboso / NCE "
         "https://api.lehaipremium.me/api SP-GEF55PBV provider_http_500 "
         "https://api.dichvuright.ai/api/telegram-buyer/products "
-        "Haji https://api.haji.in.net/api/v2/catalog"
+        "Haji https://api.haji.in.net/api/v2/catalog "
+        "https://autosms.site/api/orders/source-order"
     )
 
     assert_no_supplier_markers(text)
@@ -124,7 +128,10 @@ def test_otp_content_is_sanitized_before_customer_delivery() -> None:
             "shop_order_code": "SMS1",
             "phone_number": "+85512345678",
             "otp_code": "123456",
-            "otp_content": "RentSim provider_http_500",
+            "otp_content": (
+                "AutoSMS https://autosms.site/api/orders/source-order "
+                "RentSim provider_http_500"
+            ),
         },
     )()
 
