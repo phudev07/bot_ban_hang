@@ -11,6 +11,7 @@ from app.utils import (
     inventory_account_identity,
     normalize_inventory_identity,
     parse_vnd,
+    round_vnd_to_thousand,
     safe_customer_telegram_html,
     verify_sepay_hmac,
 )
@@ -20,6 +21,14 @@ def test_format_and_parse_vnd() -> None:
     assert format_vnd(1234567) == "1.234.567đ"
     assert parse_vnd("100.000 đ") == 100_000
     assert parse_vnd("abc") is None
+
+
+def test_round_vnd_to_thousand_preserves_exact_five_hundred() -> None:
+    assert round_vnd_to_thousand(21_375) == 21_000
+    assert round_vnd_to_thousand(21_499) == 21_000
+    assert round_vnd_to_thousand(21_500) == 21_500
+    assert round_vnd_to_thousand(21_501) == 22_000
+    assert round_vnd_to_thousand(21_999) == 22_000
 
 
 def test_find_deposit_code() -> None:

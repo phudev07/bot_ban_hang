@@ -68,7 +68,7 @@ from app.suppliers import (
     refresh_external_product,
     supplier_balance_guard,
 )
-from app.utils import SecretCipher, find_deposit_code
+from app.utils import SecretCipher, find_deposit_code, round_vnd_to_thousand
 from app.wallet_ledger import apply_wallet_change
 
 
@@ -822,6 +822,13 @@ class MultiSupplierQuote:
         return bool(self.allocations)
 
 
+def supplier_sale_price(product: Product, supplier_price: int, provider: str) -> int:
+    if product.price_lock_enabled:
+        return int(product.price)
+    sale_price = int(supplier_price) + max(0, int(product.supplier_markup))
+    return round_vnd_to_thousand(sale_price) if provider == "canboso" else sale_price
+
+
 def price_supplier_plan(
     product: Product,
     plan: tuple[tuple[SupplierRoute, int], ...],
@@ -829,10 +836,10 @@ def price_supplier_plan(
 ) -> MultiSupplierQuote:
     allocations: list[SupplierAllocationPricing] = []
     for route, route_quantity in plan:
-        original_unit_price = (
-            int(product.price)
-            if product.price_lock_enabled
-            else int(route.snapshot.unit_price) + max(0, int(product.supplier_markup))
+        original_unit_price = supplier_sale_price(
+            product,
+            route.snapshot.unit_price,
+            route.provider,
         )
         if pricing.flash_sale is not None:
             final_unit_price = int(pricing.flash_sale.sale_price)
@@ -1510,11 +1517,10 @@ async def _purchase_product(
                     if expected_base_unit_price is None:
                         return PurchaseResult(False, "invalid_price")
                     if any(
-                        (
-                            int(product.price)
-                            if product.price_lock_enabled
-                            else int(route.snapshot.unit_price)
-                            + max(0, int(product.supplier_markup))
+                        supplier_sale_price(
+                            product,
+                            route.snapshot.unit_price,
+                            route.provider,
                         )
                         > int(expected_base_unit_price)
                         for route, _route_quantity in multi_plan
@@ -1827,7 +1833,11 @@ async def _purchase_product(
                     if (
                         fixed_unit_price is not None
                         and expected_base_unit_price is not None
-                        and cost_unit_price + max(0, int(product.supplier_markup))
+                        and supplier_sale_price(
+                            product,
+                            cost_unit_price,
+                            supplier_purchase.provider,
+                        )
                         > int(expected_base_unit_price)
                     ):
                         await preserve_supplier_purchase_for_resale(

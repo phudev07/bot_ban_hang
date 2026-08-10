@@ -815,6 +815,16 @@ def test_admin_can_disable_each_gpt_plus_api_source(tmp_path) -> None:
                 assert product.external_stock == 1
                 assert product.price == 32_000
                 assert product.supplier_markup == 9_000
+                alert = await session.scalar(
+                    select(ProductPriceAlert)
+                    .where(ProductPriceAlert.product_id == product_id)
+                    .order_by(ProductPriceAlert.id.desc())
+                    .limit(1)
+                )
+                assert alert is not None
+                assert alert.provider == "admin"
+                assert alert.sale_price_before == 34_000
+                assert alert.sale_price_after == 32_000
 
         asyncio.run(verify_both_off())
         products_page = client.get("/admin/products")
@@ -1172,12 +1182,12 @@ def test_dashboard_login_catalog_inventory_and_balance(tmp_path) -> None:
         assert "Hoàn thành" in broadcasts_page.text
         assert "10/10" in broadcasts_page.text
         assert 'href="/admin/broadcasts?tab=admin"' in broadcasts_page.text
-        assert "Sale API tự động" not in broadcasts_page.text
+        assert "Thông báo mặt hàng giảm giá" not in broadcasts_page.text
         assert broadcasts_page.text.count("<th>Tiến độ</th>") == 1
 
         sale_broadcasts_page = client.get("/admin/broadcasts?tab=sale")
         assert sale_broadcasts_page.status_code == 200
-        assert "Sale API tự động" in sale_broadcasts_page.text
+        assert "Thông báo mặt hàng giảm giá" in sale_broadcasts_page.text
         assert "Hàng mới về tự động" not in sale_broadcasts_page.text
         assert sale_broadcasts_page.text.count("<th>Tiến độ</th>") == 1
         assert sale_broadcasts_page.text.count("<th>Tốc độ</th>") == 1
@@ -1816,7 +1826,7 @@ def test_dashboard_shows_sale_alert_history(tmp_path) -> None:
         assert "10/10" in home.text
         sale_broadcasts = client.get("/admin/broadcasts?tab=sale")
         assert sale_broadcasts.status_code == 200
-        assert "API SALE HISTORY" in sale_broadcasts.text
+        assert "SALE HISTORY" in sale_broadcasts.text
         assert "GPT Plus sale" in sale_broadcasts.text
         assert "10/10" in sale_broadcasts.text
 

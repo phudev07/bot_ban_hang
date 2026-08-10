@@ -15,6 +15,17 @@ def format_vnd(amount: int) -> str:
     return f"{amount:,}".replace(",", ".") + "đ"
 
 
+def round_vnd_to_thousand(amount: int) -> int:
+    """Round VND prices by the thousand while preserving an exact 500đ remainder."""
+    value = max(0, int(amount))
+    remainder = value % 1_000
+    if remainder < 500:
+        return value - remainder
+    if remainder > 500:
+        return value + (1_000 - remainder)
+    return value
+
+
 def format_usd_from_vnd(
     amount: int,
     vnd_per_usd: int,

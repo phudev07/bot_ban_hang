@@ -23,6 +23,7 @@ from app.models import (
     ProductStockAlert,
     User,
 )
+from app.price_alerts import ADMIN_PRICE_ALERT_PROVIDER
 from app.stock_alerts import (
     INVENTORY_STOCK_ALERT_PROVIDER,
     STOCK_ALERT_COOLDOWN,
@@ -893,17 +894,32 @@ async def _claim_sale_alert(
             ).all()
         )
         for alert, product in rows:
+            is_admin_price_alert = alert.provider == ADMIN_PRICE_ALERT_PROVIDER
             if (
                 not product.active
                 or product.archived_at is not None
                 or getattr(product, "sale_notifications_enabled", True) is False
-                or product.price_lock_enabled
+                or (product.price_lock_enabled and not is_admin_price_alert)
                 or product.price != alert.sale_price_after
-                or not product_supplier_api_enabled(product, alert.provider)
+                or (
+                    not is_admin_price_alert
+                    and not product_supplier_api_enabled(product, alert.provider)
+                )
             ):
                 alert.status = "superseded"
                 continue
-            if product.force_out_of_stock or product.external_stock <= 0:
+            live_stock = max(0, int(product.external_stock))
+            if is_admin_price_alert and product.fulfillment_source not in EXTERNAL_FULFILLMENT_SOURCES:
+                live_stock = int(
+                    await session.scalar(
+                        select(func.count(InventoryItem.id)).where(
+                            InventoryItem.product_id == product.id,
+                            InventoryItem.status == "available",
+                        )
+                    )
+                    or 0
+                )
+            if product.force_out_of_stock or live_stock <= 0:
                 continue
 
             recipient_count = await _ensure_product_alert_deliveries(
@@ -922,7 +938,7 @@ async def _claim_sale_alert(
                 name_en=product.name_en,
                 old_price=alert.sale_price_before,
                 new_price=alert.sale_price_after,
-                stock=product.external_stock,
+                stock=live_stock,
                 recipients=(),
             )
             await session.commit()

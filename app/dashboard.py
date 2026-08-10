@@ -75,7 +75,7 @@ from app.services import (
     supplier_balance_clients_for_product,
     supplier_client_for_product,
 )
-from app.price_alerts import release_price_lock_if_inventory_empty
+from app.price_alerts import queue_admin_price_drop, release_price_lock_if_inventory_empty
 from app.sms_rentals import (
     SmsAvailability,
     sms_availability,
@@ -1950,6 +1950,25 @@ def create_dashboard_router(
                 active_campaign.ended_at = datetime.now(UTC)
                 if active_campaign.notification_status in {"pending", "sending"}:
                     active_campaign.notification_status = "superseded"
+            current_stock = (
+                max(0, int(product.external_stock))
+                if product.fulfillment_source in EXTERNAL_FULFILLMENT_SOURCES
+                else int(
+                    await session.scalar(
+                        select(func.count(InventoryItem.id)).where(
+                            InventoryItem.product_id == product.id,
+                            InventoryItem.status == "available",
+                        )
+                    )
+                    or 0
+                )
+            )
+            await queue_admin_price_drop(
+                session,
+                product,
+                previous_sale_price=old_price,
+                current_stock=current_stock,
+            )
             await session.commit()
         flash(request, "Đã lưu thông tin sản phẩm.")
         return RedirectResponse(f"/admin/products/{product_id}", status_code=303)

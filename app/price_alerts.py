@@ -3,6 +3,66 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.flash_sales import stop_unsafe_flash_sale
 from app.models import FlashSaleCampaign, InventoryItem, Product, ProductPriceAlert
+from app.utils import round_vnd_to_thousand
+
+
+ADMIN_PRICE_ALERT_PROVIDER = "admin"
+
+
+async def queue_admin_price_drop(
+    session: AsyncSession,
+    product: Product,
+    *,
+    previous_sale_price: int,
+    current_stock: int,
+) -> bool:
+    """Queue the normal sale notification when an admin lowers an in-stock price."""
+    if (
+        product.id is None
+        or product.archived_at is not None
+        or not product.active
+        or product.force_out_of_stock
+        or current_stock <= 0
+        or getattr(product, "sale_notifications_enabled", True) is False
+    ):
+        return False
+
+    new_sale_price = int(product.price)
+    previous_sale_price = int(previous_sale_price)
+    if new_sale_price <= 0 or new_sale_price >= previous_sale_price:
+        return False
+
+    supplier_price = max(0, int(product.supplier_price or 0))
+    pending = await session.scalar(
+        select(ProductPriceAlert)
+        .where(
+            ProductPriceAlert.product_id == product.id,
+            ProductPriceAlert.status == "pending",
+        )
+        .order_by(ProductPriceAlert.id.desc())
+        .limit(1)
+        .with_for_update()
+    )
+    if pending is not None:
+        if new_sale_price < pending.sale_price_before:
+            pending.provider = ADMIN_PRICE_ALERT_PROVIDER
+            pending.supplier_price_after = supplier_price
+            pending.sale_price_after = new_sale_price
+            return True
+        pending.status = "superseded"
+        return False
+
+    session.add(
+        ProductPriceAlert(
+            product_id=product.id,
+            provider=ADMIN_PRICE_ALERT_PROVIDER,
+            supplier_price_before=supplier_price,
+            supplier_price_after=supplier_price,
+            sale_price_before=previous_sale_price,
+            sale_price_after=new_sale_price,
+        )
+    )
+    return True
 
 
 async def release_supplier_price_lock(
@@ -105,6 +165,9 @@ async def apply_supplier_price(
     previous_supplier_price = locked_product.supplier_price
     previous_sale_price = int(locked_product.price)
     new_sale_price = supplier_price + max(0, int(locked_product.supplier_markup))
+    price_provider = alert_provider or locked_product.fulfillment_source
+    if price_provider == "canboso":
+        new_sale_price = round_vnd_to_thousand(new_sale_price)
     was_synced = locked_product.supplier_synced_at is not None
 
     locked_product.supplier_price = supplier_price

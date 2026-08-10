@@ -7,8 +7,15 @@ from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from app.broadcasts import deliver_pending_sale_alerts, recover_interrupted_product_alerts
 from app.database import Base
-from app.models import Category, Product, ProductAlertDelivery, ProductPriceAlert, User
-from app.price_alerts import apply_supplier_price
+from app.models import (
+    Category,
+    InventoryItem,
+    Product,
+    ProductAlertDelivery,
+    ProductPriceAlert,
+    User,
+)
+from app.price_alerts import apply_supplier_price, queue_admin_price_drop
 
 
 async def make_database():
@@ -535,6 +542,55 @@ def test_sale_alert_is_cancelled_while_inventory_price_is_locked() -> None:
     asyncio.run(scenario())
 
 
+def test_admin_price_drop_is_sent_for_locked_inventory_stock() -> None:
+    async def scenario() -> None:
+        engine, sessions = await make_database()
+        async with sessions() as session:
+            category = Category(name_vi="API", name_en="API")
+            session.add(category)
+            await session.flush()
+            product = Product(
+                category_id=category.id,
+                name_vi="Hàng ôm giảm giá",
+                name_en="Discounted stocked item",
+                price=28_000,
+                fulfillment_source="lehai",
+                supplier_product_id="cdk_ggpro_18m",
+                supplier_price=20_000,
+                supplier_markup=8_000,
+                price_lock_enabled=True,
+                external_stock=1,
+                active=True,
+            )
+            session.add(product)
+            await session.flush()
+            session.add(User(telegram_id=1, full_name="Buyer", has_started=True))
+            assert (
+                await queue_admin_price_drop(
+                    session,
+                    product,
+                    previous_sale_price=35_000,
+                    current_stock=1,
+                )
+                is True
+            )
+            await session.commit()
+
+        bot = FakeSaleBot()
+        assert await deliver_pending_sale_alerts(
+            sessions,
+            bot,  # type: ignore[arg-type]
+            throttle_seconds=0,
+        ) == 1
+        assert len(bot.calls) == 1
+        async with sessions() as session:
+            alert = await session.scalar(select(ProductPriceAlert))
+            assert alert is not None and alert.status == "sent"
+        await engine.dispose()
+
+    asyncio.run(scenario())
+
+
 def test_disabled_lehai_route_supersedes_pending_gpt_plus_sale_alert() -> None:
     async def scenario() -> None:
         engine, sessions = await make_database()
@@ -582,6 +638,140 @@ def test_disabled_lehai_route_supersedes_pending_gpt_plus_sale_alert() -> None:
         async with sessions() as session:
             alert = await session.scalar(select(ProductPriceAlert))
             assert alert is not None and alert.status == "superseded"
+        await engine.dispose()
+
+    asyncio.run(scenario())
+
+
+def test_admin_price_drop_on_in_stock_local_product_sends_normal_sale_alert() -> None:
+    async def scenario() -> None:
+        engine, sessions = await make_database()
+        async with sessions() as session:
+            category = Category(name_vi="Kho", name_en="Stock")
+            session.add(category)
+            await session.flush()
+            product = Product(
+                category_id=category.id,
+                name_vi="Tài khoản có sẵn",
+                name_en="In-stock account",
+                price=21_000,
+                fulfillment_source="local",
+                active=True,
+            )
+            session.add(product)
+            await session.flush()
+            session.add_all(
+                [
+                    InventoryItem(
+                        product_id=product.id,
+                        encrypted_secret="encrypted",
+                        status="available",
+                    ),
+                    User(telegram_id=1, full_name="Buyer", has_started=True),
+                ]
+            )
+            assert (
+                await queue_admin_price_drop(
+                    session,
+                    product,
+                    previous_sale_price=25_000,
+                    current_stock=1,
+                )
+                is True
+            )
+            await session.commit()
+
+        bot = FakeSaleBot()
+        assert await deliver_pending_sale_alerts(
+            sessions,
+            bot,  # type: ignore[arg-type]
+            throttle_seconds=0,
+        ) == 1
+        assert len(bot.calls) == 1
+        assert "25.000đ" in bot.calls[0][1]
+        assert "21.000đ" in bot.calls[0][1]
+        async with sessions() as session:
+            alert = await session.scalar(select(ProductPriceAlert))
+            assert alert is not None
+            assert alert.provider == "admin"
+            assert alert.status == "sent"
+        await engine.dispose()
+
+    asyncio.run(scenario())
+
+
+def test_admin_price_drop_without_stock_does_not_queue_alert() -> None:
+    async def scenario() -> None:
+        engine, sessions = await make_database()
+        async with sessions() as session:
+            category = Category(name_vi="Kho", name_en="Stock")
+            session.add(category)
+            await session.flush()
+            product = Product(
+                category_id=category.id,
+                name_vi="Hết hàng",
+                name_en="Out of stock",
+                price=21_000,
+                fulfillment_source="local",
+                active=True,
+            )
+            session.add(product)
+            await session.flush()
+            assert (
+                await queue_admin_price_drop(
+                    session,
+                    product,
+                    previous_sale_price=25_000,
+                    current_stock=0,
+                )
+                is False
+            )
+            await session.commit()
+            assert await session.scalar(select(ProductPriceAlert.id)) is None
+        await engine.dispose()
+
+    asyncio.run(scenario())
+
+
+def test_canboso_dynamic_sale_price_uses_requested_thousand_rounding() -> None:
+    async def scenario() -> None:
+        engine, sessions = await make_database()
+        async with sessions() as session:
+            category = Category(name_vi="Gemini", name_en="Gemini")
+            session.add(category)
+            await session.flush()
+            product = Product(
+                category_id=category.id,
+                name_vi="Link GG Pro Jio 18M",
+                name_en="GG Pro Jio 18M link",
+                price=22_000,
+                fulfillment_source="lehai",
+                supplier_product_id="cdk_ggpro_18m",
+                supplier_price=13_000,
+                supplier_markup=9_000,
+                external_stock=10,
+                supplier_synced_at=datetime.now(UTC),
+            )
+            session.add(product)
+            await session.commit()
+
+            assert (
+                await apply_supplier_price(
+                    session,
+                    product,
+                    12_375,
+                    alert_provider="canboso",
+                )
+                is True
+            )
+            await session.commit()
+            assert product.supplier_price == 12_375
+            assert product.supplier_markup == 9_000
+            assert product.price == 21_000
+            alert = await session.scalar(select(ProductPriceAlert))
+            assert alert is not None
+            assert alert.sale_price_before == 22_000
+            assert alert.sale_price_after == 21_000
         await engine.dispose()
 
     asyncio.run(scenario())

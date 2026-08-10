@@ -9,8 +9,8 @@ from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 from app.canboso_suppliers import CANBOSO_GG18M_ROUTE_ID, CanbosoClient
 from app.database import Base
 from app.models import Category, Order, Product, User
-from app.services import purchase_product
-from app.suppliers import SupplierPurchase, SupplierSnapshot
+from app.services import ProductPricing, price_supplier_plan, purchase_product
+from app.suppliers import SupplierPurchase, SupplierRoute, SupplierSnapshot
 from app.utils import SecretCipher
 
 
@@ -135,6 +135,41 @@ class RoutedSupplier:
             product_id=product_id,
             provider=self.provider,
         )
+
+
+def test_canboso_multi_source_quote_uses_rounded_shop_price() -> None:
+    product = Product(
+        price=21_000,
+        supplier_markup=9_000,
+        price_lock_enabled=False,
+    )
+    client = RoutedSupplier("canboso", price=12_375, stock=10)
+    route = SupplierRoute(
+        provider="canboso",
+        product_id=CANBOSO_GG18M_ROUTE_ID,
+        client=client,  # type: ignore[arg-type]
+        snapshot=SupplierSnapshot(
+            product_id=CANBOSO_GG18M_ROUTE_ID,
+            name="GG Pro 18M",
+            description="",
+            unit_price=12_375,
+            source_stock=10,
+            owner_balance=123_750,
+        ),
+    )
+    quote = price_supplier_plan(
+        product,
+        ((route, 1),),
+        ProductPricing(
+            original_unit_price=21_000,
+            discount_per_unit=0,
+            final_unit_price=21_000,
+        ),
+    )
+
+    assert quote.total_amount == 21_000
+    assert quote.allocations[0].original_unit_price == 21_000
+    assert quote.allocations[0].final_unit_price == 21_000
 
 
 def test_gg18m_purchase_prefers_cheaper_canboso_source() -> None:
