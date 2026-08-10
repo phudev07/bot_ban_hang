@@ -360,6 +360,18 @@ ssh -i "$HOME\.ssh\codex_vps" root@160.191.243.91 `
 Cloudflare DNS for `token.vietshare.site` must remain proxied. If it becomes DNS-only,
 direct-origin protection will return `403` to legitimate API users.
 
+Keep Redis persistence reliable on the small VPS and verify the firewall survives reboot:
+
+```bash
+install -m 644 deploy/99-telegram-shop-sysctl.conf /etc/sysctl.d/99-telegram-shop.conf
+sysctl --system
+systemctl enable ufw
+ufw status verbose
+```
+
+`vm.overcommit_memory` must be `1`. UFW must be active with only SSH, HTTP and HTTPS
+allowed from the public network.
+
 ## 12. Database inspection
 
 Open PostgreSQL inside its container:

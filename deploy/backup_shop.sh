@@ -78,6 +78,10 @@ for path in \
   /etc/caddy/Caddyfile \
   /etc/fail2ban/jail.d/sshd.local \
   /etc/ssh/sshd_config.d/99-hardening.conf \
+  /etc/sysctl.d/99-telegram-shop.conf \
+  /etc/apt/sources.list \
+  /etc/apt/apt.conf.d/20auto-upgrades \
+  /etc/ufw/ufw.conf \
   /etc/ufw/user.rules \
   /etc/ufw/user6.rules \
   "${SOURCE_ROOT}/.deployed-commit"; do
