@@ -627,14 +627,21 @@ async def broadcast_worker(
             raise
         except Exception as exc:
             logger.exception("Could not deliver queued broadcasts")
-            async with session_factory() as session:
-                async with session.begin():
-                    await session.execute(
-                        update(BroadcastLog)
-                        .where(BroadcastLog.status == "sending")
-                        .values(last_error=str(exc)[:500])
-                    )
-            await recover_interrupted_broadcasts(session_factory)
+            try:
+                async with session_factory() as session:
+                    async with session.begin():
+                        await session.execute(
+                            update(BroadcastLog)
+                            .where(BroadcastLog.status == "sending")
+                            .values(last_error=str(exc)[:500])
+                        )
+                await recover_interrupted_broadcasts(session_factory)
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                logger.exception(
+                    "Could not persist broadcast failure state; the worker will retry"
+                )
             processed = 0
         if processed == 0:
             await asyncio.sleep(max(0.25, poll_seconds))
@@ -1421,22 +1428,29 @@ async def sale_alert_worker(
             raise
         except Exception as exc:
             logger.exception("Could not deliver automatic supplier product alerts")
-            async with session_factory() as session:
-                async with session.begin():
-                    await session.execute(
-                        update(ProductPriceAlert)
-                        .where(ProductPriceAlert.status == "sending")
-                        .values(last_error=str(exc)[:500])
-                    )
-                    await session.execute(
-                        update(ProductStockAlert)
-                        .where(ProductStockAlert.status == "sending")
-                        .values(last_error=str(exc)[:500])
-                    )
-                    await session.execute(
-                        update(FlashSaleCampaign)
-                        .where(FlashSaleCampaign.notification_status == "sending")
-                        .values(notification_last_error=str(exc)[:500])
-                    )
-            await recover_interrupted_product_alerts(session_factory)
+            try:
+                async with session_factory() as session:
+                    async with session.begin():
+                        await session.execute(
+                            update(ProductPriceAlert)
+                            .where(ProductPriceAlert.status == "sending")
+                            .values(last_error=str(exc)[:500])
+                        )
+                        await session.execute(
+                            update(ProductStockAlert)
+                            .where(ProductStockAlert.status == "sending")
+                            .values(last_error=str(exc)[:500])
+                        )
+                        await session.execute(
+                            update(FlashSaleCampaign)
+                            .where(FlashSaleCampaign.notification_status == "sending")
+                            .values(notification_last_error=str(exc)[:500])
+                        )
+                await recover_interrupted_product_alerts(session_factory)
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                logger.exception(
+                    "Could not persist product alert failure state; the worker will retry"
+                )
         await asyncio.sleep(max(2, poll_seconds))

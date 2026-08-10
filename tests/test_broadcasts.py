@@ -1,18 +1,22 @@
 import asyncio
 from types import SimpleNamespace
 
+import pytest
 from aiogram.exceptions import TelegramForbiddenError, TelegramRetryAfter
 from cryptography.fernet import Fernet
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
+import app.broadcasts as broadcasts_module
 from app.admin import create_admin_router
 from app.broadcasts import (
     BroadcastRateLimiter,
+    broadcast_worker,
     deliver_broadcast,
     deliver_queued_broadcasts,
     queue_broadcast,
     recover_interrupted_broadcasts,
+    sale_alert_worker,
 )
 from app.config import Settings
 from app.database import Base
@@ -561,5 +565,67 @@ def test_queued_broadcast_retries_telegram_rate_limit() -> None:
             assert campaign.delivered_count == 1
             assert campaign.failed_count == 0
         await engine.dispose()
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("worker_name", ["broadcast", "product_alert"])
+def test_notification_workers_survive_temporary_database_outage(
+    monkeypatch,
+    worker_name: str,
+) -> None:
+    class UnavailableSessionFactory:
+        def __call__(self):
+            raise RuntimeError("database unavailable")
+
+    async def no_op_recovery(_session_factory) -> None:
+        return None
+
+    async def fail_delivery(*_args, **_kwargs):
+        raise RuntimeError("delivery unavailable")
+
+    async def scenario() -> None:
+        if worker_name == "broadcast":
+            monkeypatch.setattr(
+                broadcasts_module,
+                "recover_interrupted_broadcasts",
+                no_op_recovery,
+            )
+            monkeypatch.setattr(
+                broadcasts_module,
+                "deliver_queued_broadcasts",
+                fail_delivery,
+            )
+            task = asyncio.create_task(
+                broadcast_worker(
+                    UnavailableSessionFactory(),  # type: ignore[arg-type]
+                    FakeBot(),  # type: ignore[arg-type]
+                    poll_seconds=0.01,
+                )
+            )
+        else:
+            monkeypatch.setattr(
+                broadcasts_module,
+                "recover_interrupted_product_alerts",
+                no_op_recovery,
+            )
+            monkeypatch.setattr(
+                broadcasts_module,
+                "deliver_pending_flash_sales",
+                fail_delivery,
+            )
+            task = asyncio.create_task(
+                sale_alert_worker(
+                    UnavailableSessionFactory(),  # type: ignore[arg-type]
+                    FakeBot(),  # type: ignore[arg-type]
+                    poll_seconds=2,
+                )
+            )
+
+        await asyncio.sleep(0.05)
+        assert not task.done()
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
 
     asyncio.run(scenario())
