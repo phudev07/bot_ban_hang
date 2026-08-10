@@ -21,6 +21,15 @@ REQUIRED_MANIFEST_PAYLOADS = {
     "RESTORE.txt",
 }
 REQUIRED_APPLICATION_FILES = {".env", "app/main.py", "docker-compose.yml"}
+REQUIRED_SYSTEM_CONFIG_FILES = {
+    "etc/apt/apt.conf.d/20auto-upgrades",
+    "etc/apt/sources.list",
+    "etc/caddy/Caddyfile",
+    "etc/ssh/sshd_config.d/99-hardening.conf",
+    "etc/sysctl.d/99-telegram-shop.conf",
+    "etc/ufw/ufw.conf",
+    "etc/ufw/user.rules",
+}
 SQL_MARKERS = (b"CREATE TABLE public.users", b"COPY public.users")
 
 
@@ -29,6 +38,7 @@ class BackupVerification:
     manifest_entries: int
     postgres_uncompressed_bytes: int
     application_entries: int
+    system_config_entries: int
 
 
 def _normalize_archive_name(name: str) -> str:
@@ -127,6 +137,25 @@ def _verify_application_archive(path: Path) -> int:
     return len(names)
 
 
+def _verify_system_config_archive(path: Path) -> int:
+    try:
+        with tarfile.open(path, "r:gz") as archive:
+            names = {
+                _normalize_archive_name(member.name)
+                for member in archive.getmembers()
+                if member.isfile()
+            }
+    except tarfile.TarError as exc:
+        raise ValueError("System configuration payload is not a complete tar.gz archive") from exc
+    missing = REQUIRED_SYSTEM_CONFIG_FILES - names
+    if missing:
+        raise ValueError(
+            "System configuration payload is missing required files: "
+            + ", ".join(sorted(missing))
+        )
+    return len(names)
+
+
 def verify_decrypted_backup(path: Path) -> BackupVerification:
     with tempfile.TemporaryDirectory(prefix="shop-backup-verify-") as temp_directory:
         temp_root = Path(temp_directory)
@@ -160,10 +189,14 @@ def verify_decrypted_backup(path: Path) -> BackupVerification:
 
         postgres_bytes = _verify_postgres_dump(payload_paths["postgres.sql.gz"])
         application_entries = _verify_application_archive(payload_paths["application.tar.gz"])
+        system_config_entries = _verify_system_config_archive(
+            payload_paths["system-config.tar.gz"]
+        )
         return BackupVerification(
             manifest_entries=len(manifest),
             postgres_uncompressed_bytes=postgres_bytes,
             application_entries=application_entries,
+            system_config_entries=system_config_entries,
         )
 
 
@@ -187,6 +220,7 @@ def main() -> None:
     print(f"Manifest payloads: {result.manifest_entries}")
     print(f"PostgreSQL bytes checked: {result.postgres_uncompressed_bytes}")
     print(f"Application entries checked: {result.application_entries}")
+    print(f"System configuration entries checked: {result.system_config_entries}")
 
 
 if __name__ == "__main__":

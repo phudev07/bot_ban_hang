@@ -59,6 +59,22 @@ def make_verifiable_encrypted_backup(
             info.size = len(content)
             archive.addfile(info, io.BytesIO(content))
 
+    system_config_buffer = io.BytesIO()
+    with tarfile.open(fileobj=system_config_buffer, mode="w:gz") as archive:
+        for name in (
+            "etc/apt/apt.conf.d/20auto-upgrades",
+            "etc/apt/sources.list",
+            "etc/caddy/Caddyfile",
+            "etc/ssh/sshd_config.d/99-hardening.conf",
+            "etc/sysctl.d/99-telegram-shop.conf",
+            "etc/ufw/ufw.conf",
+            "etc/ufw/user.rules",
+        ):
+            content = f"fixture:{name}\n".encode()
+            info = tarfile.TarInfo(name)
+            info.size = len(content)
+            archive.addfile(info, io.BytesIO(content))
+
     payloads = {
         "postgres.sql.gz": gzip.compress(
             b"CREATE TABLE public.users (id bigint);\n"
@@ -66,7 +82,7 @@ def make_verifiable_encrypted_backup(
         ),
         "redis.rdb": b"REDIS0011fixture",
         "application.tar.gz": application_buffer.getvalue(),
-        "system-config.tar.gz": b"system-config-fixture",
+        "system-config.tar.gz": system_config_buffer.getvalue(),
         "metadata.txt": b"created_at_utc=fixture\n",
         "RESTORE.txt": b"restore fixture\n",
     }
@@ -151,6 +167,7 @@ def test_verify_encrypted_backup_checks_database_application_and_manifest(
     assert result.manifest_entries == 6
     assert result.postgres_uncompressed_bytes > 0
     assert result.application_entries >= 3
+    assert result.system_config_entries >= 7
 
 
 def test_verify_encrypted_backup_rejects_manifest_mismatch(tmp_path: Path) -> None:
