@@ -174,17 +174,49 @@ def create_api(
 
     if settings.dashboard_enabled:
         login_rate_limiter = LoginRateLimiter()
+        distributed_login_limit_enabled = api_redis is not None
+
+        def admin_login_rate_limited_response(retry_after: int) -> HTMLResponse:
+            return HTMLResponse(
+                "Đăng nhập quá nhanh. Vui lòng thử lại sau ít phút.",
+                status_code=429,
+                headers={
+                    "Retry-After": str(max(1, retry_after)),
+                    "Cache-Control": "no-store, private",
+                    "Pragma": "no-cache",
+                },
+            )
 
         @app.middleware("http")
         async def limit_admin_login(request: Request, call_next):
             if request.method != "POST" or request.url.path != "/admin/login":
                 return await call_next(request)
             key = client_ip(request) or "unknown"
+            if distributed_login_limit_enabled:
+                per_ip = await ingress_limiter.hit(
+                    f"admin-login:ip:{key}",
+                    (
+                        RateLimitRule("burst", 5, 30),
+                        RateLimitRule("five-minute", 12, 5 * 60),
+                    ),
+                )
+                if not per_ip.allowed:
+                    return admin_login_rate_limited_response(per_ip.retry_after)
+                global_limit = await ingress_limiter.hit(
+                    "admin-login:global",
+                    (RateLimitRule("minute", 60, 60),),
+                )
+                if not global_limit.allowed:
+                    return admin_login_rate_limited_response(global_limit.retry_after)
             if login_rate_limiter.blocked(key):
                 return HTMLResponse(
                     "Đăng nhập sai quá nhiều lần. Vui lòng thử lại sau 5 phút.",
                     status_code=429,
-                    headers={"Retry-After": "300"},
+                    headers={
+                        "Retry-After": "300",
+                        "Cache-Control": "no-store, private",
+                        "Pragma": "no-cache",
+                    },
                 )
             response = await call_next(request)
             if response.status_code == 401:
@@ -215,6 +247,8 @@ def create_api(
             if request.url.path.startswith("/admin-assets/"):
                 response.headers["Cache-Control"] = "public, max-age=86400, immutable"
             elif request.url.path.startswith("/admin"):
+                response.headers["Cache-Control"] = "no-store, private"
+                response.headers["Pragma"] = "no-cache"
                 response.headers["Server-Timing"] = f"app;dur={duration_ms:.1f}"
                 if duration_ms >= 750:
                     logger.warning(

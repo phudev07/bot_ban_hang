@@ -9,6 +9,7 @@ import app.api as api_module
 from app.api import create_api
 from app.config import Settings
 from app.database import Base
+from app.dashboard_security import hash_dashboard_password
 from app.services import PaymentResult
 from app.utils import SecretCipher
 
@@ -99,6 +100,54 @@ def test_public_api_and_sepay_have_pre_authentication_limits(tmp_path) -> None:
         assert [response.status_code for response in webhook_responses[:10]] == [401] * 10
         assert webhook_responses[10].status_code == 429
         assert webhook_responses[10].json()["detail"]["code"] == "RATE_LIMITED"
+
+    asyncio.run(engine.dispose())
+
+
+def test_admin_login_is_rate_limited_before_password_verification(tmp_path) -> None:
+    async def setup_database():
+        database_path = (tmp_path / "admin-login-rate.db").as_posix()
+        engine = create_async_engine(f"sqlite+aiosqlite:///{database_path}")
+        async with engine.begin() as connection:
+            await connection.run_sync(Base.metadata.create_all)
+        return engine, async_sessionmaker(engine, expire_on_commit=False)
+
+    engine, sessions = asyncio.run(setup_database())
+    encryption_key = Fernet.generate_key().decode()
+    config = Settings(
+        _env_file=None,
+        bot_token="123456:ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghi",
+        inventory_encryption_key=encryption_key,
+        dashboard_enabled=True,
+        dashboard_username="admin",
+        dashboard_password_hash=hash_dashboard_password("correct-password"),
+        dashboard_session_secret="session-secret-long-enough-for-tests",
+    )
+    app = create_api(
+        config,
+        sessions,
+        FakeBot(),  # type: ignore[arg-type]
+        SecretCipher(encryption_key),
+        api_redis=FakeRedis(),  # type: ignore[arg-type]
+    )
+
+    with TestClient(app, base_url="https://testserver") as client:
+        login_page = client.get("/admin/login")
+        assert login_page.status_code == 200
+        assert login_page.headers["cache-control"] == "no-store, private"
+        assert login_page.headers["pragma"] == "no-cache"
+
+        responses = [
+            client.post(
+                "/admin/login",
+                data={"username": "admin", "password": "wrong-password"},
+            )
+            for _ in range(6)
+        ]
+        assert [response.status_code for response in responses[:5]] == [401] * 5
+        assert responses[5].status_code == 429
+        assert responses[5].headers["retry-after"]
+        assert responses[5].headers["cache-control"] == "no-store, private"
 
     asyncio.run(engine.dispose())
 

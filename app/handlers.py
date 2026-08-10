@@ -1703,17 +1703,7 @@ def create_router(
             await state.clear()
             await message.answer("Sản phẩm không còn tồn tại.")
             return
-        stock = await available_stock(
-            session,
-            product.id,
-            supplier_client,
-            lehai_client=lehai_client,
-            canboso_client=canboso_client,
-            nce_client=nce_client,
-            haji_client=haji_client,
-            refresh_external=True,
-            refresh_max_age_seconds=settings.supplier_ui_cache_seconds,
-        )
+        stock = await available_stock(session, product.id)
         try:
             pricing = await product_pricing(
                 session,
@@ -1786,17 +1776,7 @@ def create_router(
         if product is None or not product.active:
             await callback.answer("Sản phẩm không tồn tại.", show_alert=True)
             return
-        stock = await available_stock(
-            session,
-            product.id,
-            supplier_client,
-            lehai_client=lehai_client,
-            canboso_client=canboso_client,
-            nce_client=nce_client,
-            haji_client=haji_client,
-            refresh_external=True,
-            refresh_max_age_seconds=settings.supplier_ui_cache_seconds,
-        )
+        stock = await available_stock(session, product.id)
         pricing = await product_pricing(
             session,
             product,
@@ -1877,17 +1857,7 @@ def create_router(
         if product is None or not product.active or not product.allow_quantity:
             await callback.answer("Sản phẩm không hợp lệ.", show_alert=True)
             return
-        stock = await available_stock(
-            session,
-            product.id,
-            supplier_client,
-            lehai_client=lehai_client,
-            canboso_client=canboso_client,
-            nce_client=nce_client,
-            haji_client=haji_client,
-            refresh_external=True,
-            refresh_max_age_seconds=settings.supplier_ui_cache_seconds,
-        )
+        stock = await available_stock(session, product.id)
         if stock <= 0:
             await callback.answer("Sản phẩm đã hết hàng.", show_alert=True)
             return
@@ -1986,17 +1956,7 @@ def create_router(
                 show_alert=True,
             )
             return
-        stock = await available_stock(
-            session,
-            product.id,
-            supplier_client,
-            lehai_client=lehai_client,
-            canboso_client=canboso_client,
-            nce_client=nce_client,
-            haji_client=haji_client,
-            refresh_external=True,
-            refresh_max_age_seconds=settings.supplier_ui_cache_seconds,
-        )
+        stock = await available_stock(session, product.id)
         maximum = purchase_quantity_limit(product, stock)
         if maximum <= 0:
             await callback.answer("Sản phẩm đã hết hàng.", show_alert=True)
@@ -2137,17 +2097,7 @@ def create_router(
             return
         local_stock = await local_inventory_stock(session, product.id)
         if local_stock < quantity and (
-            await available_stock(
-                session,
-                product.id,
-                supplier_client,
-                lehai_client=lehai_client,
-                canboso_client=canboso_client,
-                nce_client=nce_client,
-                haji_client=haji_client,
-                refresh_external=True,
-                refresh_max_age_seconds=settings.supplier_ui_cache_seconds,
-            )
+            await available_stock(session, product.id)
             < quantity
         ):
             await callback.answer("Sản phẩm vừa hết hàng.", show_alert=True)

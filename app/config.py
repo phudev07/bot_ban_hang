@@ -133,7 +133,8 @@ class Settings(BaseSettings):
     referral_commission_percent: int = 2
 
     inventory_encryption_key: SecretStr
-    web_host: str = "0.0.0.0"
+    # Docker publishes this container port on the VPS loopback interface only.
+    web_host: str = "0.0.0.0"  # nosec B104
     web_port: int = 8080
     public_base_url: str = ""
     dashboard_enabled: bool = False

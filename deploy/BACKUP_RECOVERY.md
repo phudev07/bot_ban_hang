@@ -106,7 +106,16 @@ python deploy\decrypt_backup.py `
   --output "$env:TEMP\telegram-shop-restore.tar.gz"
 ```
 
-Extract the resulting archive. Verify the included files:
+For a full non-destructive verification, decrypt to a temporary directory, validate every
+manifest checksum, read the complete PostgreSQL dump and inspect the application payload:
+
+```powershell
+python deploy\verify_backup.py `
+  "C:\Users\DELL\Documents\VietShareBackups\bot_ban_hang\telegram-shop-YYYYMMDDTHHMMSSZ.tar.gz.enc" `
+  --key-file "C:\Users\DELL\.ssh\shop_backup.key"
+```
+
+For manual recovery, extract the decrypted archive and inspect the included files:
 
 ```powershell
 tar -xzf "$env:TEMP\telegram-shop-restore.tar.gz" -C "$env:TEMP\telegram-shop-restore"

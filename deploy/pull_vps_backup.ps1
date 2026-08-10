@@ -9,6 +9,11 @@ param(
 $ErrorActionPreference = "Stop"
 New-Item -ItemType Directory -Force -Path $Destination | Out-Null
 
+$stalePartialCutoff = (Get-Date).AddHours(-24)
+Get-ChildItem -LiteralPath $Destination -File -Filter '*.partial' |
+    Where-Object { $_.LastWriteTime -lt $stalePartialCutoff } |
+    Remove-Item -Force
+
 $remoteFile = (& ssh -i $SshKey $VpsHost "ls -1t '$RemoteDirectory'/telegram-shop-*.tar.gz.enc 2>/dev/null | head -n 1").Trim()
 if (-not $remoteFile) {
     throw "VPS does not have an automated shop backup yet."

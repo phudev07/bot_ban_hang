@@ -706,7 +706,7 @@ def create_dashboard_router(
 ) -> APIRouter:
     router = APIRouter()
     route_cache: dict[tuple[str, ...], tuple[float, SupplierRouteFetch]] = {}
-    route_cache_lock = asyncio.Lock()
+    route_cache_locks: dict[tuple[str, ...], asyncio.Lock] = {}
 
     async def multi_source_route_fetch(
         product: Product,
@@ -732,6 +732,7 @@ def create_dashboard_router(
         cached = route_cache.get(cache_key)
         if cached is not None and now - cached[0] < cache_seconds:
             return cached[1]
+        route_cache_lock = route_cache_locks.setdefault(cache_key, asyncio.Lock())
         async with route_cache_lock:
             now = time.monotonic()
             cached = route_cache.get(cache_key)
@@ -1473,15 +1474,20 @@ def create_dashboard_router(
                     .order_by(Category.position, Category.id)
                 )
             )
-        for product_row in products:
+        multi_source_rows = [
+            product_row
+            for product_row in products
+            if is_multi_supplier_product(
+                product_row["product"].fulfillment_source,
+                product_row["product"].supplier_product_id,
+            )
+        ]
+        route_fetches = await asyncio.gather(
+            *(multi_source_route_fetch(product_row["product"]) for product_row in multi_source_rows)
+        )
+        for product_row, fetched in zip(multi_source_rows, route_fetches, strict=True):
             product = product_row["product"]
-            if not is_multi_supplier_product(
-                product.fulfillment_source,
-                product.supplier_product_id,
-            ):
-                continue
             enabled_providers = enabled_supplier_providers(product)
-            fetched = await multi_source_route_fetch(product)
             if fetched is not None:
                 routes = {route.provider: route for route in fetched.routes}
                 failures = {failure.provider: failure for failure in fetched.failures}
