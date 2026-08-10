@@ -179,7 +179,7 @@ set -e
 cd /opt/telegram-sepay-shop
 tar -xzf /tmp/bot_ban_hang-$commit.tar.gz -C /opt/telegram-sepay-shop
 chmod 600 .env
-docker compose up -d --build --wait app
+docker compose up -d --build --no-deps --wait app
 curl -fsS http://127.0.0.1:8080/health
 printf '%s\n' '$commit' > .deployed-commit
 rm -f /tmp/bot_ban_hang-$commit.tar.gz
@@ -258,7 +258,7 @@ set -e
 cd /opt/telegram-sepay-shop
 tar -xzf /tmp/bot_ban_hang-$rollbackCommit.tar.gz -C /opt/telegram-sepay-shop
 chmod 600 .env
-docker compose up -d --build --wait app
+docker compose up -d --build --no-deps --wait app
 curl -fsS http://127.0.0.1:8080/health
 printf '%s\n' '$rollbackCommit' > .deployed-commit
 rm -f /tmp/bot_ban_hang-$rollbackCommit.tar.gz
