@@ -1090,16 +1090,29 @@ async def sync_lehai_products(
     canboso_client: ExternalSupplierClient | None = None,
 ) -> None:
     async with session_factory() as session:
-        products = list(
+        product_ids = list(
             await session.scalars(
-                select(Product).where(
+                select(Product.id)
+                .where(
                     Product.fulfillment_source == "lehai",
                     Product.active.is_(True),
                     Product.archived_at.is_(None),
                 )
+                .order_by(Product.id)
             )
         )
-        for product in products:
+
+    # Use the same Product -> supplier-state lock order as customer purchase flows.
+    # Committing each product also avoids holding unrelated catalog rows during API calls.
+    for product_id in product_ids:
+        async with session_factory.begin() as session:
+            product = await session.scalar(
+                select(Product)
+                .where(Product.id == product_id)
+                .with_for_update()
+            )
+            if product is None or not product.active or product.archived_at is not None:
+                continue
             await refresh_lehai_product(
                 session,
                 product,
@@ -1107,4 +1120,3 @@ async def sync_lehai_products(
                 sumistore_client=sumistore_client,
                 canboso_client=canboso_client,
             )
-        await session.commit()
