@@ -38,6 +38,7 @@ from app.models import (
     Product,
     ProductStockAlert,
     QuantityDiscount,
+    SellerPrice,
     SmsRental,
     SupplierBalanceTransaction,
     SupplierPurchaseAttempt,
@@ -796,6 +797,8 @@ class ProductPricing:
     quantity_discount_value: int = 0
     quantity_discount_per_unit: int = 0
     flash_sale: FlashSaleCampaign | None = None
+    seller_price_id: int | None = None
+    seller_profit_per_unit: int = 0
 
 
 @dataclass(frozen=True)
@@ -829,6 +832,183 @@ def supplier_sale_price(product: Product, supplier_price: int, provider: str) ->
     return round_vnd_to_thousand(sale_price) if provider == "canboso" else sale_price
 
 
+def seller_unit_price(
+    product: Product,
+    source_cost: int,
+    profit_per_unit: int,
+    *,
+    public_unit_price: int | None = None,
+) -> int | None:
+    cost = max(0, int(source_cost))
+    profit = max(0, int(profit_per_unit))
+    public_price = int(product.price if public_unit_price is None else public_unit_price)
+    candidate = cost + profit
+    if cost <= 0 or profit <= 0 or candidate <= cost or candidate >= public_price:
+        return None
+    return candidate
+
+
+async def active_seller_price(
+    session: AsyncSession,
+    user_id: int | None,
+    product_id: int,
+    *,
+    for_update: bool = False,
+) -> SellerPrice | None:
+    if user_id is None:
+        return None
+    statement = select(SellerPrice).where(
+        SellerPrice.user_id == user_id,
+        SellerPrice.product_id == product_id,
+        SellerPrice.active.is_(True),
+    )
+    if for_update:
+        statement = statement.with_for_update()
+    return await session.scalar(statement)
+
+
+async def first_available_inventory_cost(
+    session: AsyncSession,
+    product_id: int,
+) -> int | None:
+    row = (
+        await session.execute(
+            select(InventoryItem.cost_amount)
+            .where(
+                InventoryItem.product_id == product_id,
+                InventoryItem.status == "available",
+            )
+            .order_by(InventoryItem.id)
+            .limit(1)
+        )
+    ).first()
+    return None if row is None else int(row.cost_amount or 0)
+
+
+async def current_seller_source_cost(
+    session: AsyncSession,
+    product: Product,
+) -> int:
+    local_cost = await first_available_inventory_cost(session, product.id)
+    if local_cost is not None:
+        return local_cost
+    return max(0, int(product.supplier_price or 0))
+
+
+async def customer_product_prices(
+    session: AsyncSession,
+    products: list[Product],
+    user_id: int,
+    public_prices: dict[int, int] | None = None,
+) -> dict[int, int]:
+    if not products:
+        return {}
+    product_ids = [product.id for product in products]
+    rules = {
+        rule.product_id: rule
+        for rule in await session.scalars(
+            select(SellerPrice).where(
+                SellerPrice.user_id == user_id,
+                SellerPrice.product_id.in_(product_ids),
+                SellerPrice.active.is_(True),
+            )
+        )
+    }
+    first_item_ids = (
+        select(
+            InventoryItem.product_id.label("product_id"),
+            func.min(InventoryItem.id).label("item_id"),
+        )
+        .where(
+            InventoryItem.product_id.in_(product_ids),
+            InventoryItem.status == "available",
+        )
+        .group_by(InventoryItem.product_id)
+        .subquery()
+    )
+    local_costs = {
+        int(product_id): int(cost_amount)
+        for product_id, cost_amount in await session.execute(
+            select(first_item_ids.c.product_id, InventoryItem.cost_amount).join(
+                InventoryItem,
+                InventoryItem.id == first_item_ids.c.item_id,
+            )
+        )
+    }
+    result = dict(public_prices or {})
+    for product in products:
+        result.setdefault(product.id, int(product.price))
+        rule = rules.get(product.id)
+        if rule is None:
+            continue
+        source_cost = local_costs.get(product.id, int(product.supplier_price or 0))
+        price = seller_unit_price(
+            product,
+            source_cost,
+            rule.profit_per_unit,
+            public_unit_price=product.price,
+        )
+        if price is not None:
+            result[product.id] = price
+    return result
+
+
+async def seller_inventory_quote(
+    session: AsyncSession,
+    product: Product,
+    quantity: int,
+    pricing: ProductPricing,
+) -> tuple[int, ...] | None:
+    if pricing.seller_price_id is None or pricing.seller_profit_per_unit <= 0:
+        return None
+    costs = list(
+        await session.scalars(
+            select(InventoryItem.cost_amount)
+            .where(
+                InventoryItem.product_id == product.id,
+                InventoryItem.status == "available",
+            )
+            .order_by(InventoryItem.id)
+            .limit(quantity)
+        )
+    )
+    if len(costs) != quantity:
+        return None
+    prices = tuple(
+        seller_unit_price(
+            product,
+            int(cost),
+            pricing.seller_profit_per_unit,
+            public_unit_price=product.price,
+        )
+        for cost in costs
+    )
+    if any(price is None for price in prices):
+        return None
+    return tuple(int(price) for price in prices if price is not None)
+
+
+def seller_inventory_prices(
+    product: Product,
+    items: list[InventoryItem],
+    pricing: ProductPricing,
+) -> dict[int, int] | None:
+    if pricing.seller_price_id is None or pricing.seller_profit_per_unit <= 0:
+        return None
+    prices: dict[int, int] = {}
+    for item in items:
+        price = seller_unit_price(
+            product,
+            item.cost_amount,
+            pricing.seller_profit_per_unit,
+            public_unit_price=product.price,
+        )
+        if price is None:
+            return None
+        prices[item.id] = price
+    return prices
+
+
 def price_supplier_plan(
     product: Product,
     plan: tuple[tuple[SupplierRoute, int], ...],
@@ -841,7 +1021,21 @@ def price_supplier_plan(
             route.snapshot.unit_price,
             route.provider,
         )
-        if pricing.flash_sale is not None:
+        seller_price = (
+            seller_unit_price(
+                product,
+                route.snapshot.unit_price,
+                pricing.seller_profit_per_unit,
+                public_unit_price=original_unit_price,
+            )
+            if pricing.seller_price_id is not None
+            else None
+        )
+        if seller_price is not None:
+            final_unit_price = seller_price
+            coupon_discount = 0
+            quantity_discount = 0
+        elif pricing.flash_sale is not None:
             final_unit_price = int(pricing.flash_sale.sale_price)
             coupon_discount = 0
             quantity_discount = 0
@@ -873,7 +1067,11 @@ def price_supplier_plan(
             final_unit_price = (
                 original_unit_price - coupon_discount - quantity_discount
             )
-        discount_per_unit = max(0, original_unit_price - final_unit_price)
+        discount_per_unit = (
+            0
+            if seller_price is not None
+            else max(0, original_unit_price - final_unit_price)
+        )
         allocations.append(
             SupplierAllocationPricing(
                 route=route,
@@ -965,6 +1163,33 @@ async def product_pricing(
     expected_flash_sale_id: int | None = None,
     raise_coupon_error: bool = False,
 ) -> ProductPricing | None:
+    seller_price = await active_seller_price(
+        session,
+        user_id,
+        product.id,
+        for_update=lock_coupon or lock_flash_sale,
+    )
+    if seller_price is not None:
+        source_cost = await current_seller_source_cost(session, product)
+        final_price = seller_unit_price(
+            product,
+            source_cost,
+            seller_price.profit_per_unit,
+            public_unit_price=product.price,
+        )
+        if final_price is not None:
+            if coupon_code is not None or coupon_id is not None:
+                if raise_coupon_error:
+                    raise CouponValidationError("coupon_seller_price")
+                return None
+            return ProductPricing(
+                original_unit_price=int(product.price),
+                discount_per_unit=0,
+                final_unit_price=final_price,
+                seller_price_id=seller_price.id,
+                seller_profit_per_unit=int(seller_price.profit_per_unit),
+            )
+
     flash_sale = await active_flash_sale(
         session,
         product.id,
@@ -1373,6 +1598,7 @@ async def _purchase_product(
                 haji_client,
             )
             recovered_items: list[InventoryItem] = []
+            local_items: list[InventoryItem] = []
             recovered_stock = 0
             multi_route_fetch: SupplierRouteFetch | None = None
             multi_plan: tuple[tuple[SupplierRoute, int], ...] = ()
@@ -1509,6 +1735,14 @@ async def _purchase_product(
                 and flash_sale_remaining(pricing.flash_sale) < quantity
             ):
                 return PurchaseResult(False, "out_of_stock")
+            if product.fulfillment_source not in EXTERNAL_FULFILLMENT_SOURCES:
+                local_items = await reserve_available_inventory(
+                    session,
+                    product.id,
+                    quantity,
+                )
+                if len(local_items) != quantity:
+                    return PurchaseResult(False, "out_of_stock")
             multi_quote = None
             if multi_plan:
                 if fixed_unit_price is None:
@@ -1589,6 +1823,18 @@ async def _purchase_product(
                 if multi_quote is not None
                 else pricing.discount_per_unit * quantity
             )
+            inventory_items = recovered_items or local_items
+            inventory_seller_prices = seller_inventory_prices(
+                product,
+                inventory_items,
+                pricing,
+            )
+            if pricing.seller_price_id is not None and inventory_items:
+                if inventory_seller_prices is None:
+                    return PurchaseResult(False, "price_changed")
+                highest_unit_price = max(inventory_seller_prices.values())
+                total_amount = sum(inventory_seller_prices.values())
+                total_discount = 0
             if max_unit_price is not None and highest_unit_price > max_unit_price:
                 return PurchaseResult(
                     False,
@@ -1631,14 +1877,24 @@ async def _purchase_product(
                             product_name_vi=product.name_vi,
                             product_name_en=product.name_en,
                             inventory_item_id=item.id,
-                            amount=sale_unit_price,
+                            amount=(
+                                inventory_seller_prices[item.id]
+                                if inventory_seller_prices is not None
+                                else sale_unit_price
+                            ),
                             cost_amount=item.cost_amount,
-                            discount_amount=pricing.discount_per_unit,
+                            discount_amount=(
+                                0
+                                if inventory_seller_prices is not None
+                                else pricing.discount_per_unit
+                            ),
                             discount_code_id=pricing.coupon.id if pricing.coupon else None,
                             discount_code=pricing.coupon.code if pricing.coupon else None,
                             flash_sale_id=(
                                 pricing.flash_sale.id if pricing.flash_sale else None
                             ),
+                            seller_price_id=pricing.seller_price_id,
+                            seller_profit_per_unit=pricing.seller_profit_per_unit,
                             batch_code=batch_code,
                             supplier_order_code=item.supplier_order_code,
                             supplier_provider=item.supplier_provider,
@@ -1878,6 +2134,79 @@ async def _purchase_product(
                             "flash_sale_unavailable",
                             flash_sale_id=pricing.flash_sale.id,
                         )
+                seller_allocation_prices: tuple[int, ...] | None = None
+                if pricing.seller_price_id is not None:
+                    calculated_prices: list[int] = []
+                    allocation_inputs = (
+                        zip(
+                            supplier_purchases,
+                            multi_quote.allocations,
+                            strict=True,
+                        )
+                        if multi_plan
+                        else ((supplier_purchases[0], None),)
+                    )
+                    for (purchase, unit_cost), allocation in allocation_inputs:
+                        public_price = supplier_sale_price(
+                            product,
+                            unit_cost,
+                            purchase.provider,
+                        )
+                        calculated = seller_unit_price(
+                            product,
+                            unit_cost,
+                            pricing.seller_profit_per_unit,
+                            public_unit_price=public_price,
+                        )
+                        if calculated is None:
+                            await preserve_supplier_purchase_parts(
+                                session,
+                                product,
+                                supplier_purchases,
+                                cipher,
+                            )
+                            return PurchaseResult(False, "price_changed")
+                        calculated_prices.append(calculated)
+                    seller_allocation_prices = tuple(calculated_prices)
+                    highest_actual_price = max(seller_allocation_prices)
+                    if max_unit_price is not None and highest_actual_price > max_unit_price:
+                        await preserve_supplier_purchase_parts(
+                            session,
+                            product,
+                            supplier_purchases,
+                            cipher,
+                        )
+                        return PurchaseResult(False, "price_changed")
+                    actual_total_amount = sum(
+                        price * len(purchase.accounts)
+                        for price, (purchase, _unit_cost) in zip(
+                            seller_allocation_prices,
+                            supplier_purchases,
+                            strict=True,
+                        )
+                    )
+                    if actual_total_amount > total_amount:
+                        await preserve_supplier_purchase_parts(
+                            session,
+                            product,
+                            supplier_purchases,
+                            cipher,
+                        )
+                        return PurchaseResult(False, "price_changed")
+                    total_amount = actual_total_amount
+                    total_discount = 0
+                    if not wallet_already_charged and user.balance < total_amount:
+                        await preserve_supplier_purchase_parts(
+                            session,
+                            product,
+                            supplier_purchases,
+                            cipher,
+                        )
+                        return PurchaseResult(
+                            False,
+                            "insufficient",
+                            total_amount=total_amount,
+                        )
                 product.external_stock = max(0, product.external_stock - quantity)
                 orders = []
                 secret_values = []
@@ -1886,13 +2215,23 @@ async def _purchase_product(
                         (
                             purchase,
                             unit_cost,
-                            allocation.final_unit_price,
-                            allocation.discount_per_unit,
+                            (
+                                seller_allocation_prices[index]
+                                if seller_allocation_prices is not None
+                                else allocation.final_unit_price
+                            ),
+                            (
+                                0
+                                if seller_allocation_prices is not None
+                                else allocation.discount_per_unit
+                            ),
                         )
-                        for (purchase, unit_cost), allocation in zip(
-                            supplier_purchases,
-                            multi_quote.allocations,
-                            strict=True,
+                        for index, ((purchase, unit_cost), allocation) in enumerate(
+                            zip(
+                                supplier_purchases,
+                                multi_quote.allocations,
+                                strict=True,
+                            )
                         )
                     )
                 else:
@@ -1900,8 +2239,12 @@ async def _purchase_product(
                         (
                             supplier_purchase,
                             supplier_purchases[0][1],
-                            sale_unit_price,
-                            pricing.discount_per_unit,
+                            (
+                                seller_allocation_prices[0]
+                                if seller_allocation_prices is not None
+                                else sale_unit_price
+                            ),
+                            0 if seller_allocation_prices is not None else pricing.discount_per_unit,
                         ),
                     )
                 for purchase, unit_cost, unit_sale_price, unit_discount in allocation_rows:
@@ -1937,6 +2280,8 @@ async def _purchase_product(
                             flash_sale_id=(
                                 pricing.flash_sale.id if pricing.flash_sale else None
                             ),
+                            seller_price_id=pricing.seller_price_id,
+                            seller_profit_per_unit=pricing.seller_profit_per_unit,
                             batch_code=batch_code,
                             supplier_order_code=purchase.order_code or None,
                             supplier_provider=purchase.provider,
@@ -2005,20 +2350,7 @@ async def _purchase_product(
                     quantity_discount_value=pricing.quantity_discount_value,
                 )
 
-            items = list(
-                await session.scalars(
-                    select(InventoryItem)
-                    .where(
-                        InventoryItem.product_id == product_id,
-                        InventoryItem.status == "available",
-                    )
-                    .order_by(InventoryItem.id)
-                    .with_for_update(skip_locked=True)
-                    .limit(quantity)
-                )
-            )
-            if len(items) != quantity:
-                return PurchaseResult(False, "out_of_stock")
+            items = local_items
 
             now = datetime.now(UTC)
             batch_code = f"B{secrets.token_hex(5).upper()}"
@@ -2046,12 +2378,22 @@ async def _purchase_product(
                     product_name_vi=product.name_vi,
                     product_name_en=product.name_en,
                     inventory_item_id=item.id,
-                    amount=pricing.final_unit_price,
+                    amount=(
+                        inventory_seller_prices[item.id]
+                        if inventory_seller_prices is not None
+                        else pricing.final_unit_price
+                    ),
                     cost_amount=item.cost_amount,
-                    discount_amount=pricing.discount_per_unit,
+                    discount_amount=(
+                        0
+                        if inventory_seller_prices is not None
+                        else pricing.discount_per_unit
+                    ),
                     discount_code_id=pricing.coupon.id if pricing.coupon else None,
                     discount_code=pricing.coupon.code if pricing.coupon else None,
                     flash_sale_id=pricing.flash_sale.id if pricing.flash_sale else None,
+                    seller_price_id=pricing.seller_price_id,
+                    seller_profit_per_unit=pricing.seller_profit_per_unit,
                     batch_code=batch_code,
                     supplier_order_code=item.supplier_order_code,
                     supplier_provider=item.supplier_provider,
@@ -2117,6 +2459,8 @@ async def create_deposit(
     discount_code: str | None = None,
     flash_sale_id: int | None = None,
     flash_sale_quantity: int = 0,
+    seller_price_id: int | None = None,
+    seller_profit_per_unit: int = 0,
     expiry_seconds: int = 300,
     max_pending_deposits: int = 3,
 ) -> Deposit:
@@ -2135,6 +2479,22 @@ async def create_deposit(
         inventory_price_locked = bool(
             deposit_product is not None and deposit_product.price_lock_enabled
         )
+    if seller_price_id is not None:
+        seller_rule = await session.scalar(
+            select(SellerPrice).where(
+                SellerPrice.id == seller_price_id,
+                SellerPrice.user_id == user_id,
+                SellerPrice.product_id == product_id,
+                SellerPrice.active.is_(True),
+            )
+        )
+        if (
+            seller_rule is None
+            or int(seller_rule.profit_per_unit) != int(seller_profit_per_unit)
+            or discount_code_id is not None
+            or flash_sale_id is not None
+        ):
+            raise ValueError("Seller price is no longer valid")
 
     # Reuse identical QR requests created in the last 30 seconds instead of growing the table.
     reusable_after = now + timedelta(seconds=max(1, expiry_seconds - 30))
@@ -2151,6 +2511,8 @@ async def create_deposit(
             Deposit.quantity == quantity,
             Deposit.discount_code_id == discount_code_id,
             Deposit.flash_sale_id == flash_sale_id,
+            Deposit.seller_price_id == seller_price_id,
+            Deposit.seller_profit_per_unit == max(0, int(seller_profit_per_unit)),
             Deposit.inventory_price_locked == inventory_price_locked,
         )
         .order_by(Deposit.id.desc())
@@ -2207,6 +2569,8 @@ async def create_deposit(
         flash_sale_quantity=(
             max(1, flash_sale_quantity or quantity) if flash_sale is not None else 0
         ),
+        seller_price_id=seller_price_id,
+        seller_profit_per_unit=max(0, int(seller_profit_per_unit)),
         inventory_price_locked=inventory_price_locked,
         expires_at=now + timedelta(seconds=max(1, expiry_seconds)),
     )
@@ -2735,10 +3099,34 @@ async def _process_sepay_payment(
                                 deposit.quantity,
                             )
                             if len(items) == deposit.quantity:
-                                product.external_stock = max(
-                                    0,
-                                    product.external_stock - deposit.quantity,
-                                )
+                                if deposit.seller_price_id is not None:
+                                    locked_seller_pricing = ProductPricing(
+                                        original_unit_price=product.price,
+                                        discount_per_unit=0,
+                                        final_unit_price=product.price,
+                                        seller_price_id=deposit.seller_price_id,
+                                        seller_profit_per_unit=(
+                                            deposit.seller_profit_per_unit
+                                        ),
+                                    )
+                                    recovered_prices = seller_inventory_prices(
+                                        product,
+                                        items,
+                                        locked_seller_pricing,
+                                    )
+                                    if (
+                                        recovered_prices is None
+                                        or sum(recovered_prices.values())
+                                        != deposit.requested_amount
+                                    ):
+                                        items = []
+                                    else:
+                                        item_sale_prices.update(recovered_prices)
+                                if items:
+                                    product.external_stock = max(
+                                        0,
+                                        product.external_stock - deposit.quantity,
+                                    )
                             else:
                                 recovered_stock = len(items)
                                 items = []
@@ -2834,19 +3222,23 @@ async def _process_sepay_payment(
                             ):
                                 multi_quote: MultiSupplierQuote | None = None
                                 if multi_plan:
-                                    tier = await session.scalar(
-                                        select(QuantityDiscount)
-                                        .where(
-                                            QuantityDiscount.product_id == product.id,
-                                            QuantityDiscount.active.is_(True),
-                                            QuantityDiscount.min_quantity
-                                            <= deposit.quantity,
+                                    tier = (
+                                        await session.scalar(
+                                            select(QuantityDiscount)
+                                            .where(
+                                                QuantityDiscount.product_id == product.id,
+                                                QuantityDiscount.active.is_(True),
+                                                QuantityDiscount.min_quantity
+                                                <= deposit.quantity,
+                                            )
+                                            .order_by(
+                                                QuantityDiscount.min_quantity.desc(),
+                                                QuantityDiscount.discount_percent.desc(),
+                                            )
+                                            .limit(1)
                                         )
-                                        .order_by(
-                                            QuantityDiscount.min_quantity.desc(),
-                                            QuantityDiscount.discount_percent.desc(),
-                                        )
-                                        .limit(1)
+                                        if deposit.seller_price_id is None
+                                        else None
                                     )
                                     locked_pricing = ProductPricing(
                                         original_unit_price=product.price,
@@ -2857,6 +3249,10 @@ async def _process_sepay_payment(
                                             tier.discount_percent if tier is not None else 0
                                         ),
                                         flash_sale=deposit_campaign,
+                                        seller_price_id=deposit.seller_price_id,
+                                        seller_profit_per_unit=(
+                                            deposit.seller_profit_per_unit
+                                        ),
                                     )
                                     multi_quote = price_supplier_plan(
                                         product,
@@ -2993,6 +3389,33 @@ async def _process_sepay_payment(
                                     elif supplier_purchase_parts:
                                         supplier_unit_cost = supplier_purchase_parts[0][1]
                                         if (
+                                            deposit.seller_price_id is not None
+                                            and not multi_plan
+                                        ):
+                                            seller_price = seller_unit_price(
+                                                product,
+                                                supplier_unit_cost,
+                                                deposit.seller_profit_per_unit,
+                                                public_unit_price=supplier_sale_price(
+                                                    product,
+                                                    supplier_unit_cost,
+                                                    supplier_purchase.provider,
+                                                ),
+                                            )
+                                            if (
+                                                seller_price is None
+                                                or seller_price * deposit.quantity
+                                                != deposit.requested_amount
+                                            ):
+                                                await preserve_supplier_purchase_for_resale(
+                                                    session,
+                                                    product,
+                                                    supplier_purchase,
+                                                    cipher,
+                                                    supplier_unit_cost,
+                                                )
+                                                supplier_purchase_parts = ()
+                                        elif (
                                             not multi_plan
                                             and deposit_campaign is not None
                                             and stop_unsafe_flash_sale(
@@ -3063,6 +3486,11 @@ async def _process_sepay_payment(
                                                     item_discounts[item.id] = (
                                                         allocation.discount_per_unit
                                                     )
+                                                elif deposit.seller_price_id is not None:
+                                                    item_sale_prices[item.id] = (
+                                                        deposit.requested_amount
+                                                        // deposit.quantity
+                                                    )
                                         supplier_purchase_made = True
                         else:
                             items = list(
@@ -3077,6 +3505,32 @@ async def _process_sepay_payment(
                                     .limit(deposit.quantity)
                                 )
                             )
+                            if (
+                                len(items) == deposit.quantity
+                                and deposit.seller_price_id is not None
+                            ):
+                                locked_seller_pricing = ProductPricing(
+                                    original_unit_price=product.price,
+                                    discount_per_unit=0,
+                                    final_unit_price=product.price,
+                                    seller_price_id=deposit.seller_price_id,
+                                    seller_profit_per_unit=(
+                                        deposit.seller_profit_per_unit
+                                    ),
+                                )
+                                local_prices = seller_inventory_prices(
+                                    product,
+                                    items,
+                                    locked_seller_pricing,
+                                )
+                                if (
+                                    local_prices is None
+                                    or sum(local_prices.values())
+                                    != deposit.requested_amount
+                                ):
+                                    items = []
+                                else:
+                                    item_sale_prices.update(local_prices)
                 if product is not None and len(items) == deposit.quantity:
                     batch_code = f"B{secrets.token_hex(5).upper()}"
                     orders = []
@@ -3101,6 +3555,8 @@ async def _process_sepay_payment(
                             discount_code_id=deposit.discount_code_id,
                             discount_code=deposit.discount_code,
                             flash_sale_id=deposit.flash_sale_id,
+                            seller_price_id=deposit.seller_price_id,
+                            seller_profit_per_unit=deposit.seller_profit_per_unit,
                             batch_code=batch_code,
                             supplier_order_code=item.supplier_order_code,
                             supplier_provider=item.supplier_provider,

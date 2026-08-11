@@ -17,6 +17,7 @@ from app.models import (
     ProductPriceAlert,
     QuantityDiscount,
     ReferralReward,
+    SellerPrice,
     SupplierRecoveryRequest,
     User,
     WalletTransaction,
@@ -28,6 +29,7 @@ from app.services import (
     cancel_wallet_deposit,
     CouponValidationError,
     create_deposit,
+    customer_product_prices,
     multi_supplier_quote,
     order_bundle,
     process_sepay_payment,
@@ -55,6 +57,139 @@ def test_purchase_quantity_limit_never_exceeds_current_stock() -> None:
     assert purchase_quantity_limit(product, 24) == 24
     assert purchase_quantity_limit(product, 150) == 100
     assert purchase_quantity_limit(product, 0) == 0
+
+
+def test_seller_price_uses_each_inventory_cost_and_keeps_normal_price_unchanged() -> None:
+    async def scenario() -> None:
+        engine, sessions = await make_database()
+        cipher = SecretCipher(Fernet.generate_key().decode())
+        async with sessions() as session:
+            category = Category(name_vi="Seller", name_en="Seller")
+            seller = User(telegram_id=71001, full_name="Seller", balance=100_000)
+            normal = User(telegram_id=71002, full_name="Normal", balance=100_000)
+            session.add_all([category, seller, normal])
+            await session.flush()
+            product = Product(
+                category_id=category.id,
+                name_vi="GPT seller",
+                name_en="GPT seller",
+                price=40_000,
+                allow_quantity=True,
+                max_quantity=10,
+            )
+            session.add(product)
+            await session.flush()
+            rule = SellerPrice(
+                user_id=seller.telegram_id,
+                product_id=product.id,
+                profit_per_unit=5_000,
+            )
+            session.add(rule)
+            session.add_all(
+                [
+                    InventoryItem(
+                        product_id=product.id,
+                        encrypted_secret=cipher.encrypt("seller-1|password"),
+                        cost_amount=30_000,
+                    ),
+                    InventoryItem(
+                        product_id=product.id,
+                        encrypted_secret=cipher.encrypt("seller-2|password"),
+                        cost_amount=31_000,
+                    ),
+                    InventoryItem(
+                        product_id=product.id,
+                        encrypted_secret=cipher.encrypt("normal-1|password"),
+                        cost_amount=30_000,
+                    ),
+                ]
+            )
+            await session.commit()
+
+        seller_result = await purchase_product(
+            sessions,
+            seller.telegram_id,
+            product.id,
+            cipher,
+            quantity=2,
+        )
+        normal_result = await purchase_product(
+            sessions,
+            normal.telegram_id,
+            product.id,
+            cipher,
+        )
+
+        assert seller_result.ok is True
+        assert seller_result.total_amount == 71_000
+        assert [order.amount for order in seller_result.orders] == [35_000, 36_000]
+        assert all(order.seller_price_id == rule.id for order in seller_result.orders)
+        assert all(order.seller_profit_per_unit == 5_000 for order in seller_result.orders)
+        assert normal_result.ok is True
+        assert normal_result.total_amount == 40_000
+        assert normal_result.orders[0].seller_price_id is None
+        async with sessions() as session:
+            stored_seller = await session.get(User, seller.telegram_id)
+            stored_normal = await session.get(User, normal.telegram_id)
+            assert stored_seller is not None and stored_seller.balance == 29_000
+            assert stored_normal is not None and stored_normal.balance == 60_000
+        await engine.dispose()
+
+    asyncio.run(scenario())
+
+
+def test_seller_price_falls_back_to_public_price_when_cost_makes_it_unsafe() -> None:
+    async def scenario() -> None:
+        engine, sessions = await make_database()
+        async with sessions() as session:
+            category = Category(name_vi="Seller", name_en="Seller")
+            seller = User(telegram_id=72001, full_name="Seller")
+            session.add_all([category, seller])
+            await session.flush()
+            product = Product(
+                category_id=category.id,
+                name_vi="Unsafe seller price",
+                name_en="Unsafe seller price",
+                price=40_000,
+            )
+            session.add(product)
+            await session.flush()
+            session.add_all(
+                [
+                    SellerPrice(
+                        user_id=seller.telegram_id,
+                        product_id=product.id,
+                        profit_per_unit=5_000,
+                    ),
+                    InventoryItem(
+                        product_id=product.id,
+                        encrypted_secret="encrypted",
+                        cost_amount=35_000,
+                    ),
+                ]
+            )
+            await session.commit()
+
+        async with sessions() as session:
+            product = await session.get(Product, product.id)
+            assert product is not None
+            pricing = await product_pricing(
+                session,
+                product,
+                user_id=seller.telegram_id,
+            )
+            prices = await customer_product_prices(
+                session,
+                [product],
+                seller.telegram_id,
+            )
+            assert pricing is not None
+            assert pricing.seller_price_id is None
+            assert pricing.final_unit_price == 40_000
+            assert prices[product.id] == 40_000
+        await engine.dispose()
+
+    asyncio.run(scenario())
 
 
 def test_quick_buy_orders_all_gpt_products_before_google_products() -> None:
@@ -1236,6 +1371,82 @@ def test_direct_purchase_payment_delivers_without_using_wallet() -> None:
             assert all(item.status == "sold" for item in stock_items)
             assert order_count == 2
             assert wallet_count == 0
+        await engine.dispose()
+
+    asyncio.run(scenario())
+
+
+def test_direct_purchase_keeps_seller_margin_snapshot_and_exact_item_costs() -> None:
+    async def scenario() -> None:
+        engine, sessions = await make_database()
+        cipher = SecretCipher(Fernet.generate_key().decode())
+        async with sessions() as session:
+            category = Category(name_vi="Seller", name_en="Seller")
+            seller = User(telegram_id=123457, full_name="Seller", balance=10_000)
+            session.add_all([category, seller])
+            await session.flush()
+            product = Product(
+                category_id=category.id,
+                name_vi="Tài khoản seller",
+                name_en="Seller account",
+                price=40_000,
+                allow_quantity=True,
+                max_quantity=10,
+            )
+            session.add(product)
+            await session.flush()
+            rule = SellerPrice(
+                user_id=seller.telegram_id,
+                product_id=product.id,
+                profit_per_unit=5_000,
+            )
+            session.add(rule)
+            session.add_all(
+                [
+                    InventoryItem(
+                        product_id=product.id,
+                        encrypted_secret=cipher.encrypt("seller-qr-1|password"),
+                        cost_amount=30_000,
+                    ),
+                    InventoryItem(
+                        product_id=product.id,
+                        encrypted_secret=cipher.encrypt("seller-qr-2|password"),
+                        cost_amount=31_000,
+                    ),
+                ]
+            )
+            await session.flush()
+            deposit = await create_deposit(
+                session,
+                seller.telegram_id,
+                71_000,
+                payment_kind="direct_purchase",
+                product_id=product.id,
+                quantity=2,
+                seller_price_id=rule.id,
+                seller_profit_per_unit=5_000,
+            )
+
+        result = await process_sepay_payment(
+            sessions,
+            {
+                "id": 22223,
+                "transferType": "in",
+                "transferAmount": 71_000,
+                "content": deposit.code,
+            },
+        )
+        assert result.status == "direct_purchase_completed"
+        async with sessions() as session:
+            stored_deposit = await session.get(Deposit, deposit.id)
+            orders = list(await session.scalars(select(Order).order_by(Order.id)))
+            seller = await session.get(User, 123457)
+            assert stored_deposit is not None
+            assert stored_deposit.seller_price_id == rule.id
+            assert stored_deposit.seller_profit_per_unit == 5_000
+            assert [order.amount for order in orders] == [35_000, 36_000]
+            assert all(order.seller_price_id == rule.id for order in orders)
+            assert seller is not None and seller.balance == 10_000
         await engine.dispose()
 
     asyncio.run(scenario())

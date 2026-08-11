@@ -380,7 +380,7 @@ signature = hmac_sha256(API_SECRET, canonical)</pre>
 
         <section class="section" id="san-pham">
           <div class="section-head"><div><span class="section-number">04</span><h2>Sản phẩm, giá và tồn kho</h2></div></div>
-          <p><code>GET /v1/products</code> trả danh mục tài khoản đang bán. Giá là số nguyên VND và là <strong>giá bán của VietShare đã gồm phần chênh</strong>, không phải giá vốn nhà cung cấp. Với hàng đấu nguồn, giá này được cập nhật động theo giá vốn hiện tại cộng markup của shop.</p>
+          <p><code>GET /v1/products</code> trả danh mục tài khoản đang bán. Giá là số nguyên VND và là <strong>giá bán của VietShare đã gồm phần chênh</strong>, không phải giá vốn nhà cung cấp. Với hàng đấu nguồn, giá này được cập nhật động theo giá vốn hiện tại cộng markup của shop. Nếu chủ API được gán giá seller, catalog tự trả giá riêng bằng giá vốn cộng mức lời seller.</p>
           <div class="code-wrap"><button class="copy" data-copy-target="products-response">Sao chép</button><pre id="products-response">{
   "count": 1,
   "products": [
@@ -420,7 +420,7 @@ signature = hmac_sha256(API_SECRET, canonical)</pre>
               <tr><td><code>product_id</code></td><td class="required">Có</td><td>integer</td><td>ID sản phẩm từ catalog.</td></tr>
               <tr><td><code>quantity</code></td><td>Không</td><td>integer</td><td>Mặc định 1; tối đa theo sản phẩm và không quá 100.</td></tr>
               <tr><td><code>max_unit_price</code></td><td class="required">Có</td><td>integer</td><td>Giá tối đa chấp nhận cho mỗi tài khoản. Gửi <code>price</code> vừa đọc từ catalog.</td></tr>
-              <tr><td><code>coupon_code</code></td><td>Không</td><td>string</td><td>Mã giảm giá dành riêng cho sản phẩm, tối đa 64 ký tự.</td></tr>
+              <tr><td><code>coupon_code</code></td><td>Không</td><td>string</td><td>Mã giảm giá dành riêng cho sản phẩm, tối đa 64 ký tự. Không cộng dồn khi tài khoản API đang được áp giá seller.</td></tr>
               <tr><td><code>flash_sale_id</code></td><td>Không</td><td>integer</td><td>ID từ catalog. Nên gửi khi khác null để đơn thất bại an toàn nếu Flash Sale vừa hết hoặc giá vốn tăng.</td></tr>
             </tbody>
           </table>

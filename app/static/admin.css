@@ -947,6 +947,53 @@ tbody tr:hover { background: rgba(215, 241, 113, .12); }
 .withdrawal-source-list small { margin-top: 3px; color: var(--muted); font-size: 9px; }
 .withdrawal-source-list code { max-width: 180px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
+/* Seller pricing */
+.seller-price-hero { margin-bottom: 18px; padding: clamp(24px, 3vw, 40px); display: grid; grid-template-columns: minmax(0, 1.25fr) minmax(420px, .75fr); gap: 28px; align-items: end; overflow: hidden; border-radius: 18px; color: #f6fff9; background: radial-gradient(circle at 88% 6%, rgba(217,244,124,.25), transparent 22rem), linear-gradient(120deg, #123d31, #1e7655 68%, #3d8c64); box-shadow: 0 22px 54px rgba(18,61,49,.18); }
+.seller-price-hero > div { max-width: 760px; }
+.seller-price-hero span { color: var(--lime); font-size: 9px; font-weight: 900; letter-spacing: .18em; }
+.seller-price-hero h2 { margin: 8px 0 11px; font-size: clamp(31px, 4vw, 51px); line-height: .98; }
+.seller-price-hero p { margin: 0; color: #d7e9e0; font-size: 13px; line-height: 1.65; }
+.seller-price-hero dl { margin: 0; display: grid; grid-template-columns: repeat(2, minmax(0,1fr)); border: 1px solid rgba(255,255,255,.17); border-radius: 13px; overflow: hidden; background: rgba(4,34,25,.18); }
+.seller-price-hero dl div { min-width: 0; padding: 15px; border-right: 1px solid rgba(255,255,255,.14); border-bottom: 1px solid rgba(255,255,255,.14); }
+.seller-price-hero dl div:nth-child(2n) { border-right: 0; }
+.seller-price-hero dl div:nth-last-child(-n+2) { border-bottom: 0; }
+.seller-price-hero dt { color: #bcd7ca; font-size: 8px; font-weight: 800; letter-spacing: .08em; text-transform: uppercase; }
+.seller-price-hero dd { margin: 6px 0 0; overflow: hidden; font: 700 23px/1 "Fraunces", serif; white-space: nowrap; text-overflow: ellipsis; }
+.seller-price-layout { margin-bottom: 18px; display: grid; grid-template-columns: minmax(0, 1.35fr) minmax(320px, .65fr); gap: 18px; align-items: start; }
+.seller-price-layout .panel { margin: 0; }
+.seller-price-form { grid-template-columns: repeat(3, minmax(0,1fr)); }
+.seller-price-form .seller-price-preview { grid-column: span 2; }
+.seller-price-preview { min-height: 78px; padding: 13px 15px; display: grid; align-content: center; border: 1px solid #cbded3; border-radius: 10px; background: #eff8f3; }
+.seller-price-preview span { color: var(--green); font-size: 8px; font-weight: 900; letter-spacing: .12em; }
+.seller-price-preview strong { margin: 5px 0 3px; color: #125f45; font: 700 24px/1 "Fraunces", serif; }
+.seller-price-preview small { color: var(--muted); font-size: 9px; line-height: 1.4; }
+.seller-price-preview.invalid { border-color: #efb5aa; background: #fff0ed; }
+.seller-price-preview.invalid span, .seller-price-preview.invalid strong { color: var(--red); }
+.seller-price-guard { overflow: hidden; border-color: #dce5dc; background: #f9fbf7; }
+.seller-guard-list { padding: 4px 20px 19px; }
+.seller-guard-list article { padding: 14px 0; display: grid; grid-template-columns: 28px minmax(0,1fr); gap: 10px; border-bottom: 1px solid #e2e8e0; }
+.seller-guard-list article:last-child { border-bottom: 0; }
+.seller-guard-list article > b { width: 25px; height: 25px; display: grid; place-items: center; border-radius: 8px; color: #175e46; background: #dceee4; font-size: 10px; }
+.seller-guard-list strong { display: block; font-size: 11px; }
+.seller-guard-list p { margin: 4px 0 0; color: var(--muted); font-size: 9px; line-height: 1.55; }
+.seller-directory-head > b { padding: 7px 9px; border-radius: 8px; color: #175e46; background: #e5f2eb; font-size: 9px; }
+.seller-price-filters { grid-template-columns: minmax(240px,1fr) 180px auto auto; }
+.seller-price-table { min-width: 1320px; }
+
+@media (max-width: 1080px) {
+  .seller-price-hero, .seller-price-layout { grid-template-columns: 1fr; }
+  .seller-price-form { grid-template-columns: repeat(2, minmax(0,1fr)); }
+}
+@media (max-width: 680px) {
+  .seller-price-hero { padding: 23px 19px; }
+  .seller-price-hero dl { grid-template-columns: 1fr; }
+  .seller-price-hero dl div, .seller-price-hero dl div:nth-child(2n), .seller-price-hero dl div:nth-last-child(-n+2) { border-right: 0; border-bottom: 1px solid rgba(255,255,255,.14); }
+  .seller-price-hero dl div:last-child { border-bottom: 0; }
+  .seller-price-form, .seller-price-filters { grid-template-columns: 1fr; }
+  .seller-price-form .seller-price-preview { grid-column: auto; }
+  .seller-price-form .button, .seller-price-filters .button { width: 100%; }
+}
+
 /* Final mobile rules stay last so page-specific desktop layouts cannot override them. */
 @media (max-width: 1050px) {
   .dashboard-grid, .chart-layout, .lower-grid, .detail-grid, .referral-layout { grid-template-columns: minmax(0, 1fr); }

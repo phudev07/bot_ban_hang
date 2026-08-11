@@ -339,6 +339,64 @@ class QuantityDiscount(Base):
     product: Mapped[Product] = relationship(back_populates="quantity_discounts")
 
 
+class SellerPrice(Base):
+    __tablename__ = "seller_prices"
+    __table_args__ = (
+        UniqueConstraint(
+            "user_id",
+            "product_id",
+            name="uq_seller_price_user_product",
+        ),
+        Index("ix_seller_prices_active_product", "active", "product_id"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    user_id: Mapped[int] = mapped_column(
+        ForeignKey("users.telegram_id", ondelete="CASCADE"), index=True
+    )
+    product_id: Mapped[int] = mapped_column(
+        ForeignKey("products.id", ondelete="CASCADE"), index=True
+    )
+    profit_per_unit: Mapped[int] = mapped_column(BigInteger)
+    active: Mapped[bool] = mapped_column(Boolean, default=True, server_default="true")
+    created_by: Mapped[str] = mapped_column(String(255), default="admin")
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
+
+    user: Mapped[User] = relationship()
+    product: Mapped[Product] = relationship()
+
+
+class SellerPriceAudit(Base):
+    __tablename__ = "seller_price_audits"
+    __table_args__ = (
+        Index("ix_seller_price_audits_created", "created_at", "id"),
+        Index("ix_seller_price_audits_user_product", "user_id", "product_id", "id"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    seller_price_id: Mapped[int | None] = mapped_column(
+        ForeignKey("seller_prices.id", ondelete="SET NULL"), nullable=True, index=True
+    )
+    user_id: Mapped[int] = mapped_column(BigInteger, index=True)
+    product_id: Mapped[int] = mapped_column(index=True)
+    user_label: Mapped[str] = mapped_column(String(255), default="")
+    product_name: Mapped[str] = mapped_column(String(255), default="")
+    action: Mapped[str] = mapped_column(String(24), index=True)
+    old_profit_per_unit: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    new_profit_per_unit: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    old_active: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
+    new_active: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
+    created_by: Mapped[str] = mapped_column(String(255), default="admin")
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), index=True
+    )
+
+
 class InventoryItem(Base):
     __tablename__ = "inventory_items"
     __table_args__ = (
@@ -530,6 +588,12 @@ class Order(Base):
         nullable=True,
         index=True,
     )
+    seller_price_id: Mapped[int | None] = mapped_column(
+        ForeignKey("seller_prices.id", ondelete="SET NULL"), nullable=True, index=True
+    )
+    seller_profit_per_unit: Mapped[int] = mapped_column(
+        BigInteger, default=0, server_default="0"
+    )
     batch_code: Mapped[str | None] = mapped_column(String(32), nullable=True, index=True)
     supplier_order_code: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
     supplier_provider: Mapped[str | None] = mapped_column(
@@ -589,6 +653,12 @@ class Deposit(Base):
         index=True,
     )
     flash_sale_quantity: Mapped[int] = mapped_column(default=0, server_default="0")
+    seller_price_id: Mapped[int | None] = mapped_column(
+        ForeignKey("seller_prices.id", ondelete="SET NULL"), nullable=True, index=True
+    )
+    seller_profit_per_unit: Mapped[int] = mapped_column(
+        BigInteger, default=0, server_default="0"
+    )
     inventory_price_locked: Mapped[bool] = mapped_column(
         Boolean, default=False, server_default="false"
     )

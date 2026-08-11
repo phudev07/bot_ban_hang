@@ -25,6 +25,7 @@
       <div><dt>Số lượng</dt><dd>{{ order.quantity }} tài khoản</dd></div>
       <div><dt>Nguồn hàng</dt><dd>{{ order.supplier_source_label }}</dd></div>
       <div><dt>Kênh bán</dt><dd>{{ order.sales_channel }}</dd></div>
+      <div><dt>Giá seller</dt><dd>{% if order.seller_price_id %}Có · lời +{{ order.seller_profit_per_unit|vnd }}/1{% else %}—{% endif %}</dd></div>
       <div><dt>Doanh thu</dt><dd>{{ order.amount|vnd }}</dd></div>
       <div><dt>Giá vốn thực tế</dt><dd>{{ order.cost_amount|vnd }}</dd></div>
       <div><dt>Lợi nhuận gộp</dt><dd class="profit-text {{ 'loss' if order.amount < order.cost_amount else '' }}">{{ (order.amount - order.cost_amount)|vnd }}</dd></div>

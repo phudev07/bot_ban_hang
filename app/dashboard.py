@@ -55,6 +55,8 @@ from app.models import (
     ProductStockAlert,
     QuantityDiscount,
     ReferralReward,
+    SellerPrice,
+    SellerPriceAudit,
     SmsRental,
     SupplierBalanceState,
     SupplierBalanceTransaction,
@@ -72,6 +74,7 @@ from app.services import (
     cancel_wallet_deposit,
     preserve_supplier_purchase_parts,
     refresh_product_from_supplier,
+    seller_unit_price,
     supplier_balance_clients_for_product,
     supplier_client_for_product,
 )
@@ -307,6 +310,8 @@ def group_order_rows(rows, limit: int | None = None) -> list[dict[str, object]]:
                 "cost_amount": 0,
                 "discount_amount": 0,
                 "discount_code": order.discount_code,
+                "seller_price_id": order.seller_price_id,
+                "seller_profit_per_unit": order.seller_profit_per_unit,
                 "status": order.status,
                 "created_at": order.created_at,
                 "delivered_at": order.delivered_at,
@@ -324,6 +329,9 @@ def group_order_rows(rows, limit: int | None = None) -> list[dict[str, object]]:
         group["discount_amount"] = int(group["discount_amount"]) + int(
             order.discount_amount
         )
+        if order.seller_price_id is not None:
+            group["seller_price_id"] = order.seller_price_id
+            group["seller_profit_per_unit"] = order.seller_profit_per_unit
         group["item_ids"].append(order.id)
         group["supplier_providers"].add(order_supplier_provider(order))
         if (
@@ -647,6 +655,51 @@ def normalize_product_type(value: str) -> str | None:
 def normalize_fulfillment_source(value: str) -> str | None:
     normalized = value.strip().lower()
     return normalized if normalized in SELLABLE_FULFILLMENT_SOURCES else None
+
+
+def seller_user_label(user: User) -> str:
+    username = f"@{user.username}" if user.username else str(user.telegram_id)
+    return f"{user.full_name} ({username})"
+
+
+async def seller_source_cost_context(
+    session: AsyncSession,
+    product: Product,
+) -> tuple[int, str]:
+    local_row = (
+        await session.execute(
+            select(InventoryItem.cost_amount, InventoryItem.supplier_provider)
+            .where(
+                InventoryItem.product_id == product.id,
+                InventoryItem.status == "available",
+            )
+            .order_by(InventoryItem.id)
+            .limit(1)
+        )
+    ).first()
+    if local_row is not None:
+        local_cost = int(local_row.cost_amount or 0)
+        return local_cost, "Kho nhập" if local_cost > 0 else "Kho nhập chưa có giá vốn"
+    if int(product.supplier_price or 0) > 0:
+        return int(product.supplier_price or 0), "API động"
+    return 0, "Chưa có giá vốn"
+
+
+async def resolve_seller_user(session: AsyncSession, value: str) -> User | None:
+    normalized = value.strip()
+    if not normalized:
+        return None
+    numeric = normalized.lstrip("@").strip()
+    if numeric.isdigit():
+        return await session.get(User, int(numeric))
+    username = normalized.lstrip("@").strip().lower()
+    if not username:
+        return None
+    return await session.scalar(
+        select(User)
+        .where(func.lower(User.username) == username)
+        .limit(1)
+    )
 
 
 def default_flash_sale_message(
@@ -2881,6 +2934,457 @@ def create_dashboard_router(
             await session.commit()
         flash(request, "Đã xóa mã giảm giá chưa sử dụng.")
         return RedirectResponse("/admin/discounts", status_code=303)
+
+    @router.get("/admin/seller-prices", response_class=HTMLResponse)
+    async def seller_prices_page(
+        request: Request,
+        q: str = "",
+        status: str = "all",
+        page: int = 1,
+    ) -> Response:
+        if not is_admin(request):
+            return redirect_to_login()
+        normalized_query = q.strip()
+        conditions = []
+        if status == "active":
+            conditions.append(SellerPrice.active.is_(True))
+        elif status == "inactive":
+            conditions.append(SellerPrice.active.is_(False))
+        if normalized_query:
+            needle = f"%{normalized_query}%"
+            username_needle = f"%{normalized_query.lstrip('@').strip()}%"
+            conditions.append(
+                or_(
+                    User.username.ilike(username_needle),
+                    User.full_name.ilike(needle),
+                    cast(User.telegram_id, String).ilike(needle),
+                    Product.name_vi.ilike(needle),
+                    Product.name_en.ilike(needle),
+                )
+            )
+
+        async with session_factory() as session:
+            order_stats = (
+                select(
+                    Order.seller_price_id.label("seller_price_id"),
+                    func.count(func.distinct(Order.batch_code)).label("order_count"),
+                    func.count(Order.id).label("item_count"),
+                    func.coalesce(func.sum(Order.amount), 0).label("revenue"),
+                    func.coalesce(func.sum(Order.cost_amount), 0).label("cost"),
+                )
+                .where(Order.seller_price_id.is_not(None))
+                .group_by(Order.seller_price_id)
+                .subquery()
+            )
+            count_statement = (
+                select(func.count(SellerPrice.id))
+                .join(User, User.telegram_id == SellerPrice.user_id)
+                .join(Product, Product.id == SellerPrice.product_id)
+            )
+            if conditions:
+                count_statement = count_statement.where(*conditions)
+            price_count = int(await session.scalar(count_statement) or 0)
+            pager = admin_pager(request, price_count, page)
+            statement = (
+                select(
+                    SellerPrice,
+                    User,
+                    Product,
+                    func.coalesce(order_stats.c.order_count, 0),
+                    func.coalesce(order_stats.c.item_count, 0),
+                    func.coalesce(order_stats.c.revenue, 0),
+                    func.coalesce(order_stats.c.cost, 0),
+                )
+                .join(User, User.telegram_id == SellerPrice.user_id)
+                .join(Product, Product.id == SellerPrice.product_id)
+                .outerjoin(
+                    order_stats,
+                    order_stats.c.seller_price_id == SellerPrice.id,
+                )
+                .order_by(SellerPrice.active.desc(), SellerPrice.updated_at.desc())
+                .offset(pager.offset)
+                .limit(ADMIN_PAGE_SIZE)
+            )
+            if conditions:
+                statement = statement.where(*conditions)
+            raw_rows = list(await session.execute(statement))
+            product_ids = {rule.product_id for rule, *_rest in raw_rows}
+            first_item_ids = (
+                select(
+                    InventoryItem.product_id.label("product_id"),
+                    func.min(InventoryItem.id).label("item_id"),
+                )
+                .where(
+                    InventoryItem.product_id.in_(product_ids),
+                    InventoryItem.status == "available",
+                )
+                .group_by(InventoryItem.product_id)
+                .subquery()
+            )
+            local_costs = (
+                {
+                    int(product_id): int(cost_amount)
+                    for product_id, cost_amount in await session.execute(
+                        select(
+                            first_item_ids.c.product_id,
+                            InventoryItem.cost_amount,
+                        ).join(
+                            InventoryItem,
+                            InventoryItem.id == first_item_ids.c.item_id,
+                        )
+                    )
+                }
+                if product_ids
+                else {}
+            )
+            rows = []
+            for rule, user, product, order_count, item_count, revenue, cost in raw_rows:
+                source_cost = local_costs.get(
+                    product.id,
+                    int(product.supplier_price or 0),
+                )
+                effective_price = seller_unit_price(
+                    product,
+                    source_cost,
+                    rule.profit_per_unit,
+                    public_unit_price=product.price,
+                )
+                rows.append(
+                    {
+                        "rule": rule,
+                        "user": user,
+                        "product": product,
+                        "source_cost": source_cost,
+                        "source_label": (
+                            "Kho nhập" if product.id in local_costs else "API động"
+                        ),
+                        "effective_price": effective_price,
+                        "order_count": int(order_count),
+                        "item_count": int(item_count),
+                        "revenue": int(revenue),
+                        "cost": int(cost),
+                        "profit": int(revenue) - int(cost),
+                    }
+                )
+
+            products = list(
+                await session.scalars(
+                    select(Product)
+                    .where(
+                        Product.active.is_(True),
+                        Product.archived_at.is_(None),
+                        Product.product_type == "account",
+                        Product.fulfillment_source.in_(SELLABLE_FULFILLMENT_SOURCES),
+                    )
+                    .order_by(Product.name_vi, Product.id)
+                )
+            )
+            product_options = []
+            for product in products:
+                source_cost, source_label = await seller_source_cost_context(
+                    session,
+                    product,
+                )
+                product_options.append(
+                    {
+                        "product": product,
+                        "source_cost": source_cost,
+                        "source_label": source_label,
+                    }
+                )
+            suggested_users = list(
+                await session.scalars(
+                    select(User)
+                    .where(User.has_started.is_(True))
+                    .order_by(User.updated_at.desc(), User.created_at.desc())
+                    .limit(100)
+                )
+            )
+            totals = (
+                await session.execute(
+                    select(
+                        func.count(SellerPrice.id),
+                        func.count(func.distinct(SellerPrice.user_id)),
+                        func.count(SellerPrice.id).filter(SellerPrice.active.is_(True)),
+                    )
+                )
+            ).one()
+            sales_totals = (
+                await session.execute(
+                    select(
+                        func.count(func.distinct(Order.batch_code)),
+                        func.count(Order.id),
+                        func.coalesce(func.sum(Order.amount), 0),
+                        func.coalesce(func.sum(Order.cost_amount), 0),
+                    ).where(Order.seller_price_id.is_not(None))
+                )
+            ).one()
+            history = list(
+                await session.scalars(
+                    select(SellerPriceAudit)
+                    .order_by(SellerPriceAudit.id.desc())
+                    .limit(100)
+                )
+            )
+
+        return templates.TemplateResponse(
+            request,
+            "seller_prices.html",
+            page_context(
+                request,
+                "Giá riêng seller",
+                "seller-prices",
+                rows=rows,
+                product_options=product_options,
+                suggested_users=suggested_users,
+                history=history,
+                query=q,
+                status=status,
+                pager=pager,
+                stats={
+                    "rules": int(totals[0]),
+                    "sellers": int(totals[1]),
+                    "active": int(totals[2]),
+                    "orders": int(sales_totals[0]),
+                    "items": int(sales_totals[1]),
+                    "revenue": int(sales_totals[2]),
+                    "profit": int(sales_totals[2]) - int(sales_totals[3]),
+                },
+            ),
+        )
+
+    @router.post("/admin/seller-prices")
+    async def save_seller_price(
+        request: Request,
+        csrf: str = Form(...),
+        seller_user: str = Form(...),
+        product_id: int = Form(...),
+        profit_per_unit: str = Form(...),
+    ) -> RedirectResponse:
+        redirect_url = "/admin/seller-prices"
+        if not is_admin(request):
+            return redirect_to_login()
+        if not valid_csrf(request, csrf):
+            flash(request, "Phiên biểu mẫu không hợp lệ.", "error")
+            return RedirectResponse(redirect_url, status_code=303)
+        profit = int(parse_vnd(profit_per_unit) or 0)
+        if profit <= 0:
+            flash(request, "Mức lời seller phải lớn hơn 0đ.", "error")
+            return RedirectResponse(redirect_url, status_code=303)
+        async with session_factory() as session:
+            async with session.begin():
+                user = await resolve_seller_user(session, seller_user)
+                product = await session.scalar(
+                    select(Product)
+                    .where(Product.id == product_id)
+                    .with_for_update()
+                )
+                if user is None:
+                    flash(request, "Không tìm thấy khách hàng theo ID hoặc @username.", "error")
+                    return RedirectResponse(redirect_url, status_code=303)
+                if (
+                    product is None
+                    or not product.active
+                    or product.archived_at is not None
+                    or product.product_type != "account"
+                    or product.fulfillment_source not in SELLABLE_FULFILLMENT_SOURCES
+                ):
+                    flash(request, "Sản phẩm không hợp lệ hoặc đang bị ẩn.", "error")
+                    return RedirectResponse(redirect_url, status_code=303)
+                source_cost, _source_label = await seller_source_cost_context(
+                    session,
+                    product,
+                )
+                effective_price = seller_unit_price(
+                    product,
+                    source_cost,
+                    profit,
+                    public_unit_price=product.price,
+                )
+                if source_cost <= 0:
+                    flash(
+                        request,
+                        "Chưa có giá vốn để kiểm tra. Hãy đồng bộ API hoặc nhập kho có giá vốn trước.",
+                        "error",
+                    )
+                    return RedirectResponse(redirect_url, status_code=303)
+                if effective_price is None:
+                    flash(
+                        request,
+                        "Giá vốn + mức lời phải thấp hơn giá bán thường hiện tại.",
+                        "error",
+                    )
+                    return RedirectResponse(redirect_url, status_code=303)
+                rule = await session.scalar(
+                    select(SellerPrice)
+                    .where(
+                        SellerPrice.user_id == user.telegram_id,
+                        SellerPrice.product_id == product.id,
+                    )
+                    .with_for_update()
+                )
+                old_profit = rule.profit_per_unit if rule is not None else None
+                old_active = rule.active if rule is not None else None
+                action = "updated" if rule is not None else "created"
+                if rule is None:
+                    rule = SellerPrice(
+                        user_id=user.telegram_id,
+                        product_id=product.id,
+                        profit_per_unit=profit,
+                        active=True,
+                        created_by=str(request.session.get("dashboard_admin") or "admin"),
+                    )
+                    session.add(rule)
+                    await session.flush()
+                else:
+                    rule.profit_per_unit = profit
+                    rule.active = True
+                session.add(
+                    SellerPriceAudit(
+                        seller_price_id=rule.id,
+                        user_id=user.telegram_id,
+                        product_id=product.id,
+                        user_label=seller_user_label(user),
+                        product_name=product.name_vi,
+                        action=action,
+                        old_profit_per_unit=old_profit,
+                        new_profit_per_unit=profit,
+                        old_active=old_active,
+                        new_active=True,
+                        created_by=str(request.session.get("dashboard_admin") or "admin"),
+                    )
+                )
+        flash(
+            request,
+            f"Đã lưu mức lời {format_vnd(profit)}/1 cho {seller_user_label(user)} · giá hiện tại {format_vnd(effective_price)}.",
+        )
+        return RedirectResponse(redirect_url, status_code=303)
+
+    @router.post("/admin/seller-prices/{seller_price_id}/toggle")
+    async def toggle_seller_price(
+        seller_price_id: int,
+        request: Request,
+        csrf: str = Form(...),
+    ) -> RedirectResponse:
+        redirect_url = "/admin/seller-prices"
+        if not is_admin(request):
+            return redirect_to_login()
+        if not valid_csrf(request, csrf):
+            return RedirectResponse(redirect_url, status_code=303)
+        async with session_factory() as session:
+            async with session.begin():
+                rule = await session.scalar(
+                    select(SellerPrice)
+                    .where(SellerPrice.id == seller_price_id)
+                    .with_for_update()
+                )
+                if rule is None:
+                    return RedirectResponse(redirect_url, status_code=303)
+                user = await session.get(User, rule.user_id)
+                product = await session.get(Product, rule.product_id)
+                if user is None or product is None:
+                    return RedirectResponse(redirect_url, status_code=303)
+                new_active = not rule.active
+                if new_active:
+                    source_cost, _source_label = await seller_source_cost_context(
+                        session,
+                        product,
+                    )
+                    if seller_unit_price(
+                        product,
+                        source_cost,
+                        rule.profit_per_unit,
+                        public_unit_price=product.price,
+                    ) is None:
+                        flash(
+                            request,
+                            "Không thể bật: giá vốn hiện tại + mức lời không còn thấp hơn giá bán thường.",
+                            "error",
+                        )
+                        return RedirectResponse(redirect_url, status_code=303)
+                old_active = rule.active
+                rule.active = new_active
+                session.add(
+                    SellerPriceAudit(
+                        seller_price_id=rule.id,
+                        user_id=user.telegram_id,
+                        product_id=product.id,
+                        user_label=seller_user_label(user),
+                        product_name=product.name_vi,
+                        action="enabled" if new_active else "disabled",
+                        old_profit_per_unit=rule.profit_per_unit,
+                        new_profit_per_unit=rule.profit_per_unit,
+                        old_active=old_active,
+                        new_active=new_active,
+                        created_by=str(request.session.get("dashboard_admin") or "admin"),
+                    )
+                )
+        flash(request, "Đã cập nhật trạng thái giá seller.")
+        return RedirectResponse(redirect_url, status_code=303)
+
+    @router.post("/admin/seller-prices/{seller_price_id}/delete")
+    async def delete_seller_price(
+        seller_price_id: int,
+        request: Request,
+        csrf: str = Form(...),
+    ) -> RedirectResponse:
+        redirect_url = "/admin/seller-prices"
+        if not is_admin(request):
+            return redirect_to_login()
+        if not valid_csrf(request, csrf):
+            return RedirectResponse(redirect_url, status_code=303)
+        async with session_factory() as session:
+            async with session.begin():
+                rule = await session.scalar(
+                    select(SellerPrice)
+                    .where(SellerPrice.id == seller_price_id)
+                    .with_for_update()
+                )
+                if rule is None:
+                    return RedirectResponse(redirect_url, status_code=303)
+                user = await session.get(User, rule.user_id)
+                product = await session.get(Product, rule.product_id)
+                reference_count = int(
+                    await session.scalar(
+                        select(func.count(Order.id)).where(
+                            Order.seller_price_id == rule.id
+                        )
+                    )
+                    or 0
+                ) + int(
+                    await session.scalar(
+                        select(func.count(Deposit.id)).where(
+                            Deposit.seller_price_id == rule.id
+                        )
+                    )
+                    or 0
+                )
+                session.add(
+                    SellerPriceAudit(
+                        seller_price_id=rule.id,
+                        user_id=rule.user_id,
+                        product_id=rule.product_id,
+                        user_label=(
+                            seller_user_label(user) if user is not None else str(rule.user_id)
+                        ),
+                        product_name=(product.name_vi if product is not None else str(rule.product_id)),
+                        action="archived" if reference_count else "deleted",
+                        old_profit_per_unit=rule.profit_per_unit,
+                        new_profit_per_unit=None,
+                        old_active=rule.active,
+                        new_active=False,
+                        created_by=str(request.session.get("dashboard_admin") or "admin"),
+                    )
+                )
+                if reference_count:
+                    rule.active = False
+                else:
+                    await session.delete(rule)
+        flash(
+            request,
+            "Đã tắt và lưu lịch sử giá seller." if reference_count else "Đã xóa giá seller chưa phát sinh đơn.",
+        )
+        return RedirectResponse(redirect_url, status_code=303)
 
     @router.get("/admin/inventory", response_class=HTMLResponse)
     async def inventory_page(request: Request, page: int = 1) -> Response:

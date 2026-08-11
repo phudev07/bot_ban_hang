@@ -24,6 +24,7 @@ from app.models import (
     Order,
     Product,
     ReferralReward,
+    SellerPrice,
     User,
 )
 from app.partner_services import api_signature, ensure_api_client, rotate_api_secret
@@ -93,6 +94,116 @@ def test_order_payload_uses_the_name_saved_at_purchase_time() -> None:
     payload = order_payload([order], cipher)
 
     assert payload["product"] == {"id": 77, "name": "Tên lúc mua"}
+
+
+def test_warehouse_api_catalog_and_order_use_owner_seller_price(tmp_path) -> None:
+    async def setup_database():
+        database_path = (tmp_path / "warehouse-api-seller-price.db").as_posix()
+        engine = create_async_engine(f"sqlite+aiosqlite:///{database_path}")
+        async with engine.begin() as connection:
+            await connection.run_sync(Base.metadata.create_all)
+        sessions = async_sessionmaker(engine, expire_on_commit=False)
+        cipher = SecretCipher(Fernet.generate_key().decode())
+        async with sessions() as session:
+            user = User(
+                telegram_id=74001,
+                full_name="API Seller",
+                balance=100_000,
+            )
+            category = Category(name_vi="Seller", name_en="Seller")
+            session.add_all([user, category])
+            await session.flush()
+            product = Product(
+                category_id=category.id,
+                name_vi="GPT API Seller",
+                name_en="GPT API Seller",
+                price=40_000,
+                fulfillment_source="local",
+            )
+            session.add(product)
+            await session.flush()
+            session.add_all(
+                [
+                    SellerPrice(
+                        user_id=user.telegram_id,
+                        product_id=product.id,
+                        profit_per_unit=5_000,
+                    ),
+                    InventoryItem(
+                        product_id=product.id,
+                        encrypted_secret=cipher.encrypt("api-seller|password"),
+                        cost_amount=30_000,
+                    ),
+                ]
+            )
+            api_client, api_secret = await ensure_api_client(
+                session,
+                user.telegram_id,
+                cipher,
+                60,
+            )
+            await session.commit()
+        return engine, sessions, cipher, product.id, api_client.api_id, api_secret
+
+    engine, sessions, cipher, product_id, api_id, api_secret = asyncio.run(
+        setup_database()
+    )
+    assert api_secret is not None
+    settings = Settings(
+        _env_file=None,
+        bot_token="123456:ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghi",
+        inventory_encryption_key=Fernet.generate_key().decode(),
+        sepay_enabled=False,
+        shop_api_enabled=True,
+    )
+    app = create_api(
+        settings,
+        sessions,
+        FakeBot(),  # type: ignore[arg-type]
+        cipher,
+        api_redis=FakeRedis(),  # type: ignore[arg-type]
+    )
+
+    with TestClient(app, base_url="https://testserver") as client:
+        catalog_path = "/v1/products"
+        catalog = client.get(
+            catalog_path,
+            headers=signed_headers(api_id, api_secret, "GET", catalog_path),
+        )
+        assert catalog.status_code == 200
+        assert catalog.json()["products"][0]["price"] == 35_000
+
+        order_body = json.dumps(
+            {"product_id": product_id, "quantity": 1, "max_unit_price": 35_000},
+            separators=(",", ":"),
+        ).encode()
+        order = client.post(
+            "/v1/orders",
+            content=order_body,
+            headers=signed_headers(
+                api_id,
+                api_secret,
+                "POST",
+                "/v1/orders",
+                order_body,
+                idempotency_key="SELLER-PRICE-ORDER-01",
+            ),
+        )
+        assert order.status_code == 200
+        assert order.json()["order"]["unit_price"] == 35_000
+        assert order.json()["order"]["total_amount"] == 35_000
+
+    async def verify() -> None:
+        async with sessions() as session:
+            user = await session.get(User, 74001)
+            order = await session.scalar(select(Order))
+            assert user is not None and user.balance == 65_000
+            assert order is not None
+            assert order.seller_price_id is not None
+            assert order.seller_profit_per_unit == 5_000
+
+    asyncio.run(verify())
+    asyncio.run(engine.dispose())
 
 
 def request_with_headers(headers: dict[str, str]) -> Request:

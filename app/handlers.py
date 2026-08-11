@@ -75,6 +75,7 @@ from app.services import (
     available_stock,
     CouponValidationError,
     create_deposit,
+    customer_product_prices,
     ensure_user,
     local_inventory_stock,
     multi_supplier_quote,
@@ -84,6 +85,7 @@ from app.services import (
     purchase_quantity_limit,
     purchase_product,
     recent_orders,
+    seller_inventory_quote,
     user_activity_stats,
 )
 from app.sms_customer_messages import rental_failure_text, storefront_text
@@ -144,6 +146,10 @@ COUPON_ERROR_MESSAGES = {
     "coupon_exhausted": (
         "Mã giảm giá đã hết lượt sử dụng.",
         "This discount code has no uses remaining.",
+    ),
+    "coupon_seller_price": (
+        "Giá seller đã là giá riêng theo giá vốn nên không cộng thêm mã giảm giá.",
+        "Seller pricing follows source cost and cannot be stacked with coupons.",
     ),
 }
 
@@ -418,6 +424,12 @@ def create_router(
         flash_prices = await active_flash_sale_prices(
             session, [product.id for product in products]
         )
+        display_prices = await customer_product_prices(
+            session,
+            products,
+            user.telegram_id,
+            flash_prices,
+        )
         text = "⚡ <b>Mua nhanh</b>" if user.language == "vi" else "⚡ <b>Quick buy</b>"
         if not products:
             text = "Kho chưa có mặt hàng." if user.language == "vi" else "No products yet."
@@ -427,7 +439,7 @@ def create_router(
                 products,
                 user.language,
                 "back:menu",
-                flash_prices,
+                display_prices,
                 origin="quick",
             ),
         )
@@ -682,6 +694,12 @@ def create_router(
         flash_prices = await active_flash_sale_prices(
             session, [product.id for product in products]
         )
+        display_prices = await customer_product_prices(
+            session,
+            products,
+            user.telegram_id,
+            flash_prices,
+        )
         text = "📦 <b>Chọn mặt hàng</b>" if user.language == "vi" else "📦 <b>Choose a product</b>"
         if not products:
             text = (
@@ -696,7 +714,7 @@ def create_router(
                     products,
                     user.language,
                     "menu:products",
-                    flash_prices,
+                    display_prices,
                 ),
             )
 
@@ -708,6 +726,12 @@ def create_router(
         flash_prices = await active_flash_sale_prices(
             session, [product.id for product in products]
         )
+        display_prices = await customer_product_prices(
+            session,
+            products,
+            user.telegram_id,
+            flash_prices,
+        )
         text = "⚡ <b>Mua nhanh</b>" if user.language == "vi" else "⚡ <b>Quick buy</b>"
         if not products:
             text = "Kho chưa có mặt hàng." if user.language == "vi" else "No products yet."
@@ -718,7 +742,7 @@ def create_router(
                     products,
                     user.language,
                     "back:menu",
-                    flash_prices,
+                    display_prices,
                     origin="quick",
                 ),
             )
@@ -1056,6 +1080,12 @@ def create_router(
         flash_prices = await active_flash_sale_prices(
             session, [product.id for product in selected]
         )
+        display_prices = await customer_product_prices(
+            session,
+            selected,
+            user.telegram_id,
+            flash_prices,
+        )
         text = (
             "🤖 <b>Tài khoản GPT</b>"
             if group == "gpt" and user.language == "vi"
@@ -1070,7 +1100,7 @@ def create_router(
                     selected,
                     user.language,
                     "menu:quick",
-                    flash_prices,
+                    display_prices,
                     origin="quick",
                 ),
             )
@@ -1383,7 +1413,11 @@ def create_router(
         # Background supplier workers keep this cached stock fresh. The actual
         # purchase path still refreshes the provider before charging/delivery.
         stock = await available_stock(session, product.id)
-        pricing = await product_pricing(session, product)
+        pricing = await product_pricing(
+            session,
+            product,
+            user_id=user.telegram_id,
+        )
         display_price = pricing.final_unit_price if pricing is not None else product.price
         quantity_discounts = await active_quantity_discounts(session, product.id)
         name = sanitize_customer_text(
@@ -1416,7 +1450,9 @@ def create_router(
                 if user.language == "vi"
                 else f"\n⚡ Flash Sale remaining: <b>{remaining}</b>"
             )
-        if quantity_discounts and not (pricing and pricing.flash_sale):
+        if quantity_discounts and not (
+            pricing and (pricing.flash_sale or pricing.seller_price_id is not None)
+        ):
             tier_lines = "\n".join(
                 f"🛒 {quantity_tier_offer_text(tier, product.price, user.language)}"
                 for tier in quantity_discounts
@@ -1434,7 +1470,13 @@ def create_router(
                     product,
                     user.language,
                     stock,
-                    allow_coupon=not bool(pricing and pricing.flash_sale),
+                    allow_coupon=not bool(
+                        pricing
+                        and (
+                            pricing.flash_sale
+                            or pricing.seller_price_id is not None
+                        )
+                    ),
                     flash_sale_id=(
                         pricing.flash_sale.id
                         if pricing is not None and pricing.flash_sale is not None
@@ -1668,10 +1710,22 @@ def create_router(
         if product is None or not product.active:
             await callback.answer("Sản phẩm không tồn tại.", show_alert=True)
             return
-        pricing = await product_pricing(session, product)
+        pricing = await product_pricing(
+            session,
+            product,
+            user_id=user.telegram_id,
+        )
         if pricing is not None and pricing.flash_sale is not None:
             await callback.answer(
                 "Sản phẩm đang Flash Sale nên không cộng thêm mã giảm giá.",
+                show_alert=True,
+            )
+            return
+        if pricing is not None and pricing.seller_price_id is not None:
+            await callback.answer(
+                "Giá seller đã là giá riêng theo giá vốn nên không cộng thêm mã giảm giá."
+                if user.language == "vi"
+                else "Seller pricing already follows source cost and cannot be stacked with coupons.",
                 show_alert=True,
             )
             return
@@ -1780,6 +1834,7 @@ def create_router(
         pricing = await product_pricing(
             session,
             product,
+            user_id=user.telegram_id,
             expected_flash_sale_id=expected_flash_sale_id,
         )
         if pricing is None and expected_flash_sale_id is not None:
@@ -1821,7 +1876,9 @@ def create_router(
             f"📦 In stock: <b>{stock}</b>\n"
             f"🧾 Maximum per order: <b>{maximum}</b>"
         )
-        if quantity_discounts and not (pricing and pricing.flash_sale):
+        if quantity_discounts and not (
+            pricing and (pricing.flash_sale or pricing.seller_price_id is not None)
+        ):
             tier_summary = "\n".join(
                 f"🎁 {quantity_tier_offer_text(tier, product.price, user.language)}"
                 for tier in quantity_discounts
@@ -1864,6 +1921,7 @@ def create_router(
         pricing = await product_pricing(
             session,
             product,
+            user_id=user.telegram_id,
             expected_flash_sale_id=expected_flash_sale_id,
         )
         if pricing is None and expected_flash_sale_id is not None:
@@ -2159,9 +2217,29 @@ def create_router(
                 show_alert=True,
             )
             return
+        inventory_quote = (
+            await seller_inventory_quote(session, product, quantity, pricing)
+            if supplier_quote is None and local_stock >= quantity
+            else None
+        )
+        if (
+            pricing.seller_price_id is not None
+            and supplier_quote is None
+            and local_stock >= quantity
+            and inventory_quote is None
+        ):
+            await callback.answer(
+                "Giá vốn lô hàng vừa thay đổi, vui lòng mở lại sản phẩm."
+                if user.language == "vi"
+                else "Inventory cost just changed. Please reopen the product.",
+                show_alert=True,
+            )
+            return
         total_amount = (
             supplier_quote.total_amount
             if supplier_quote is not None
+            else sum(inventory_quote)
+            if inventory_quote is not None
             else pricing.final_unit_price * quantity
         )
         total_discount = (
@@ -2183,6 +2261,8 @@ def create_router(
                 discount_code=pricing.coupon.code if pricing.coupon else None,
                 flash_sale_id=pricing.flash_sale.id if pricing.flash_sale else None,
                 flash_sale_quantity=quantity if pricing.flash_sale else 0,
+                seller_price_id=pricing.seller_price_id,
+                seller_profit_per_unit=pricing.seller_profit_per_unit,
                 expiry_seconds=settings.payment_expiry_seconds,
                 max_pending_deposits=settings.max_pending_deposits_per_user,
             )
@@ -2196,6 +2276,15 @@ def create_router(
             await session.rollback()
             await callback.answer(
                 "Suất Flash Sale vừa hết. Vui lòng mở lại sản phẩm để xem giá hiện tại.",
+                show_alert=True,
+            )
+            return
+        except ValueError:
+            await session.rollback()
+            await callback.answer(
+                "Giá seller vừa thay đổi. Vui lòng mở lại sản phẩm để lấy giá mới."
+                if user.language == "vi"
+                else "Seller pricing just changed. Please reopen the product.",
                 show_alert=True,
             )
             return

@@ -28,6 +28,8 @@ from app.models import (
     ProductPriceAlert,
     ProductStockAlert,
     QuantityDiscount,
+    SellerPrice,
+    SellerPriceAudit,
     SmsRental,
     SupplierBalanceState,
     SupplierBalanceTransaction,
@@ -128,6 +130,114 @@ class AmbiguousDashboardSupplier(DashboardBuyingSupplier):
         assert started_at.tzinfo is not None
         assert isinstance(known_order_codes, set)
         return None
+
+
+def test_admin_can_manage_dynamic_seller_profit_by_user_and_product(tmp_path) -> None:
+    async def initialize():
+        database_path = (tmp_path / "dashboard-seller-prices.db").as_posix()
+        engine = create_async_engine(f"sqlite+aiosqlite:///{database_path}")
+        async with engine.begin() as connection:
+            await connection.run_sync(Base.metadata.create_all)
+        sessions = async_sessionmaker(engine, expire_on_commit=False)
+        async with sessions() as session:
+            category = Category(name_vi="ChatGPT", name_en="ChatGPT")
+            seller = User(
+                telegram_id=73001,
+                full_name="Seller Test",
+                username="seller_test",
+                has_started=True,
+            )
+            session.add_all([category, seller])
+            await session.flush()
+            product = Product(
+                category_id=category.id,
+                name_vi="GPT Plus Seller",
+                name_en="GPT Plus Seller",
+                price=40_000,
+                fulfillment_source="local",
+            )
+            session.add(product)
+            await session.flush()
+            session.add(
+                InventoryItem(
+                    product_id=product.id,
+                    encrypted_secret="seller-stock",
+                    cost_amount=30_000,
+                )
+            )
+            await session.commit()
+        return engine, sessions, product.id, seller.telegram_id
+
+    engine, sessions, product_id, seller_id = asyncio.run(initialize())
+    encryption_key = Fernet.generate_key().decode()
+    settings = Settings(
+        _env_file=None,
+        bot_token="123456:ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghi",
+        inventory_encryption_key=encryption_key,
+        dashboard_enabled=True,
+        dashboard_username="admin",
+        dashboard_password_hash=hash_dashboard_password("dashboard-password"),
+        dashboard_session_secret="session-secret-long-enough-for-tests",
+    )
+    app = create_api(
+        settings,
+        sessions,
+        FakeBot(),  # type: ignore[arg-type]
+        SecretCipher(encryption_key),
+    )
+
+    with TestClient(app, base_url="https://testserver") as client:
+        client.post(
+            "/admin/login",
+            data={"username": "admin", "password": "dashboard-password"},
+        )
+        page = client.get("/admin/seller-prices")
+        assert page.status_code == 200
+        assert "Giá riêng tự chạy theo giá vốn" in page.text
+        assert "GPT Plus Seller" in page.text
+        csrf = re.search(r'name="csrf" value="([^"]+)"', page.text).group(1)  # type: ignore[union-attr]
+        created = client.post(
+            "/admin/seller-prices",
+            data={
+                "csrf": csrf,
+                "seller_user": "@seller_test",
+                "product_id": str(product_id),
+                "profit_per_unit": "5.000",
+            },
+            follow_redirects=False,
+        )
+        assert created.status_code == 303
+        configured = client.get("/admin/seller-prices")
+        assert "Seller Test" in configured.text
+        assert "+5.000đ/1" in configured.text
+        assert "35.000đ" in configured.text
+
+        rejected = client.post(
+            "/admin/seller-prices",
+            data={
+                "csrf": csrf,
+                "seller_user": str(seller_id),
+                "product_id": str(product_id),
+                "profit_per_unit": "10.000",
+            },
+            follow_redirects=False,
+        )
+        assert rejected.status_code == 303
+        rejected_page = client.get("/admin/seller-prices")
+        assert "phải thấp hơn giá bán thường" in rejected_page.text
+
+    async def verify() -> None:
+        async with sessions() as session:
+            rule = await session.scalar(select(SellerPrice))
+            audits = list(await session.scalars(select(SellerPriceAudit)))
+            assert rule is not None
+            assert rule.user_id == seller_id
+            assert rule.product_id == product_id
+            assert rule.profit_per_unit == 5_000
+            assert len(audits) == 1
+
+    asyncio.run(verify())
+    asyncio.run(engine.dispose())
 
 
 def test_product_filters_and_inventory_import_only_allow_visible_products(

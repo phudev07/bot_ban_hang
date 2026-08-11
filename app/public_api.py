@@ -36,7 +36,13 @@ from app.models import (
     User,
 )
 from app.partner_services import api_signature
-from app.services import active_products, available_stock, purchase_product
+from app.services import (
+    active_products,
+    available_stock,
+    customer_product_prices,
+    product_pricing,
+    purchase_product,
+)
 from app.suppliers import ExternalSupplierClient, SumistoreClient
 from app.suppliers import EXTERNAL_FULFILLMENT_SOURCES, SELLABLE_FULFILLMENT_SOURCES
 from app.utils import SecretCipher, sanitize_customer_text
@@ -386,6 +392,20 @@ def create_public_api_router(
             flash_sales = await active_flash_sale_campaigns(
                 session, [product.id for product in rows]
             )
+            public_prices = {
+                product.id: (
+                    flash_sales[product.id].sale_price
+                    if product.id in flash_sales
+                    else product.price
+                )
+                for product in rows
+            }
+            display_prices = await customer_product_prices(
+                session,
+                rows,
+                principal.user.telegram_id,
+                public_prices,
+            )
             local_stock = {
                 int(product_id): int(stock)
                 for product_id, stock in await session.execute(
@@ -397,6 +417,11 @@ def create_public_api_router(
             values = []
             for product in rows:
                 flash_sale = flash_sales.get(product.id)
+                if (
+                    flash_sale is not None
+                    and display_prices[product.id] != flash_sale.sale_price
+                ):
+                    flash_sale = None
                 stock = (
                     0
                     if product.force_out_of_stock
@@ -413,7 +438,7 @@ def create_public_api_router(
                         "id": product.id,
                         "name": sanitize_customer_text(product.name_vi),
                         "description": sanitize_customer_text(product.description_vi),
-                        "price": flash_sale.sale_price if flash_sale else product.price,
+                        "price": display_prices[product.id],
                         "flash_sale_id": flash_sale.id if flash_sale else None,
                         "stock": stock,
                         "allow_quantity": product.allow_quantity,
@@ -440,14 +465,21 @@ def create_public_api_router(
             ):
                 raise api_error(404, "PRODUCT_NOT_FOUND", "Product does not exist")
             stock = await available_stock(session, product.id)
-            flash_sale = await active_flash_sale(session, product.id)
+            pricing = await product_pricing(
+                session,
+                product,
+                user_id=principal.user.telegram_id,
+            )
+            flash_sale = pricing.flash_sale if pricing is not None else None
             if flash_sale is not None:
                 stock = min(stock, flash_sale_remaining(flash_sale))
             return {
                 "id": product.id,
                 "name": sanitize_customer_text(product.name_vi),
                 "description": sanitize_customer_text(product.description_vi),
-                "price": flash_sale.sale_price if flash_sale else product.price,
+                "price": (
+                    pricing.final_unit_price if pricing is not None else product.price
+                ),
                 "flash_sale_id": flash_sale.id if flash_sale else None,
                 "stock": stock,
                 "allow_quantity": product.allow_quantity,

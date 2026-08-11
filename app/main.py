@@ -239,6 +239,19 @@ async def initialize_database(engine, session_factory, seed_demo_data: bool) -> 
         )
         await connection.execute(
             text(
+                "ALTER TABLE orders ADD COLUMN IF NOT EXISTS "
+                "seller_price_id INTEGER NULL REFERENCES seller_prices(id) "
+                "ON DELETE SET NULL"
+            )
+        )
+        await connection.execute(
+            text(
+                "ALTER TABLE orders ADD COLUMN IF NOT EXISTS "
+                "seller_profit_per_unit BIGINT NOT NULL DEFAULT 0"
+            )
+        )
+        await connection.execute(
+            text(
                 "ALTER TABLE deposits ADD COLUMN IF NOT EXISTS "
                 "flash_sale_id INTEGER NULL REFERENCES flash_sale_campaigns(id) "
                 "ON DELETE SET NULL"
@@ -248,6 +261,19 @@ async def initialize_database(engine, session_factory, seed_demo_data: bool) -> 
             text(
                 "ALTER TABLE deposits ADD COLUMN IF NOT EXISTS "
                 "flash_sale_quantity INTEGER NOT NULL DEFAULT 0"
+            )
+        )
+        await connection.execute(
+            text(
+                "ALTER TABLE deposits ADD COLUMN IF NOT EXISTS "
+                "seller_price_id INTEGER NULL REFERENCES seller_prices(id) "
+                "ON DELETE SET NULL"
+            )
+        )
+        await connection.execute(
+            text(
+                "ALTER TABLE deposits ADD COLUMN IF NOT EXISTS "
+                "seller_profit_per_unit BIGINT NOT NULL DEFAULT 0"
             )
         )
         await connection.execute(
@@ -266,6 +292,18 @@ async def initialize_database(engine, session_factory, seed_demo_data: bool) -> 
             text(
                 "CREATE INDEX IF NOT EXISTS ix_deposits_flash_sale_id "
                 "ON deposits (flash_sale_id)"
+            )
+        )
+        await connection.execute(
+            text(
+                "CREATE INDEX IF NOT EXISTS ix_orders_seller_price_id "
+                "ON orders (seller_price_id)"
+            )
+        )
+        await connection.execute(
+            text(
+                "CREATE INDEX IF NOT EXISTS ix_deposits_seller_price_id "
+                "ON deposits (seller_price_id)"
             )
         )
         await connection.execute(
