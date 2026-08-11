@@ -207,6 +207,7 @@ def test_admin_can_manage_dynamic_seller_profit_by_user_and_product(tmp_path) ->
         )
         page = client.get("/admin/seller-prices")
         assert page.status_code == 200
+        assert "/admin-assets/admin.css?v=28" in page.text
         assert "Một seller, toàn bộ bảng giá" in page.text
         assert "<built-in method" not in page.text
         assert "<dt>Nick đã bán</dt><dd>0</dd>" in page.text
