@@ -3087,7 +3087,7 @@ def create_dashboard_router(
                     select(User)
                     .where(User.has_started.is_(True))
                     .order_by(User.updated_at.desc(), User.created_at.desc())
-                    .limit(100)
+                    .limit(20)
                 )
             )
             suggested_user_map = dict(configured_users)
@@ -3145,6 +3145,53 @@ def create_dashboard_router(
                     "profit": int(sales_totals[2]) - int(sales_totals[3]),
                 },
             ),
+        )
+
+    @router.get("/admin/seller-prices/users/search")
+    async def search_seller_users(request: Request, q: str = "") -> JSONResponse:
+        if not is_admin(request):
+            return JSONResponse({"users": []}, status_code=401)
+        normalized = q.strip()
+        if not normalized:
+            return JSONResponse({"users": []})
+        username_query = normalized.lstrip("@").strip()
+        needle = f"%{normalized}%"
+        username_needle = f"%{username_query}%"
+        conditions = [
+            User.has_started.is_(True),
+            or_(
+                User.username.ilike(username_needle),
+                User.full_name.ilike(needle),
+                cast(User.telegram_id, String).ilike(needle),
+            ),
+        ]
+        async with session_factory() as session:
+            users = list(
+                await session.scalars(
+                    select(User)
+                    .where(*conditions)
+                    .order_by(
+                        case(
+                            (func.lower(User.username) == username_query.lower(), 0),
+                            else_=1,
+                        ),
+                        User.updated_at.desc(),
+                    )
+                    .limit(20)
+                )
+            )
+        return JSONResponse(
+            {
+                "users": [
+                    {
+                        "value": f"@{user.username}" if user.username else str(user.telegram_id),
+                        "label": f"{user.full_name} · {user.telegram_id}",
+                        "telegram_id": user.telegram_id,
+                        "username": user.username or "",
+                    }
+                    for user in users
+                ]
+            }
         )
 
     @router.post("/admin/seller-prices")

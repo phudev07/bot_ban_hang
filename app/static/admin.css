@@ -963,8 +963,14 @@ tbody tr:hover { background: rgba(215, 241, 113, .12); }
 .seller-price-layout > *, .seller-price-layout .panel { min-width: 0; margin: 0; }
 .seller-bulk-form { padding: 0 20px 20px; }
 .seller-picker { max-width: 620px; }
+.seller-picker label { display: grid; gap: 7px; color: #46504a; font-size: 12px; font-weight: 700; }
 .seller-picker input { margin-top: 7px; }
 .seller-picker small { min-height: 17px; }
+.seller-user-results { max-height: 230px; margin-top: 7px; padding: 5px; overflow-y: auto; border: 1px solid #cad8ce; border-radius: 10px; background: #fff; box-shadow: 0 12px 30px rgba(24,55,43,.12); }
+.seller-user-result { width: 100%; padding: 9px 10px; display: flex; align-items: center; justify-content: space-between; gap: 12px; border: 0; border-radius: 7px; color: var(--ink); background: transparent; text-align: left; }
+.seller-user-result:hover, .seller-user-result:focus-visible { outline: 0; background: #e9f4ed; }
+.seller-user-result strong { color: #176349; font-size: 11px; }
+.seller-user-result small { min-height: 0; margin: 0; color: var(--muted); font-size: 9px; }
 .seller-product-editor { width: 100%; min-width: 0; margin-top: 16px; overflow: hidden; border: 1px solid #d9e2da; border-radius: 12px; background: #fbfcfa; }
 .seller-product-editor-head, .seller-product-rate { display: grid; grid-template-columns: minmax(260px,1.7fr) minmax(150px,.75fr) minmax(145px,.7fr) 58px; gap: 10px; align-items: center; }
 .seller-product-editor-head { padding: 8px 12px; color: #577067; background: #eef4ef; font-size: 8px; font-weight: 900; letter-spacing: .08em; text-transform: uppercase; }

@@ -23,10 +23,13 @@
     </div>
     <form method="post" action="/admin/seller-prices" class="seller-bulk-form" id="seller-bulk-form">
       <input type="hidden" name="csrf" value="{{ csrf_token }}">
-      <label class="seller-picker">Khách seller
-        <input name="seller_user" id="seller-user" list="seller-user-options" value="{{ selected_seller }}" placeholder="@username hoặc Telegram ID" autocomplete="off" required>
-        <small id="seller-selection-note">Chọn khách đã dùng bot; giá cũ sẽ tự điền vào bảng bên dưới.</small>
-      </label>
+      <div class="seller-picker">
+        <label>Khách seller
+          <input name="seller_user" id="seller-user" list="seller-user-options" value="{{ selected_seller }}" placeholder="@username hoặc Telegram ID" autocomplete="off" required>
+          <small id="seller-selection-note">Gõ @username, Telegram ID hoặc tên khách để tìm trên toàn bộ dữ liệu.</small>
+        </label>
+        <div class="seller-user-results" id="seller-user-results" hidden></div>
+      </div>
       <datalist id="seller-user-options">
         {% for user in suggested_users %}<option value="{{ '@' ~ user.username if user.username else user.telegram_id }}">{{ user.full_name }} · {{ user.telegram_id }}</option>{% endfor %}
       </datalist>
@@ -148,6 +151,8 @@
     const rows = Array.from(document.querySelectorAll('.seller-product-rate'));
     const note = document.getElementById('seller-selection-note');
     const summary = document.getElementById('seller-change-summary');
+    const userOptions = document.getElementById('seller-user-options');
+    const userResults = document.getElementById('seller-user-results');
     if (!sellerInput || !form) return;
 
     const money = (value) => new Intl.NumberFormat('vi-VN').format(value) + 'đ';
@@ -203,6 +208,58 @@
       updateSummary();
     };
 
+    let searchTimer;
+    let searchController;
+    const searchUsers = () => {
+      window.clearTimeout(searchTimer);
+      const query = sellerInput.value.trim();
+      if (!query) return;
+      searchTimer = window.setTimeout(async () => {
+        searchController?.abort();
+        searchController = new AbortController();
+        try {
+          const response = await fetch(`/admin/seller-prices/users/search?q=${encodeURIComponent(query)}`, {
+            headers: { Accept: 'application/json' },
+            signal: searchController.signal,
+          });
+          if (!response.ok) return;
+          const payload = await response.json();
+          const users = payload.users || [];
+          userOptions.replaceChildren(...users.map((user) => {
+            const option = document.createElement('option');
+            option.value = user.value;
+            option.label = user.label;
+            option.textContent = user.label;
+            return option;
+          }));
+          userResults.replaceChildren(...users.map((user) => {
+            const button = document.createElement('button');
+            button.type = 'button';
+            button.className = 'seller-user-result';
+            const identity = document.createElement('strong');
+            identity.textContent = user.value;
+            const label = document.createElement('small');
+            label.textContent = user.label;
+            button.append(identity, label);
+            button.addEventListener('click', () => {
+              sellerInput.value = user.value;
+              userResults.hidden = true;
+              applySeller();
+            });
+            return button;
+          }));
+          userResults.hidden = users.length === 0;
+          if (users.length === 1) {
+            note.textContent = `Đã tìm thấy ${users[0].label}.`;
+          } else if (!users.length) {
+            note.textContent = 'Không tìm thấy khách phù hợp. Kiểm tra lại @username hoặc Telegram ID.';
+          }
+        } catch (error) {
+          if (error.name !== 'AbortError') note.textContent = 'Không tải được gợi ý khách hàng, vẫn có thể nhập chính xác @username hoặc Telegram ID.';
+        }
+      }, 180);
+    };
+
     rows.forEach((row) => {
       const input = row.querySelector('input[name^="profit_"]');
       const checkbox = row.querySelector('input[type="checkbox"]');
@@ -214,8 +271,10 @@
       checkbox.addEventListener('change', updateSummary);
       renderRow(row);
     });
+    sellerInput.addEventListener('input', searchUsers);
     sellerInput.addEventListener('change', applySeller);
     sellerInput.addEventListener('blur', applySeller);
+    sellerInput.addEventListener('blur', () => window.setTimeout(() => { userResults.hidden = true; }, 160));
     document.querySelectorAll('.seller-edit-button').forEach((button) => {
       button.addEventListener('click', () => {
         sellerInput.value = button.dataset.sellerId;
