@@ -96,6 +96,46 @@ def test_order_payload_uses_the_name_saved_at_purchase_time() -> None:
     assert payload["product"] == {"id": 77, "name": "Tên lúc mua"}
 
 
+def test_order_payload_exposes_mixed_unit_prices_without_false_unit_price() -> None:
+    cipher = SecretCipher(Fernet.generate_key().decode())
+    product = Product(id=78, category_id=1, name_vi="Mixed", name_en="Mixed", price=40_000)
+    orders: list[Order] = []
+    for index, amount in enumerate((35_000, 36_000), start=1):
+        item = InventoryItem(
+            id=90 + index,
+            product_id=product.id,
+            encrypted_secret=cipher.encrypt(f"account-{index}|password"),
+        )
+        orders.append(
+            Order(
+                id=100 + index,
+                user_id=123,
+                product_id=product.id,
+                product_name_vi="Mixed",
+                product_name_en="Mixed",
+                inventory_item_id=item.id,
+                amount=amount,
+                discount_amount=0,
+                sales_channel="api",
+                status="completed",
+                created_at=datetime.now(UTC),
+                delivered_at=datetime.now(UTC),
+                product=product,
+                inventory_item=item,
+            )
+        )
+
+    payload = order_payload(orders, cipher)
+
+    assert payload["unit_price"] is None
+    assert payload["unit_prices"] == [35_000, 36_000]
+    assert payload["total_amount"] == 71_000
+    assert payload["price_breakdown"] == [
+        {"quantity": 1, "unit_price": 35_000, "subtotal": 35_000},
+        {"quantity": 1, "unit_price": 36_000, "subtotal": 36_000},
+    ]
+
+
 def test_warehouse_api_catalog_and_order_use_owner_seller_price(tmp_path) -> None:
     async def setup_database():
         database_path = (tmp_path / "warehouse-api-seller-price.db").as_posix()

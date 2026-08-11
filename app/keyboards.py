@@ -430,6 +430,7 @@ def quantity_menu(
     unit_price: int | None = None,
     flash_sale_id: int | None = None,
     origin: str | None = None,
+    variable_price: bool = False,
 ) -> InlineKeyboardMarkup:
     builder = InlineKeyboardBuilder()
     maximum = min(product.max_quantity, max(0, stock))
@@ -440,7 +441,13 @@ def quantity_menu(
         if flash_sale_id is not None:
             callback_data += f":flash:{flash_sale_id}"
         builder.button(
-            text=f"{quantity} × {format_vnd(display_price)}",
+            text=(
+                f"{quantity} tài khoản · xem tổng"
+                if variable_price and language == "vi"
+                else f"{quantity} accounts · view total"
+                if variable_price
+                else f"{quantity} × {format_vnd(display_price)}"
+            ),
             callback_data=callback_data,
         )
     builder.adjust(2)
@@ -464,6 +471,38 @@ def quantity_menu(
         )
     )
     return builder.as_markup()
+
+
+def seller_purchase_confirmation_menu(
+    product_id: int,
+    quantity: int,
+    total_amount: int,
+    language: str,
+    flash_sale_id: int | None = None,
+) -> InlineKeyboardMarkup:
+    callback_data = f"sellerbuy:{product_id}:{quantity}:{total_amount}"
+    if flash_sale_id is not None:
+        callback_data += f":flash:{flash_sale_id}"
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(
+                    text=(
+                        "✅ Xác nhận mua bằng ví"
+                        if language == "vi"
+                        else "✅ Confirm wallet purchase"
+                    ),
+                    callback_data=callback_data,
+                )
+            ],
+            [
+                InlineKeyboardButton(
+                    text=tr(language, "back"),
+                    callback_data=f"qtymenu:{product_id}",
+                )
+            ],
+        ]
+    )
 
 
 def coupon_quantity_menu(

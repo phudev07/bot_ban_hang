@@ -6,6 +6,7 @@ from app.keyboards import (
     purchase_payment_options,
     quick_access_keyboard,
     quantity_menu,
+    seller_purchase_confirmation_menu,
     sms_rental_menu,
     SmsRentalSourceButton,
     warehouse_api_menu,
@@ -193,6 +194,24 @@ def test_quantity_buttons_do_not_exceed_available_stock() -> None:
     assert "buy:10:5" not in callbacks
     assert "buy:10:10" not in callbacks
     assert "customqty:10" in callbacks
+
+
+def test_seller_quantity_buttons_do_not_show_a_false_unit_price() -> None:
+    keyboard = quantity_menu(
+        make_product(),
+        "vi",
+        stock=3,
+        unit_price=35_000,
+        variable_price=True,
+    )
+    texts = [button.text for row in keyboard.inline_keyboard for button in row]
+
+    assert "1 tài khoản · xem tổng" in texts
+    assert "2 tài khoản · xem tổng" in texts
+    assert all("35.000" not in text for text in texts)
+
+    confirmation = seller_purchase_confirmation_menu(10, 2, 71_000, "vi")
+    assert confirmation.inline_keyboard[0][0].callback_data == "sellerbuy:10:2:71000"
 
 
 def test_flash_sale_callbacks_keep_the_campaign_identity() -> None:

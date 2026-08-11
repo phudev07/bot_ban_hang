@@ -438,7 +438,12 @@ Content-Type: application/json
     "channel": "api",
     "product": {"id": 7, "name": "Tài khoản mẫu"},
     "quantity": 2,
-    "unit_price": 22500,
+    "unit_price": null,
+    "unit_prices": [22000, 23000],
+    "price_breakdown": [
+      {"quantity": 1, "unit_price": 22000, "subtotal": 22000},
+      {"quantity": 1, "unit_price": 23000, "subtotal": 23000}
+    ],
     "total_amount": 45000,
     "discount_amount": 5000,
     "accounts": [
@@ -450,6 +455,7 @@ Content-Type: application/json
     "delivered_at": "2026-07-18T03:15:22+00:00"
   }
 }</pre></div>
+          <div class="note" style="margin-top:14px"><code>unit_price</code> chỉ có giá trị khi mọi tài khoản trong đơn có cùng giá. Với đơn lấy từ nhiều lô hoặc nhiều nguồn, trường này là <code>null</code>; dùng <code>unit_prices</code>, <code>price_breakdown</code> và <code>total_amount</code> để đối soát chính xác.</div>
           <div class="grid-2">
           <div class="note good-note"><strong>Retry an toàn.</strong><br>Cùng Idempotency-Key và cùng payload sẽ trả lại đơn cũ, không trừ tiền hoặc lấy hàng lần hai. Nếu nhận HTTP 202, request đang được đối soát; hãy tiếp tục retry đúng key đó.</div>
             <div class="note danger-note"><strong>Không đổi payload.</strong><br>Dùng lại Idempotency-Key với payload khác sẽ nhận <code>409 IDEMPOTENCY_MISMATCH</code>.</div>

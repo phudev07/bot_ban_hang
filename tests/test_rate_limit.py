@@ -108,6 +108,10 @@ def test_sensitive_bot_actions_receive_stricter_limits() -> None:
     config = settings()
     deposit_rules = bot_rate_rules(callback_update("deposit:10000").callback_query, config)
     purchase_rules = bot_rate_rules(callback_update("buy:1:1").callback_query, config)
+    seller_purchase_rules = bot_rate_rules(
+        callback_update("sellerbuy:1:2:71000").callback_query,
+        config,
+    )
     rotate_rules = bot_rate_rules(
         callback_update("warehouse-api:rotate-confirm").callback_query,
         config,
@@ -116,6 +120,7 @@ def test_sensitive_bot_actions_receive_stricter_limits() -> None:
 
     assert any(rule.name == "deposit" and rule.window_seconds == 300 for rule in deposit_rules)
     assert any(rule.name == "purchase" for rule in purchase_rules)
+    assert any(rule.name == "purchase" for rule in seller_purchase_rules)
     assert any(rule.name == "rotate_secret" and rule.limit == 2 for rule in rotate_rules)
     assert any(rule.name == "clear_chat" for rule in command_rules)
 

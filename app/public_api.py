@@ -184,6 +184,10 @@ def order_payload(
     idempotency_key: str | None = None,
 ) -> dict[str, object]:
     representative = orders[0]
+    unit_prices = [int(order.amount) for order in orders]
+    grouped_prices: dict[int, int] = {}
+    for unit_price in unit_prices:
+        grouped_prices[unit_price] = grouped_prices.get(unit_price, 0) + 1
     payload: dict[str, object] = {
         "order_code": representative.shop_order_code,
         "status": representative.status,
@@ -193,8 +197,17 @@ def order_payload(
             "name": sanitize_customer_text(representative.display_name_vi),
         },
         "quantity": len(orders),
-        "unit_price": representative.amount,
-        "total_amount": sum(order.amount for order in orders),
+        "unit_price": unit_prices[0] if len(grouped_prices) == 1 else None,
+        "unit_prices": unit_prices,
+        "price_breakdown": [
+            {
+                "quantity": quantity,
+                "unit_price": unit_price,
+                "subtotal": quantity * unit_price,
+            }
+            for unit_price, quantity in grouped_prices.items()
+        ],
+        "total_amount": sum(unit_prices),
         "discount_amount": sum(order.discount_amount for order in orders),
         "accounts": [
             cipher.decrypt(order.inventory_item.encrypted_secret) for order in orders
@@ -715,23 +728,11 @@ def create_public_api_router(
             await session.commit()
         return {
             "success": True,
-            "order": {
-                "order_code": result.orders[0].shop_order_code,
-                "status": "completed",
-                "channel": "api",
-                "product": {
-                    "id": result.orders[0].product.id,
-                    "name": sanitize_customer_text(result.orders[0].display_name_vi),
-                },
-                "quantity": len(result.orders),
-                "unit_price": result.orders[0].amount,
-                "total_amount": result.total_amount,
-                "discount_amount": result.discount_amount,
-                "accounts": result.secrets,
-                "idempotency_key": normalized_key,
-                "created_at": result.orders[0].created_at.isoformat(),
-                "delivered_at": result.orders[0].delivered_at.isoformat(),
-            },
+            "order": order_payload(
+                result.orders,
+                cipher,
+                idempotency_key=normalized_key,
+            ),
         }
 
     @router.get("/orders")

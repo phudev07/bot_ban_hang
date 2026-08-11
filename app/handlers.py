@@ -45,6 +45,7 @@ from app.keyboards import (
     quick_access_keyboard,
     quantity_menu,
     referral_menu,
+    seller_purchase_confirmation_menu,
     SmsRentalSourceButton,
     sms_rental_menu,
     sms_waiting_menu,
@@ -78,14 +79,13 @@ from app.services import (
     customer_product_prices,
     ensure_user,
     local_inventory_stock,
-    multi_supplier_quote,
     order_bundle,
     PendingDepositLimitReached,
+    product_checkout_quote,
     product_pricing,
     purchase_quantity_limit,
     purchase_product,
     recent_orders,
-    seller_inventory_quote,
     user_activity_stats,
 )
 from app.sms_customer_messages import rental_failure_text, storefront_text
@@ -174,6 +174,20 @@ def quantity_tier_offer_text(
         if language == "vi"
         else f"Buy <b>{tier.min_quantity}+</b> accounts and save "
         f"<b>{tier.discount_percent}%</b>"
+    )
+
+
+def unit_price_breakdown(unit_prices: tuple[int, ...]) -> tuple[tuple[int, int], ...]:
+    grouped: dict[int, int] = {}
+    for price in unit_prices:
+        grouped[int(price)] = grouped.get(int(price), 0) + 1
+    return tuple((quantity, price) for price, quantity in grouped.items())
+
+
+def unit_price_breakdown_text(unit_prices: tuple[int, ...]) -> str:
+    return " + ".join(
+        f"<b>{quantity}</b> × <b>{format_vnd(price)}</b>"
+        for quantity, price in unit_price_breakdown(unit_prices)
     )
 
 
@@ -1431,6 +1445,15 @@ def create_router(
             if user.language == "en"
             else ("Giá", "Còn hàng", "Thông tin")
         )
+        price_label = (
+            "Seller price from"
+            if user.language == "en"
+            and pricing is not None
+            and pricing.seller_price_id is not None
+            else "Giá seller từ"
+            if pricing is not None and pricing.seller_price_id is not None
+            else labels[0]
+        )
         price_text = f"<b>{format_vnd(display_price)}</b>"
         if pricing is not None and pricing.flash_sale is not None:
             price_text = (
@@ -1440,7 +1463,7 @@ def create_router(
             f"{product_brand_emoji(name)} <b>{safe_customer_html(name)}</b>\n\n"
             f"📋 <b>{labels[2]}:</b>\n"
             f"{safe_customer_telegram_html(description or '—')}\n\n"
-            f"💰 <b>{labels[0]}:</b> {price_text}\n"
+            f"💰 <b>{price_label}:</b> {price_text}\n"
             f"📦 <b>{labels[1]}:</b> <b>{stock}</b>"
         )
         if pricing is not None and pricing.flash_sale is not None:
@@ -1496,6 +1519,7 @@ def create_router(
         coupon_id: int | None = None,
         supplier_request_key: str | None = None,
         expected_flash_sale_id: int | None = None,
+        expected_total_amount: int | None = None,
     ) -> str:
         fulfillment_message: Message | None = None
 
@@ -1536,6 +1560,7 @@ def create_router(
                 ),
                 supplier_idempotency_key=supplier_request_key,
                 expected_flash_sale_id=expected_flash_sale_id,
+                expected_total_amount=expected_total_amount,
             )
         finally:
             if fulfillment_message is not None:
@@ -1553,6 +1578,7 @@ def create_router(
             "flash_sale_unavailable": (
                 "Suất Flash Sale vừa hết hoặc giá vốn đã tăng. Bạn chưa bị trừ tiền."
             ),
+            "price_changed": "Giá vừa thay đổi. Vui lòng xem lại tổng tiền trước khi xác nhận.",
         }
         messages_en = {
             "out_of_stock": "This product is out of stock.",
@@ -1564,6 +1590,7 @@ def create_router(
             "flash_sale_unavailable": (
                 "The Flash Sale allocation ended or supplier cost increased. You were not charged."
             ),
+            "price_changed": "The price changed. Please review the total before confirming again.",
         }
         if not result.ok:
             if result.message == "insufficient":
@@ -1697,6 +1724,83 @@ def create_router(
                 session_factory,
             )
         return result.message
+
+    async def show_seller_purchase_confirmation(
+        target: Message,
+        user: User,
+        product: Product,
+        quantity: int,
+        session: AsyncSession,
+        *,
+        expected_flash_sale_id: int | None = None,
+    ) -> bool:
+        pricing = await product_pricing(
+            session,
+            product,
+            quantity=quantity,
+            user_id=user.telegram_id,
+            expected_flash_sale_id=expected_flash_sale_id,
+        )
+        if pricing is None or pricing.seller_price_id is None:
+            return False
+        quote = await product_checkout_quote(
+            session,
+            product,
+            quantity,
+            pricing,
+            supplier_client,
+            lehai_client,
+            canboso_client=canboso_client,
+            nce_client=nce_client,
+            haji_client=haji_client,
+        )
+        if not quote.available:
+            await target.answer(
+                "Nguồn hàng vừa thay đổi, vui lòng thử lại."
+                if user.language == "vi"
+                else "Stock just changed. Please try again."
+            )
+            return True
+        name = sanitize_customer_text(
+            product.name_en if user.language == "en" else product.name_vi
+        )
+        breakdown = unit_price_breakdown_text(quote.unit_prices)
+        pricing_note_vi = (
+            "Giá seller được tính theo giá vốn từng tài khoản. Bot chỉ trừ đúng tổng tiền trên."
+            if quote.pricing.seller_price_id is not None
+            else "Có tài khoản không đủ biên lợi nhuận seller nên đơn này dùng giá bán lẻ. Bot chỉ trừ đúng tổng tiền trên."
+        )
+        pricing_note_en = (
+            "Seller pricing follows the cost of each account. Only this exact total will be charged."
+            if quote.pricing.seller_price_id is not None
+            else "At least one account cannot safely use seller pricing, so this order uses retail pricing. Only this exact total will be charged."
+        )
+        text = (
+            "🧾 <b>Xác nhận mua hàng</b>\n\n"
+            f"📦 Sản phẩm: {product_brand_emoji(name)} <b>{safe_customer_html(name)}</b>\n"
+            f"🧮 Số lượng: <b>{quantity}</b>\n"
+            f"💰 Chi tiết giá: {breakdown}\n"
+            f"💳 Tổng trừ ví: <b>{format_vnd(quote.total_amount)}</b>\n\n"
+            f"{pricing_note_vi}"
+            if user.language == "vi"
+            else "🧾 <b>Confirm purchase</b>\n\n"
+            f"📦 Product: {product_brand_emoji(name)} <b>{safe_customer_html(name)}</b>\n"
+            f"🧮 Quantity: <b>{quantity}</b>\n"
+            f"💰 Price breakdown: {breakdown}\n"
+            f"💳 Wallet total: <b>{format_vnd(quote.total_amount)}</b>\n\n"
+            f"{pricing_note_en}"
+        )
+        await target.answer(
+            text,
+            reply_markup=seller_purchase_confirmation_menu(
+                product.id,
+                quantity,
+                quote.total_amount,
+                user.language,
+                expected_flash_sale_id,
+            ),
+        )
+        return True
 
     @router.callback_query(F.data.startswith("coupon:"))
     async def request_discount_code(
@@ -1865,14 +1969,14 @@ def create_router(
             f"🧮 <b>Chọn số lượng</b>\n\n"
             f"📦 Sản phẩm: {product_brand_emoji(product.name_vi)} "
             f"<b>{safe_customer_html(product.name_vi)}</b>\n"
-            f"💰 Đơn giá: <b>{format_vnd(display_price)}</b>\n"
+            f"💰 {'Giá seller từ' if pricing is not None and pricing.seller_price_id is not None else 'Đơn giá'}: <b>{format_vnd(display_price)}</b>\n"
             f"📦 Còn hàng: <b>{stock}</b>\n"
             f"🧾 Tối đa mỗi lần: <b>{maximum}</b>"
             if user.language == "vi"
             else f"🧮 <b>Choose quantity</b>\n\n"
             f"📦 Product: {product_brand_emoji(product.name_en)} "
             f"<b>{safe_customer_html(product.name_en)}</b>\n"
-            f"💰 Unit price: <b>{format_vnd(display_price)}</b>\n"
+            f"💰 {'Seller price from' if pricing is not None and pricing.seller_price_id is not None else 'Unit price'}: <b>{format_vnd(display_price)}</b>\n"
             f"📦 In stock: <b>{stock}</b>\n"
             f"🧾 Maximum per order: <b>{maximum}</b>"
         )
@@ -1894,6 +1998,9 @@ def create_router(
                     display_price,
                     expected_flash_sale_id,
                     origin,
+                    variable_price=bool(
+                        pricing is not None and pricing.seller_price_id is not None
+                    ),
                 ),
             )
         await callback.answer()
@@ -1973,6 +2080,20 @@ def create_router(
             await message.answer(f"Số lượng không hợp lệ. Hãy nhập từ 1 đến {maximum}.")
             return
         await state.clear()
+        normalized_flash_sale_id = (
+            int(expected_flash_sale_id)
+            if expected_flash_sale_id is not None
+            else None
+        )
+        if await show_seller_purchase_confirmation(
+            message,
+            user,
+            product,
+            quantity,
+            session,
+            expected_flash_sale_id=normalized_flash_sale_id,
+        ):
+            return
         await complete_product_purchase(
             message,
             user,
@@ -1981,11 +2102,7 @@ def create_router(
             session,
             session_factory,
             supplier_request_key=f"tg-message-{message.chat.id}-{message.message_id}",
-            expected_flash_sale_id=(
-                int(expected_flash_sale_id)
-                if expected_flash_sale_id is not None
-                else None
-            ),
+            expected_flash_sale_id=normalized_flash_sale_id,
         )
 
     @router.callback_query(F.data.startswith("customcouponqty:"))
@@ -2082,6 +2199,20 @@ def create_router(
             if len(parts) >= 5 and parts[3] == "flash"
             else None
         )
+        product = await session.get(Product, product_id)
+        if product is None or not product.active:
+            await callback.answer("Sản phẩm không tồn tại.", show_alert=True)
+            return
+        if callback.message and await show_seller_purchase_confirmation(
+            callback.message,
+            user,
+            product,
+            quantity,
+            session,
+            expected_flash_sale_id=expected_flash_sale_id,
+        ):
+            await callback.answer()
+            return
         await callback.answer(
             "Đang xử lý đơn hàng..."
             if user.language == "vi"
@@ -2097,6 +2228,40 @@ def create_router(
                 session_factory,
                 supplier_request_key=f"tg-callback-{callback.id}",
                 expected_flash_sale_id=expected_flash_sale_id,
+            )
+
+    @router.callback_query(F.data.startswith("sellerbuy:"))
+    async def confirm_seller_purchase(
+        callback: CallbackQuery,
+        session: AsyncSession,
+        session_factory: async_sessionmaker[AsyncSession],
+    ) -> None:
+        user = await get_or_create_user(callback, session)
+        parts = callback.data.split(":")
+        product_id = int(parts[1])
+        quantity = int(parts[2])
+        expected_total_amount = int(parts[3])
+        expected_flash_sale_id = (
+            int(parts[5])
+            if len(parts) >= 6 and parts[4] == "flash"
+            else None
+        )
+        await callback.answer(
+            "Đang xử lý đơn hàng..."
+            if user.language == "vi"
+            else "Processing your order..."
+        )
+        if callback.message:
+            await complete_product_purchase(
+                callback.message,
+                user,
+                product_id,
+                quantity,
+                session,
+                session_factory,
+                supplier_request_key=f"tg-callback-{callback.id}",
+                expected_flash_sale_id=expected_flash_sale_id,
+                expected_total_amount=expected_total_amount,
             )
 
     @router.callback_query(F.data.startswith("buycoupon:"))
@@ -2186,7 +2351,8 @@ def create_router(
                 return
             await callback.answer("Mã giảm giá không còn hiệu lực.", show_alert=True)
             return
-        supplier_quote = await multi_supplier_quote(
+        checkout_quote = await product_checkout_quote(
+            session,
             product,
             quantity,
             pricing,
@@ -2195,14 +2361,15 @@ def create_router(
             canboso_client=canboso_client,
             nce_client=nce_client,
             haji_client=haji_client,
-            local_stock=local_stock,
         )
-        if supplier_quote is not None and not supplier_quote.available:
+        if not checkout_quote.available:
             await callback.answer(
                 "Nguồn hàng vừa thay đổi, vui lòng thử lại.",
                 show_alert=True,
             )
             return
+        pricing = checkout_quote.pricing
+        supplier_quote = checkout_quote.supplier_quote
         if (
             supplier_quote is not None
             and pricing.flash_sale is not None
@@ -2217,36 +2384,8 @@ def create_router(
                 show_alert=True,
             )
             return
-        inventory_quote = (
-            await seller_inventory_quote(session, product, quantity, pricing)
-            if supplier_quote is None and local_stock >= quantity
-            else None
-        )
-        if (
-            pricing.seller_price_id is not None
-            and supplier_quote is None
-            and local_stock >= quantity
-            and inventory_quote is None
-        ):
-            await callback.answer(
-                "Giá vốn lô hàng vừa thay đổi, vui lòng mở lại sản phẩm."
-                if user.language == "vi"
-                else "Inventory cost just changed. Please reopen the product.",
-                show_alert=True,
-            )
-            return
-        total_amount = (
-            supplier_quote.total_amount
-            if supplier_quote is not None
-            else sum(inventory_quote)
-            if inventory_quote is not None
-            else pricing.final_unit_price * quantity
-        )
-        total_discount = (
-            supplier_quote.discount_amount
-            if supplier_quote is not None
-            else pricing.discount_per_unit * quantity
-        )
+        total_amount = checkout_quote.total_amount
+        total_discount = checkout_quote.discount_amount
         try:
             deposit = await create_deposit(
                 session,
@@ -2297,38 +2436,29 @@ def create_router(
         product_name = sanitize_customer_text(
             product.name_en if user.language == "en" else product.name_vi
         )
+        grouped_prices = unit_price_breakdown(checkout_quote.unit_prices)
         price_breakdown_vi = (
             "💰 Chi tiết giá: "
             + " + ".join(
-                f"<b>{allocation.quantity}</b> x "
-                f"<b>{format_vnd(allocation.final_unit_price)}</b>"
-                for allocation in supplier_quote.allocations
+                f"<b>{price_quantity}</b> × <b>{format_vnd(unit_price)}</b>"
+                for price_quantity, unit_price in grouped_prices
             )
             + "\n"
-            if supplier_quote is not None and len(supplier_quote.allocations) > 1
+            if len(grouped_prices) > 1
             else ""
         )
         price_breakdown_en = (
             "💰 Price breakdown: "
             + " + ".join(
-                f"<b>{allocation.quantity}</b> x "
-                f"<b>{format_vnd(allocation.final_unit_price)}</b>"
-                for allocation in supplier_quote.allocations
+                f"<b>{price_quantity}</b> × <b>{format_vnd(unit_price)}</b>"
+                for price_quantity, unit_price in grouped_prices
             )
             + "\n"
-            if supplier_quote is not None and len(supplier_quote.allocations) > 1
+            if len(grouped_prices) > 1
             else ""
         )
-        coupon_discount_amount = (
-            supplier_quote.coupon_discount_amount
-            if supplier_quote is not None
-            else pricing.coupon_discount_per_unit * quantity
-        )
-        quantity_discount_amount = (
-            supplier_quote.quantity_discount_amount
-            if supplier_quote is not None
-            else pricing.quantity_discount_per_unit * quantity
-        )
+        coupon_discount_amount = checkout_quote.coupon_discount_amount
+        quantity_discount_amount = checkout_quote.quantity_discount_amount
         coupon_line_vi = (
             f"🏷️ Mã giảm giá: <b>{escape(pricing.coupon.code)}</b> "
             f"(-{format_vnd(coupon_discount_amount)})\n"

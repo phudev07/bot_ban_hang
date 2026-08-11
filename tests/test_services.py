@@ -33,6 +33,7 @@ from app.services import (
     multi_supplier_quote,
     order_bundle,
     process_sepay_payment,
+    product_checkout_quote,
     product_pricing,
     ProductPricing,
     purchase_quantity_limit,
@@ -106,12 +107,42 @@ def test_seller_price_uses_each_inventory_cost_and_keeps_normal_price_unchanged(
             )
             await session.commit()
 
+        async with sessions() as session:
+            quoted_product = await session.get(Product, product.id)
+            assert quoted_product is not None
+            pricing = await product_pricing(
+                session,
+                quoted_product,
+                quantity=2,
+                user_id=seller.telegram_id,
+            )
+            assert pricing is not None
+            quote = await product_checkout_quote(
+                session,
+                quoted_product,
+                2,
+                pricing,
+                None,
+                None,
+            )
+            assert quote.unit_prices == (35_000, 36_000)
+            assert quote.total_amount == 71_000
+
+        stale_quote_result = await purchase_product(
+            sessions,
+            seller.telegram_id,
+            product.id,
+            cipher,
+            quantity=2,
+            expected_total_amount=70_000,
+        )
         seller_result = await purchase_product(
             sessions,
             seller.telegram_id,
             product.id,
             cipher,
             quantity=2,
+            expected_total_amount=71_000,
         )
         normal_result = await purchase_product(
             sessions,
@@ -120,6 +151,9 @@ def test_seller_price_uses_each_inventory_cost_and_keeps_normal_price_unchanged(
             cipher,
         )
 
+        assert stale_quote_result.ok is False
+        assert stale_quote_result.message == "price_changed"
+        assert stale_quote_result.total_amount == 71_000
         assert seller_result.ok is True
         assert seller_result.total_amount == 71_000
         assert [order.amount for order in seller_result.orders] == [35_000, 36_000]
@@ -187,6 +221,68 @@ def test_seller_price_falls_back_to_public_price_when_cost_makes_it_unsafe() -> 
             assert pricing.seller_price_id is None
             assert pricing.final_unit_price == 40_000
             assert prices[product.id] == 40_000
+        await engine.dispose()
+
+    asyncio.run(scenario())
+
+
+def test_seller_purchase_falls_back_to_public_price_for_unsafe_later_item() -> None:
+    async def scenario() -> None:
+        engine, sessions = await make_database()
+        cipher = SecretCipher(Fernet.generate_key().decode())
+        async with sessions() as session:
+            category = Category(name_vi="Seller", name_en="Seller")
+            seller = User(telegram_id=72002, full_name="Seller", balance=100_000)
+            session.add_all([category, seller])
+            await session.flush()
+            product = Product(
+                category_id=category.id,
+                name_vi="Mixed seller costs",
+                name_en="Mixed seller costs",
+                price=40_000,
+                allow_quantity=True,
+            )
+            session.add(product)
+            await session.flush()
+            session.add(
+                SellerPrice(
+                    user_id=seller.telegram_id,
+                    product_id=product.id,
+                    profit_per_unit=5_000,
+                )
+            )
+            session.add_all(
+                [
+                    InventoryItem(
+                        product_id=product.id,
+                        encrypted_secret=cipher.encrypt("safe|password"),
+                        cost_amount=30_000,
+                    ),
+                    InventoryItem(
+                        product_id=product.id,
+                        encrypted_secret=cipher.encrypt("unsafe|password"),
+                        cost_amount=38_000,
+                    ),
+                ]
+            )
+            await session.commit()
+
+        result = await purchase_product(
+            sessions,
+            seller.telegram_id,
+            product.id,
+            cipher,
+            quantity=2,
+            expected_total_amount=80_000,
+        )
+
+        assert result.ok is True
+        assert result.total_amount == 80_000
+        assert [order.amount for order in result.orders] == [40_000, 40_000]
+        assert all(order.seller_price_id is None for order in result.orders)
+        async with sessions() as session:
+            stored_seller = await session.get(User, seller.telegram_id)
+            assert stored_seller is not None and stored_seller.balance == 20_000
         await engine.dispose()
 
     asyncio.run(scenario())
@@ -342,6 +438,7 @@ class FakeSupplier:
         self.balance = balance
         self.stock = stock
         self.buy_calls = 0
+        self.buy_quantities: list[int] = []
         self.fetch_calls = 0
 
     async def fetch_snapshot(self, product_id: str) -> SupplierSnapshot:
@@ -357,11 +454,86 @@ class FakeSupplier:
 
     async def buy(self, product_id: str, quantity: int) -> SupplierPurchase:
         self.buy_calls += 1
+        self.buy_quantities.append(quantity)
         return SupplierPurchase(
             order_code="API-TELE-TEST123",
             unit_price=15_000,
             accounts=tuple(f"chatgpt{index}:password" for index in range(1, quantity + 1)),
         )
+
+
+def test_seller_purchase_uses_local_stock_then_buys_only_missing_quantity() -> None:
+    async def scenario() -> None:
+        engine, sessions = await make_database()
+        cipher = SecretCipher(Fernet.generate_key().decode())
+        supplier = FakeSupplier(balance=1_000_000, stock=100)
+        async with sessions() as session:
+            category = Category(name_vi="API", name_en="API")
+            seller = User(telegram_id=73001, full_name="Seller", balance=100_000)
+            session.add_all([category, seller])
+            await session.flush()
+            product = Product(
+                category_id=category.id,
+                name_vi="Mixed local API",
+                name_en="Mixed local API",
+                price=28_000,
+                allow_quantity=True,
+                fulfillment_source="sumistore",
+                supplier_product_id="SP-GEF55PBV",
+                supplier_price=15_000,
+                supplier_markup=13_000,
+                external_stock=2,
+            )
+            session.add(product)
+            await session.flush()
+            session.add_all(
+                [
+                    SellerPrice(
+                        user_id=seller.telegram_id,
+                        product_id=product.id,
+                        profit_per_unit=5_000,
+                    ),
+                    InventoryItem(
+                        product_id=product.id,
+                        encrypted_secret=cipher.encrypt("local|password"),
+                        cost_amount=20_000,
+                    ),
+                ]
+            )
+            await session.commit()
+
+        result = await purchase_product(
+            sessions,
+            seller.telegram_id,
+            product.id,
+            cipher,
+            quantity=2,
+            supplier_client=supplier,  # type: ignore[arg-type]
+            expected_total_amount=45_000,
+        )
+
+        assert result.ok is True
+        assert result.total_amount == 45_000
+        assert supplier.buy_quantities == [1]
+        assert result.secrets == ["local|password", "chatgpt1:password"]
+        assert [order.amount for order in result.orders] == [25_000, 20_000]
+        assert [order.cost_amount for order in result.orders] == [20_000, 15_000]
+        async with sessions() as session:
+            stored_seller = await session.get(User, seller.telegram_id)
+            available_items = int(
+                await session.scalar(
+                    select(func.count(InventoryItem.id)).where(
+                        InventoryItem.product_id == product.id,
+                        InventoryItem.status == "available",
+                    )
+                )
+                or 0
+            )
+            assert stored_seller is not None and stored_seller.balance == 55_000
+            assert available_items == 0
+        await engine.dispose()
+
+    asyncio.run(scenario())
 
 
 def test_qr_quote_uses_local_inventory_without_calling_supplier() -> None:
@@ -2867,6 +3039,7 @@ def test_locked_inventory_can_fill_missing_quantity_from_api() -> None:
         assert result.ok is True
         assert result.total_amount == 56_000
         assert supplier.buy_calls == 1
+        assert supplier.buy_quantities == [1]
         async with sessions() as session:
             stored_product = await session.get(Product, product.id)
             available_items = int(
@@ -2878,9 +3051,9 @@ def test_locked_inventory_can_fill_missing_quantity_from_api() -> None:
                 )
                 or 0
             )
-            assert stored_product is not None and stored_product.price_lock_enabled is True
+            assert stored_product is not None and stored_product.price_lock_enabled is False
             assert stored_product.external_stock == 65
-            assert available_items == 1
+            assert available_items == 0
         await engine.dispose()
 
     asyncio.run(scenario())
@@ -3197,6 +3370,7 @@ def test_locked_inventory_qr_can_use_supplier_stock() -> None:
         assert result.status == "direct_purchase_completed"
         assert result.quantity == 2
         assert supplier.buy_calls == 1
+        assert supplier.buy_quantities == [1]
         async with sessions() as session:
             stored_product = await session.get(Product, product.id)
             available_items = int(
@@ -3209,9 +3383,85 @@ def test_locked_inventory_qr_can_use_supplier_stock() -> None:
                 or 0
             )
             assert stored_product is not None
-            assert stored_product.price_lock_enabled is True
+            assert stored_product.price_lock_enabled is False
             assert stored_product.external_stock == 65
-            assert available_items == 1
+            assert available_items == 0
+        await engine.dispose()
+
+    asyncio.run(scenario())
+
+
+def test_seller_qr_uses_local_stock_then_buys_only_missing_quantity() -> None:
+    async def scenario() -> None:
+        engine, sessions = await make_database()
+        cipher = SecretCipher(Fernet.generate_key().decode())
+        supplier = FakeSupplier(balance=1_000_000, stock=100)
+        async with sessions() as session:
+            category = Category(name_vi="API", name_en="API")
+            seller = User(telegram_id=73002, full_name="Seller", balance=0)
+            session.add_all([category, seller])
+            await session.flush()
+            product = Product(
+                category_id=category.id,
+                name_vi="Seller QR mixed",
+                name_en="Seller QR mixed",
+                price=28_000,
+                allow_quantity=True,
+                fulfillment_source="sumistore",
+                supplier_product_id="SP-GEF55PBV",
+                supplier_price=15_000,
+                supplier_markup=13_000,
+                external_stock=2,
+            )
+            session.add(product)
+            await session.flush()
+            rule = SellerPrice(
+                user_id=seller.telegram_id,
+                product_id=product.id,
+                profit_per_unit=5_000,
+            )
+            session.add(rule)
+            session.add(
+                InventoryItem(
+                    product_id=product.id,
+                    encrypted_secret=cipher.encrypt("local-qr|password"),
+                    cost_amount=20_000,
+                )
+            )
+            await session.flush()
+            deposit = await create_deposit(
+                session,
+                seller.telegram_id,
+                45_000,
+                payment_kind="direct_purchase",
+                product_id=product.id,
+                quantity=2,
+                seller_price_id=rule.id,
+                seller_profit_per_unit=5_000,
+            )
+
+        result = await process_sepay_payment(
+            sessions,
+            {
+                "id": 55557,
+                "transferType": "in",
+                "transferAmount": 45_000,
+                "content": deposit.code,
+            },
+            cipher=cipher,
+            supplier_client=supplier,  # type: ignore[arg-type]
+        )
+
+        assert result.status == "direct_purchase_completed"
+        assert supplier.buy_quantities == [1]
+        async with sessions() as session:
+            orders = list(
+                await session.scalars(
+                    select(Order).where(Order.user_id == seller.telegram_id).order_by(Order.id)
+                )
+            )
+            assert [order.amount for order in orders] == [25_000, 20_000]
+            assert [order.cost_amount for order in orders] == [20_000, 15_000]
         await engine.dispose()
 
     asyncio.run(scenario())
