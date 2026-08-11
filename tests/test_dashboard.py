@@ -156,19 +156,33 @@ def test_admin_can_manage_dynamic_seller_profit_by_user_and_product(tmp_path) ->
                 price=40_000,
                 fulfillment_source="local",
             )
-            session.add(product)
+            second_product = Product(
+                category_id=category.id,
+                name_vi="GPT Seller thứ hai",
+                name_en="Second GPT Seller",
+                price=30_000,
+                fulfillment_source="local",
+            )
+            session.add_all([product, second_product])
             await session.flush()
-            session.add(
-                InventoryItem(
-                    product_id=product.id,
-                    encrypted_secret="seller-stock",
-                    cost_amount=30_000,
-                )
+            session.add_all(
+                [
+                    InventoryItem(
+                        product_id=product.id,
+                        encrypted_secret="seller-stock",
+                        cost_amount=30_000,
+                    ),
+                    InventoryItem(
+                        product_id=second_product.id,
+                        encrypted_secret="seller-stock-second",
+                        cost_amount=20_000,
+                    ),
+                ]
             )
             await session.commit()
-        return engine, sessions, product.id, seller.telegram_id
+        return engine, sessions, product.id, second_product.id, seller.telegram_id
 
-    engine, sessions, product_id, seller_id = asyncio.run(initialize())
+    engine, sessions, product_id, second_product_id, seller_id = asyncio.run(initialize())
     encryption_key = Fernet.generate_key().decode()
     settings = Settings(
         _env_file=None,
@@ -193,7 +207,7 @@ def test_admin_can_manage_dynamic_seller_profit_by_user_and_product(tmp_path) ->
         )
         page = client.get("/admin/seller-prices")
         assert page.status_code == 200
-        assert "Giá riêng tự chạy theo giá vốn" in page.text
+        assert "Một seller, toàn bộ bảng giá" in page.text
         assert "GPT Plus Seller" in page.text
         csrf = re.search(r'name="csrf" value="([^"]+)"', page.text).group(1)  # type: ignore[union-attr]
         created = client.post(
@@ -201,8 +215,10 @@ def test_admin_can_manage_dynamic_seller_profit_by_user_and_product(tmp_path) ->
             data={
                 "csrf": csrf,
                 "seller_user": "@seller_test",
-                "product_id": str(product_id),
-                "profit_per_unit": "5.000",
+                f"profit_{product_id}": "5.000",
+                f"active_{product_id}": "1",
+                f"profit_{second_product_id}": "3.000",
+                f"active_{second_product_id}": "1",
             },
             follow_redirects=False,
         )
@@ -210,15 +226,38 @@ def test_admin_can_manage_dynamic_seller_profit_by_user_and_product(tmp_path) ->
         configured = client.get("/admin/seller-prices")
         assert "Seller Test" in configured.text
         assert "+5.000đ/1" in configured.text
+        assert "+3.000đ/1" in configured.text
         assert "35.000đ" in configured.text
+        assert "23.000đ" in configured.text
+        assert configured.text.count('class="seller-group-card"') == 1
+
+        editing = client.get(f"/admin/seller-prices?edit={seller_id}")
+        assert f'name="profit_{product_id}" inputmode="numeric" value="5000"' in editing.text
+        assert f'name="profit_{second_product_id}" inputmode="numeric" value="3000"' in editing.text
+
+        updated = client.post(
+            "/admin/seller-prices",
+            data={
+                "csrf": csrf,
+                "seller_user": str(seller_id),
+                f"profit_{product_id}": "5.000",
+                f"active_{product_id}": "1",
+                f"profit_{second_product_id}": "4.000",
+                f"active_{second_product_id}": "1",
+            },
+            follow_redirects=False,
+        )
+        assert updated.status_code == 303
 
         rejected = client.post(
             "/admin/seller-prices",
             data={
                 "csrf": csrf,
                 "seller_user": str(seller_id),
-                "product_id": str(product_id),
-                "profit_per_unit": "10.000",
+                f"profit_{product_id}": "10.000",
+                f"active_{product_id}": "1",
+                f"profit_{second_product_id}": "5.000",
+                f"active_{second_product_id}": "1",
             },
             follow_redirects=False,
         )
@@ -228,13 +267,17 @@ def test_admin_can_manage_dynamic_seller_profit_by_user_and_product(tmp_path) ->
 
     async def verify() -> None:
         async with sessions() as session:
-            rule = await session.scalar(select(SellerPrice))
+            rules = list(
+                await session.scalars(select(SellerPrice).order_by(SellerPrice.product_id))
+            )
             audits = list(await session.scalars(select(SellerPriceAudit)))
-            assert rule is not None
-            assert rule.user_id == seller_id
-            assert rule.product_id == product_id
-            assert rule.profit_per_unit == 5_000
-            assert len(audits) == 1
+            assert len(rules) == 2
+            assert all(rule.user_id == seller_id for rule in rules)
+            assert {rule.product_id: rule.profit_per_unit for rule in rules} == {
+                product_id: 5_000,
+                second_product_id: 4_000,
+            }
+            assert len(audits) == 3
 
     asyncio.run(verify())
     asyncio.run(engine.dispose())
@@ -356,9 +399,7 @@ def test_product_filters_and_inventory_import_only_allow_visible_products(
         assert "Sản phẩm hiện còn hàng" in import_select.group(1)
         assert "Sản phẩm hiện hết hàng" in import_select.group(1)
         assert "Sản phẩm ẩn còn hàng" not in import_select.group(1)
-        csrf = re.search(
-            r'name="csrf" value="([^"]+)"', inventory_page.text
-        ).group(1)
+        csrf = re.search(r'name="csrf" value="([^"]+)"', inventory_page.text).group(1)
         rejected = client.post(
             "/admin/inventory",
             data={
@@ -942,9 +983,7 @@ def test_admin_can_disable_each_gpt_plus_api_source(tmp_path) -> None:
         assert re.search(r'<span class="stock[^"]*">1</span>', products_page.text)
         disabled_edit_page = client.get(f"/admin/products/{product_id}")
         assert 'id="product-price-label">Giá bán từ kho' in disabled_edit_page.text
-        assert re.search(
-            r'id="supplier-markup-input"[^>]*disabled', disabled_edit_page.text
-        )
+        assert re.search(r'id="supplier-markup-input"[^>]*disabled', disabled_edit_page.text)
 
         enabled_again = client.post(
             f"/admin/products/{product_id}",
@@ -1120,9 +1159,9 @@ def test_admin_core_ledgers_paginate_all_rows(tmp_path) -> None:
         assert "PagedUser-203" in potential_users_page.text
         assert "PagedUser-000" not in potential_users_page.text
         assert "PagedUser-001" not in potential_users_page.text
-        assert potential_users_page.text.index(
-            "PagedUser-204"
-        ) < potential_users_page.text.index("PagedUser-203")
+        assert potential_users_page.text.index("PagedUser-204") < potential_users_page.text.index(
+            "PagedUser-203"
+        )
 
         orders_page = client.get("/admin/orders?page=2")
         assert orders_page.status_code == 200
@@ -1260,12 +1299,12 @@ def test_dashboard_login_catalog_inventory_and_balance(tmp_path) -> None:
         assert "Giá vốn API" in home.text
         assert "50.000đ" in home.text
         assert "Thuê số SMS" in home.text
-        assert 'data-trend-chart' in home.text
+        assert "data-trend-chart" in home.text
         assert home.text.count('class="trend-column"') == 14
         assert home.text.count('aria-pressed="false"') == 14
-        assert 'data-trend-detail' in home.text
-        assert 'data-trend-revenue' in home.text
-        assert 'data-trend-profit' in home.text
+        assert "data-trend-detail" in home.text
+        assert "data-trend-revenue" in home.text
+        assert "data-trend-profit" in home.text
 
         admin_css = client.get("/admin-assets/admin.css")
         assert admin_css.status_code == 200
@@ -1347,9 +1386,7 @@ def test_dashboard_login_catalog_inventory_and_balance(tmp_path) -> None:
             categories_page.text,
             re.DOTALL,
         )
-        empty_category_form = next(
-            form for form in category_forms if 'value="Gian trống"' in form
-        )
+        empty_category_form = next(form for form in category_forms if 'value="Gian trống"' in form)
         empty_category_id = int(
             re.search(r'action="/admin/categories/(\d+)"', empty_category_form).group(1)
         )  # type: ignore[union-attr]
@@ -1403,9 +1440,7 @@ def test_dashboard_login_catalog_inventory_and_balance(tmp_path) -> None:
         assert "API đấu kho" in api_clients_page.text
         assert "Request 24 giờ" in api_clients_page.text
         assert "VSADMINTEST001" in api_clients_page.text
-        filtered_api_clients = client.get(
-            "/admin/api-clients?q=VSADMINTEST001&status=active"
-        )
+        filtered_api_clients = client.get("/admin/api-clients?q=VSADMINTEST001&status=active")
         assert filtered_api_clients.status_code == 200
         assert "Đang hiển thị 1 kết quả phù hợp" in filtered_api_clients.text
 
@@ -1700,9 +1735,7 @@ def test_admin_can_approve_pending_wallet_deposit_once(tmp_path) -> None:
         async with sessions() as session:
             user = await session.get(User, 88990011)
             deposit = await session.get(Deposit, deposit_id)
-            payment_transactions = list(
-                await session.scalars(select(PaymentTransaction))
-            )
+            payment_transactions = list(await session.scalars(select(PaymentTransaction)))
             adjustments = list(await session.scalars(select(BalanceAdjustment)))
             wallet_transactions = list(await session.scalars(select(WalletTransaction)))
             assert user is not None and user.balance == 25_000
@@ -1875,17 +1908,17 @@ def test_dashboard_shows_sale_alert_history(tmp_path) -> None:
             session.add_all(
                 [
                     ProductPriceAlert(
-                    product_id=product.id,
-                    provider="sumistore",
-                    supplier_price_before=15_000,
-                    supplier_price_after=12_000,
-                    sale_price_before=17_000,
-                    sale_price_after=14_000,
-                    status="sent",
-                    total_recipients=10,
-                    delivered_count=9,
-                    failed_count=1,
-                    sent_at=datetime.now(UTC),
+                        product_id=product.id,
+                        provider="sumistore",
+                        supplier_price_before=15_000,
+                        supplier_price_after=12_000,
+                        sale_price_before=17_000,
+                        sale_price_after=14_000,
+                        status="sent",
+                        total_recipients=10,
+                        delivered_count=9,
+                        failed_count=1,
+                        sent_at=datetime.now(UTC),
                     ),
                     ProductStockAlert(
                         product_id=product.id,
@@ -2112,8 +2145,8 @@ def test_admin_can_import_recovered_external_inventory(tmp_path) -> None:
         assert 'name="cost_amount"' in inventory_page.text
         assert 'name="lock_sale_price"' in inventory_page.text
         assert 'name="notify_stock_arrival"' in inventory_page.text
-        assert 'data-inventory-items' in inventory_page.text
-        assert 'data-inventory-count' in inventory_page.text
+        assert "data-inventory-items" in inventory_page.text
+        assert "data-inventory-count" in inventory_page.text
         assert "Mỗi tài khoản một dòng" in inventory_page.text
         csrf = re.search(r'name="csrf" value="([^"]+)"', inventory_page.text).group(1)
         imported = client.post(
@@ -2155,9 +2188,7 @@ def test_admin_can_import_recovered_external_inventory(tmp_path) -> None:
 
     async def verify_database() -> None:
         async with sessions() as session:
-            items = list(
-                await session.scalars(select(InventoryItem).order_by(InventoryItem.id))
-            )
+            items = list(await session.scalars(select(InventoryItem).order_by(InventoryItem.id)))
             assert len(items) == 2
             assert items[0].product_id == product_id
             assert items[0].cost_amount == 8_000
@@ -2458,9 +2489,7 @@ def test_admin_withdraws_inventory_for_warranty_without_partial_or_resale(tmp_pa
         assert all(secret in external_detail.text for secret in external_secrets)
 
     with TestClient(app, base_url="https://testserver") as anonymous_client:
-        protected_detail = anonymous_client.get(
-            withdrawal_locations[0], follow_redirects=False
-        )
+        protected_detail = anonymous_client.get(withdrawal_locations[0], follow_redirects=False)
         assert protected_detail.status_code == 303
         assert protected_detail.headers["location"] == "/admin/login"
 
@@ -2639,11 +2668,7 @@ def test_admin_can_withdraw_warranty_accounts_directly_from_supplier_api(tmp_pat
 
     async def verify_database() -> None:
         async with sessions() as session:
-            items = list(
-                await session.scalars(
-                    select(InventoryItem).order_by(InventoryItem.id)
-                )
-            )
+            items = list(await session.scalars(select(InventoryItem).order_by(InventoryItem.id)))
             assert len(items) == 2
             assert all(item.status == "withdrawn" for item in items)
             assert all(item.withdrawal_code == withdrawal_code for item in items)
@@ -2761,10 +2786,7 @@ def test_ambiguous_api_warranty_withdrawal_is_linked_to_recovery(tmp_path) -> No
                 recovery.inventory_withdrawal_code or "",
             )
             assert recovery.inventory_withdrawn_by == "admin"
-            assert (
-                recovery.inventory_withdrawal_reason
-                == "Bảo hành cần thu hồi tự động"
-            )
+            assert recovery.inventory_withdrawal_reason == "Bảo hành cần thu hồi tự động"
             assert recovery.request_key == (
                 f"warranty-{recovery.inventory_withdrawal_code.lower()}"
             )
@@ -2865,12 +2887,10 @@ def test_dashboard_groups_multi_item_purchase_as_one_order(tmp_path) -> None:
         assert "40.000đ" in orders_page.text
         assert "Tên sản phẩm lúc mua" in orders_page.text
         assert re.search(r'<span class="status wait">Lê Hải</span>', orders_page.text)
-        assert "B-SHOP-123" in client.get(
-            "/admin/orders", params={"q": "@groupedbuyer"}
-        ).text
-        assert "B-SHOP-123" in client.get(
-            "/admin/orders", params={"q": "Tên sản phẩm lúc mua"}
-        ).text
+        assert "B-SHOP-123" in client.get("/admin/orders", params={"q": "@groupedbuyer"}).text
+        assert (
+            "B-SHOP-123" in client.get("/admin/orders", params={"q": "Tên sản phẩm lúc mua"}).text
+        )
         assert "B-SHOP-123" in client.get("/admin/orders?source=lehai").text
         assert "B-SHOP-123" not in client.get("/admin/orders?source=sumistore").text
         order_id = int(

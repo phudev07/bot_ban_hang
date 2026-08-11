@@ -217,24 +217,30 @@ def dashboard_periods() -> dict[str, datetime]:
             second=0,
             microsecond=0,
         ).astimezone(UTC),
-        "seven_days": (now - timedelta(days=6)).replace(
+        "seven_days": (now - timedelta(days=6))
+        .replace(
             hour=0,
             minute=0,
             second=0,
             microsecond=0,
-        ).astimezone(UTC),
-        "fourteen_days": (now - timedelta(days=13)).replace(
+        )
+        .astimezone(UTC),
+        "fourteen_days": (now - timedelta(days=13))
+        .replace(
             hour=0,
             minute=0,
             second=0,
             microsecond=0,
-        ).astimezone(UTC),
-        "thirty_days": (now - timedelta(days=29)).replace(
+        )
+        .astimezone(UTC),
+        "thirty_days": (now - timedelta(days=29))
+        .replace(
             hour=0,
             minute=0,
             second=0,
             microsecond=0,
-        ).astimezone(UTC),
+        )
+        .astimezone(UTC),
     }
 
 
@@ -284,10 +290,7 @@ def order_supplier_label(providers: set[str]) -> str:
         for provider in ("sumistore", "canboso", "lehai", "nce", "haji", "local")
         if provider in providers
     ]
-    return " + ".join(
-        SUPPLIER_PROVIDER_LABELS.get(provider, "Kho bot")
-        for provider in ordered
-    )
+    return " + ".join(SUPPLIER_PROVIDER_LABELS.get(provider, "Kho bot") for provider in ordered)
 
 
 def group_order_rows(rows, limit: int | None = None) -> list[dict[str, object]]:
@@ -326,9 +329,7 @@ def group_order_rows(rows, limit: int | None = None) -> list[dict[str, object]]:
         group["quantity"] = int(group["quantity"]) + 1
         group["amount"] = int(group["amount"]) + int(order.amount)
         group["cost_amount"] = int(group["cost_amount"]) + int(order.cost_amount)
-        group["discount_amount"] = int(group["discount_amount"]) + int(
-            order.discount_amount
-        )
+        group["discount_amount"] = int(group["discount_amount"]) + int(order.discount_amount)
         if order.seller_price_id is not None:
             group["seller_price_id"] = order.seller_price_id
             group["seller_profit_per_unit"] = order.seller_profit_per_unit
@@ -339,9 +340,7 @@ def group_order_rows(rows, limit: int | None = None) -> list[dict[str, object]]:
             and order.supplier_order_code not in group["supplier_order_codes"]
         ):
             group["supplier_order_codes"].append(order.supplier_order_code)
-            group["supplier_order_code"] = " · ".join(
-                group["supplier_order_codes"]
-            )
+            group["supplier_order_code"] = " · ".join(group["supplier_order_codes"])
         if not group["supplier_order_code"] and order.supplier_order_code:
             group["supplier_order_code"] = order.supplier_order_code
         if order.status != "completed":
@@ -380,22 +379,24 @@ async def financial_summary(
     session: AsyncSession,
     start_at: datetime | None = None,
 ) -> dict[str, int | float]:
-    statement = select(
-        purchase_order_count(),
-        func.count(Order.id),
-        func.coalesce(func.sum(Order.amount), 0),
-        func.coalesce(func.sum(Order.cost_amount), 0),
-        func.coalesce(func.sum(Order.discount_amount), 0),
-    ).join(Product, Product.id == Order.product_id).where(
-        Order.status == "completed",
-        Product.fulfillment_source.in_(SELLABLE_FULFILLMENT_SOURCES),
-        Product.product_type == "account",
+    statement = (
+        select(
+            purchase_order_count(),
+            func.count(Order.id),
+            func.coalesce(func.sum(Order.amount), 0),
+            func.coalesce(func.sum(Order.cost_amount), 0),
+            func.coalesce(func.sum(Order.discount_amount), 0),
+        )
+        .join(Product, Product.id == Order.product_id)
+        .where(
+            Order.status == "completed",
+            Product.fulfillment_source.in_(SELLABLE_FULFILLMENT_SOURCES),
+            Product.product_type == "account",
+        )
     )
     if start_at is not None:
         statement = statement.where(Order.created_at >= start_at)
-    order_count, account_count, revenue, cost, discount = (
-        await session.execute(statement)
-    ).one()
+    order_count, account_count, revenue, cost, discount = (await session.execute(statement)).one()
     sms_statement = select(
         func.count(SmsRental.id),
         func.coalesce(func.sum(SmsRental.sale_amount), 0),
@@ -407,9 +408,7 @@ async def financial_summary(
     order_count = int(order_count) + int(sms_count)
     revenue = int(revenue) + int(sms_revenue)
     cost = int(cost) + int(sms_cost)
-    reward_statement = select(
-        func.coalesce(func.sum(ReferralReward.commission_amount), 0)
-    )
+    reward_statement = select(func.coalesce(func.sum(ReferralReward.commission_amount), 0))
     if start_at is not None:
         reward_statement = reward_statement.where(ReferralReward.created_at >= start_at)
     referral = int(await session.scalar(reward_statement) or 0)
@@ -433,6 +432,7 @@ async def financial_summaries(
     periods: dict[str, datetime],
 ) -> dict[str, dict[str, int | float]]:
     """Read all dashboard periods in one aggregate query."""
+
     def count_since(start_at: datetime):
         return purchase_order_count().filter(Order.created_at >= start_at)
 
@@ -442,31 +442,35 @@ async def financial_summaries(
     def sum_since(column, start_at: datetime):
         return func.coalesce(func.sum(column).filter(Order.created_at >= start_at), 0)
 
-    statement = select(
-        count_since(periods["today"]).label("today_orders"),
-        account_count_since(periods["today"]).label("today_accounts"),
-        sum_since(Order.amount, periods["today"]).label("today_revenue"),
-        sum_since(Order.cost_amount, periods["today"]).label("today_cost"),
-        sum_since(Order.discount_amount, periods["today"]).label("today_discount"),
-        count_since(periods["month"]).label("month_orders"),
-        account_count_since(periods["month"]).label("month_accounts"),
-        sum_since(Order.amount, periods["month"]).label("month_revenue"),
-        sum_since(Order.cost_amount, periods["month"]).label("month_cost"),
-        sum_since(Order.discount_amount, periods["month"]).label("month_discount"),
-        count_since(periods["year"]).label("year_orders"),
-        account_count_since(periods["year"]).label("year_accounts"),
-        sum_since(Order.amount, periods["year"]).label("year_revenue"),
-        sum_since(Order.cost_amount, periods["year"]).label("year_cost"),
-        sum_since(Order.discount_amount, periods["year"]).label("year_discount"),
-        purchase_order_count().label("all_orders"),
-        func.count(Order.id).label("all_accounts"),
-        func.coalesce(func.sum(Order.amount), 0).label("all_revenue"),
-        func.coalesce(func.sum(Order.cost_amount), 0).label("all_cost"),
-        func.coalesce(func.sum(Order.discount_amount), 0).label("all_discount"),
-    ).join(Product, Product.id == Order.product_id).where(
-        Order.status == "completed",
-        Product.fulfillment_source.in_(SELLABLE_FULFILLMENT_SOURCES),
-        Product.product_type == "account",
+    statement = (
+        select(
+            count_since(periods["today"]).label("today_orders"),
+            account_count_since(periods["today"]).label("today_accounts"),
+            sum_since(Order.amount, periods["today"]).label("today_revenue"),
+            sum_since(Order.cost_amount, periods["today"]).label("today_cost"),
+            sum_since(Order.discount_amount, periods["today"]).label("today_discount"),
+            count_since(periods["month"]).label("month_orders"),
+            account_count_since(periods["month"]).label("month_accounts"),
+            sum_since(Order.amount, periods["month"]).label("month_revenue"),
+            sum_since(Order.cost_amount, periods["month"]).label("month_cost"),
+            sum_since(Order.discount_amount, periods["month"]).label("month_discount"),
+            count_since(periods["year"]).label("year_orders"),
+            account_count_since(periods["year"]).label("year_accounts"),
+            sum_since(Order.amount, periods["year"]).label("year_revenue"),
+            sum_since(Order.cost_amount, periods["year"]).label("year_cost"),
+            sum_since(Order.discount_amount, periods["year"]).label("year_discount"),
+            purchase_order_count().label("all_orders"),
+            func.count(Order.id).label("all_accounts"),
+            func.coalesce(func.sum(Order.amount), 0).label("all_revenue"),
+            func.coalesce(func.sum(Order.cost_amount), 0).label("all_cost"),
+            func.coalesce(func.sum(Order.discount_amount), 0).label("all_discount"),
+        )
+        .join(Product, Product.id == Order.product_id)
+        .where(
+            Order.status == "completed",
+            Product.fulfillment_source.in_(SELLABLE_FULFILLMENT_SOURCES),
+            Product.product_type == "account",
+        )
     )
     values = (await session.execute(statement)).one()
     sms_values = (
@@ -532,9 +536,7 @@ async def financial_summaries(
                     ),
                     0,
                 ).label("year_cost"),
-                func.count(SmsRental.id)
-                .filter(SmsRental.status == "success")
-                .label("all_orders"),
+                func.count(SmsRental.id).filter(SmsRental.status == "success").label("all_orders"),
                 func.coalesce(
                     func.sum(SmsRental.sale_amount).filter(SmsRental.status == "success"),
                     0,
@@ -567,9 +569,7 @@ async def financial_summaries(
                     ),
                     0,
                 ).label("year_referral"),
-                func.coalesce(func.sum(ReferralReward.commission_amount), 0).label(
-                    "all_referral"
-                ),
+                func.coalesce(func.sum(ReferralReward.commission_amount), 0).label("all_referral"),
             )
         )
     ).one()
@@ -695,11 +695,7 @@ async def resolve_seller_user(session: AsyncSession, value: str) -> User | None:
     username = normalized.lstrip("@").strip().lower()
     if not username:
         return None
-    return await session.scalar(
-        select(User)
-        .where(func.lower(User.username) == username)
-        .limit(1)
-    )
+    return await session.scalar(select(User).where(func.lower(User.username) == username).limit(1))
 
 
 def default_flash_sale_message(
@@ -905,15 +901,9 @@ def create_dashboard_router(
                 await session.execute(
                     select(
                         func.count(User.telegram_id),
-                        func.count(User.telegram_id).filter(
-                            User.created_at >= periods["today"]
-                        ),
-                        func.count(User.telegram_id).filter(
-                            User.created_at >= periods["month"]
-                        ),
-                        func.count(User.telegram_id).filter(
-                            User.created_at >= periods["year"]
-                        ),
+                        func.count(User.telegram_id).filter(User.created_at >= periods["today"]),
+                        func.count(User.telegram_id).filter(User.created_at >= periods["month"]),
+                        func.count(User.telegram_id).filter(User.created_at >= periods["year"]),
                         func.count(User.telegram_id).filter(User.has_started.is_(True)),
                         func.count(User.telegram_id).filter(User.is_blocked.is_(True)),
                     )
@@ -1000,9 +990,7 @@ def create_dashboard_router(
             )
             sms_buyers = set(
                 await session.scalars(
-                    select(SmsRental.user_id)
-                    .where(SmsRental.status == "success")
-                    .distinct()
+                    select(SmsRental.user_id).where(SmsRental.status == "success").distinct()
                 )
             )
             buying_users = len(account_buyers | sms_buyers)
@@ -1174,13 +1162,9 @@ def create_dashboard_router(
                 "label": day.strftime("%d/%m"),
                 "amount": values["revenue"],
                 "profit": values["profit"],
-                "height": (
-                    max(5, round(values["revenue"] / trend_max * 100)) if trend_max else 5
-                ),
+                "height": (max(5, round(values["revenue"] / trend_max * 100)) if trend_max else 5),
                 "profit_height": (
-                    max(3, round(max(0, values["profit"]) / trend_max * 100))
-                    if trend_max
-                    else 3
+                    max(3, round(max(0, values["profit"]) / trend_max * 100)) if trend_max else 3
                 ),
             }
             for day, values in sales_by_day.items()
@@ -1488,8 +1472,7 @@ def create_dashboard_router(
                 "stock_alert_mode": stock_alert_mode(product),
                 "unit_cost": (
                     int(average_cost or 0)
-                    if product.fulfillment_source == "local"
-                    or product.price_lock_enabled
+                    if product.fulfillment_source == "local" or product.price_lock_enabled
                     else int(product.supplier_price or 0)
                 ),
                 "unit_profit": (
@@ -1545,9 +1528,7 @@ def create_dashboard_router(
                 routes = {route.provider: route for route in fetched.routes}
                 failures = {failure.provider: failure for failure in fetched.failures}
                 selected_plan = plan_supplier_routes(fetched.routes, 1)
-                selected_provider = (
-                    selected_plan[0][0].provider if selected_plan else None
-                )
+                selected_provider = selected_plan[0][0].provider if selected_plan else None
                 source_rows = []
                 for provider in configured_supplier_providers(
                     product.fulfillment_source,
@@ -1575,27 +1556,22 @@ def create_dashboard_router(
                         product.supplier_product_id,
                     )
                 )
-                product_row["active_supplier_label"] = (
-                    SUPPLIER_PROVIDER_LABELS.get(
-                        selected_provider,
-                        (
-                            "Đã tắt cả hai"
-                            if not enabled_providers and configured_count == 2
-                            else "Đã tắt tất cả"
-                            if not enabled_providers
-                            else "Chưa có nguồn"
-                        ),
-                    )
+                product_row["active_supplier_label"] = SUPPLIER_PROVIDER_LABELS.get(
+                    selected_provider,
+                    (
+                        "Đã tắt cả hai"
+                        if not enabled_providers and configured_count == 2
+                        else "Đã tắt tất cả"
+                        if not enabled_providers
+                        else "Chưa có nguồn"
+                    ),
                 )
                 if len(routes) == fetched.configured_count:
                     live_stock = sum(
-                        max(0, int(route.snapshot.effective_stock))
-                        for route in fetched.routes
+                        max(0, int(route.snapshot.effective_stock)) for route in fetched.routes
                     ) + int(product_row["local_stock"])
                     product_row["source_stock"] = live_stock
-                    product_row["stock"] = (
-                        0 if product.force_out_of_stock else live_stock
-                    )
+                    product_row["stock"] = 0 if product.force_out_of_stock else live_stock
         filter_counts = {
             "all": len(products),
             "visible": sum(bool(row["product"].active) for row in products),
@@ -1670,10 +1646,7 @@ def create_dashboard_router(
             or parsed_price <= 0
             or normalized_type is None
             or normalized_source is None
-            or (
-                normalized_source in EXTERNAL_FULFILLMENT_SOURCES
-                and not normalized_supplier_id
-            )
+            or (normalized_source in EXTERNAL_FULFILLMENT_SOURCES and not normalized_supplier_id)
         ):
             flash(request, "Thông tin sản phẩm không hợp lệ.", "error")
             return RedirectResponse("/admin/products", status_code=303)
@@ -1698,9 +1671,7 @@ def create_dashboard_router(
                         else None
                     ),
                     supplier_markup=(
-                        parsed_markup
-                        if normalized_source in EXTERNAL_FULFILLMENT_SOURCES
-                        else 0
+                        parsed_markup if normalized_source in EXTERNAL_FULFILLMENT_SOURCES else 0
                     ),
                     supplier_price=None,
                     external_stock=0,
@@ -1805,9 +1776,7 @@ def create_dashboard_router(
         normalized_name = name_vi.strip()
         normalized_type = normalize_product_type(product_type)
         normalized_source = normalize_fulfillment_source(fulfillment_source)
-        parsed_markup = (
-            parse_vnd(supplier_markup) or 0 if supplier_markup is not None else None
-        )
+        parsed_markup = parse_vnd(supplier_markup) or 0 if supplier_markup is not None else None
         normalized_supplier_id = supplier_product_id.strip() or None
         async with session_factory() as session:
             product = await session.scalar(
@@ -1824,8 +1793,7 @@ def create_dashboard_router(
                 or normalized_type is None
                 or normalized_source is None
                 or (
-                    normalized_source in EXTERNAL_FULFILLMENT_SOURCES
-                    and not normalized_supplier_id
+                    normalized_source in EXTERNAL_FULFILLMENT_SOURCES and not normalized_supplier_id
                 )
             ):
                 flash(request, "Không thể cập nhật sản phẩm.", "error")
@@ -1844,9 +1812,7 @@ def create_dashboard_router(
                 # Keep their routing identity; the per-provider switches are the safe local-only mode.
                 normalized_source = old_source
                 normalized_supplier_id = old_supplier_id
-            old_configured = set(
-                configured_supplier_providers(old_source, old_supplier_id)
-            )
+            old_configured = set(configured_supplier_providers(old_source, old_supplier_id))
             old_enabled = enabled_supplier_providers(product)
             product.category_id = category_id
             product.name_vi = normalized_name
@@ -1967,10 +1933,7 @@ def create_dashboard_router(
                 or old_supplier_id != product.supplier_product_id
                 or old_enabled != enabled_supplier_providers(product)
             )
-            if (
-                routes_changed
-                and product.fulfillment_source in EXTERNAL_FULFILLMENT_SOURCES
-            ):
+            if routes_changed and product.fulfillment_source in EXTERNAL_FULFILLMENT_SOURCES:
                 local_stock = int(
                     await session.scalar(
                         select(func.count(InventoryItem.id)).where(
@@ -2040,11 +2003,7 @@ def create_dashboard_router(
         action: str = Form("zero"),
         return_to: str = Form("list"),
     ) -> RedirectResponse:
-        redirect_url = (
-            f"/admin/products/{product_id}"
-            if return_to == "edit"
-            else "/admin/products"
-        )
+        redirect_url = f"/admin/products/{product_id}" if return_to == "edit" else "/admin/products"
         if not is_admin(request):
             return redirect_to_login()
         if not valid_csrf(request, csrf):
@@ -2188,9 +2147,7 @@ def create_dashboard_router(
             await session.execute(
                 delete(InventoryItem).where(InventoryItem.product_id == product_id)
             )
-            await session.execute(
-                delete(DiscountCode).where(DiscountCode.product_id == product_id)
-            )
+            await session.execute(delete(DiscountCode).where(DiscountCode.product_id == product_id))
             await session.execute(
                 delete(QuantityDiscount).where(QuantityDiscount.product_id == product_id)
             )
@@ -2287,9 +2244,7 @@ def create_dashboard_router(
                             campaign.total_recipients - processed,
                         ),
                         "speed": (
-                            round(processed / elapsed_seconds, 1)
-                            if elapsed_seconds > 0
-                            else 0
+                            round(processed / elapsed_seconds, 1) if elapsed_seconds > 0 else 0
                         ),
                         "duration": duration,
                         "failures": failure_groups.get(campaign.id, []),
@@ -2539,9 +2494,7 @@ def create_dashboard_router(
                 )
             quantity_tiers = [
                 {"tier": tier, "product": product}
-                for tier, product in await session.execute(
-                    quantity_statement
-                )
+                for tier, product in await session.execute(quantity_statement)
             ]
             active_count = int(
                 await session.scalar(
@@ -2569,10 +2522,7 @@ def create_dashboard_router(
                 or 0
             )
             total_discount = int(
-                await session.scalar(
-                    select(func.coalesce(func.sum(Order.discount_amount), 0))
-                )
-                or 0
+                await session.scalar(select(func.coalesce(func.sum(Order.discount_amount), 0))) or 0
             )
             active_quantity_tiers = int(
                 await session.scalar(
@@ -2619,11 +2569,7 @@ def create_dashboard_router(
             return redirect_to_login()
         if not valid_csrf(request, csrf):
             return RedirectResponse("/admin/discounts", status_code=303)
-        if (
-            not min_quantity
-            or len(min_quantity) != len(discount_percent)
-            or len(min_quantity) > 20
-        ):
+        if not min_quantity or len(min_quantity) != len(discount_percent) or len(min_quantity) > 20:
             flash(request, "Danh sách mốc giảm giá không hợp lệ.", "error")
             return RedirectResponse("/admin/discounts", status_code=303)
         tiers = sorted(zip(min_quantity, discount_percent, strict=True))
@@ -2642,9 +2588,7 @@ def create_dashboard_router(
                 flash(request, "Sản phẩm không hợp lệ.", "error")
                 return RedirectResponse("/admin/discounts", status_code=303)
             if any(
-                threshold < 2
-                or threshold > product.max_quantity
-                or not 1 <= percent <= 99
+                threshold < 2 or threshold > product.max_quantity or not 1 <= percent <= 99
                 for threshold, percent in tiers
             ):
                 flash(
@@ -2700,11 +2644,7 @@ def create_dashboard_router(
             return redirect_to_login()
         if not valid_csrf(request, csrf):
             return RedirectResponse("/admin/discounts", status_code=303)
-        if (
-            not min_quantity
-            or len(min_quantity) != len(discount_amount)
-            or len(min_quantity) > 20
-        ):
+        if not min_quantity or len(min_quantity) != len(discount_amount) or len(min_quantity) > 20:
             flash(request, "Danh sách mốc giảm tiền không hợp lệ.", "error")
             return RedirectResponse("/admin/discounts", status_code=303)
         tiers = sorted(zip(min_quantity, discount_amount, strict=True))
@@ -2940,6 +2880,7 @@ def create_dashboard_router(
         request: Request,
         q: str = "",
         status: str = "all",
+        edit: str = "",
         page: int = 1,
     ) -> Response:
         if not is_admin(request):
@@ -2977,14 +2918,31 @@ def create_dashboard_router(
                 .subquery()
             )
             count_statement = (
-                select(func.count(SellerPrice.id))
+                select(func.count(func.distinct(SellerPrice.user_id)))
                 .join(User, User.telegram_id == SellerPrice.user_id)
                 .join(Product, Product.id == SellerPrice.product_id)
             )
             if conditions:
                 count_statement = count_statement.where(*conditions)
-            price_count = int(await session.scalar(count_statement) or 0)
-            pager = admin_pager(request, price_count, page)
+            seller_count = int(await session.scalar(count_statement) or 0)
+            pager = admin_pager(request, seller_count, page)
+            seller_statement = (
+                select(
+                    SellerPrice.user_id,
+                    func.max(SellerPrice.updated_at).label("last_updated"),
+                )
+                .join(User, User.telegram_id == SellerPrice.user_id)
+                .join(Product, Product.id == SellerPrice.product_id)
+                .group_by(SellerPrice.user_id)
+                .order_by(func.max(SellerPrice.updated_at).desc())
+                .offset(pager.offset)
+                .limit(ADMIN_PAGE_SIZE)
+            )
+            if conditions:
+                seller_statement = seller_statement.where(*conditions)
+            seller_user_ids = [
+                int(user_id) for user_id, _last_updated in await session.execute(seller_statement)
+            ]
             statement = (
                 select(
                     SellerPrice,
@@ -3001,71 +2959,10 @@ def create_dashboard_router(
                     order_stats,
                     order_stats.c.seller_price_id == SellerPrice.id,
                 )
-                .order_by(SellerPrice.active.desc(), SellerPrice.updated_at.desc())
-                .offset(pager.offset)
-                .limit(ADMIN_PAGE_SIZE)
+                .where(SellerPrice.user_id.in_(seller_user_ids))
+                .order_by(SellerPrice.updated_at.desc(), SellerPrice.id.desc())
             )
-            if conditions:
-                statement = statement.where(*conditions)
-            raw_rows = list(await session.execute(statement))
-            product_ids = {rule.product_id for rule, *_rest in raw_rows}
-            first_item_ids = (
-                select(
-                    InventoryItem.product_id.label("product_id"),
-                    func.min(InventoryItem.id).label("item_id"),
-                )
-                .where(
-                    InventoryItem.product_id.in_(product_ids),
-                    InventoryItem.status == "available",
-                )
-                .group_by(InventoryItem.product_id)
-                .subquery()
-            )
-            local_costs = (
-                {
-                    int(product_id): int(cost_amount)
-                    for product_id, cost_amount in await session.execute(
-                        select(
-                            first_item_ids.c.product_id,
-                            InventoryItem.cost_amount,
-                        ).join(
-                            InventoryItem,
-                            InventoryItem.id == first_item_ids.c.item_id,
-                        )
-                    )
-                }
-                if product_ids
-                else {}
-            )
-            rows = []
-            for rule, user, product, order_count, item_count, revenue, cost in raw_rows:
-                source_cost = local_costs.get(
-                    product.id,
-                    int(product.supplier_price or 0),
-                )
-                effective_price = seller_unit_price(
-                    product,
-                    source_cost,
-                    rule.profit_per_unit,
-                    public_unit_price=product.price,
-                )
-                rows.append(
-                    {
-                        "rule": rule,
-                        "user": user,
-                        "product": product,
-                        "source_cost": source_cost,
-                        "source_label": (
-                            "Kho nhập" if product.id in local_costs else "API động"
-                        ),
-                        "effective_price": effective_price,
-                        "order_count": int(order_count),
-                        "item_count": int(item_count),
-                        "revenue": int(revenue),
-                        "cost": int(cost),
-                        "profit": int(revenue) - int(cost),
-                    }
-                )
+            raw_rows = list(await session.execute(statement)) if seller_user_ids else []
 
             products = list(
                 await session.scalars(
@@ -3080,11 +2977,13 @@ def create_dashboard_router(
                 )
             )
             product_options = []
+            product_costs: dict[int, tuple[int, str]] = {}
             for product in products:
                 source_cost, source_label = await seller_source_cost_context(
                     session,
                     product,
                 )
+                product_costs[product.id] = (source_cost, source_label)
                 product_options.append(
                     {
                         "product": product,
@@ -3092,7 +2991,98 @@ def create_dashboard_router(
                         "source_label": source_label,
                     }
                 )
-            suggested_users = list(
+
+            grouped_by_user: dict[int, dict[str, object]] = {}
+            for rule, user, product, order_count, item_count, revenue, cost in raw_rows:
+                source_cost, source_label = product_costs.get(product.id, (0, ""))
+                if not source_label:
+                    source_cost, source_label = await seller_source_cost_context(
+                        session,
+                        product,
+                    )
+                    product_costs[product.id] = (source_cost, source_label)
+                effective_price = seller_unit_price(
+                    product,
+                    source_cost,
+                    rule.profit_per_unit,
+                    public_unit_price=product.price,
+                )
+                group = grouped_by_user.setdefault(
+                    user.telegram_id,
+                    {
+                        "user": user,
+                        "rules": [],
+                        "order_count": 0,
+                        "item_count": 0,
+                        "revenue": 0,
+                        "cost": 0,
+                        "active_count": 0,
+                        "last_updated": rule.updated_at,
+                    },
+                )
+                group["rules"].append(
+                    {
+                        "rule": rule,
+                        "product": product,
+                        "source_cost": source_cost,
+                        "source_label": source_label,
+                        "effective_price": effective_price,
+                        "order_count": int(order_count),
+                        "item_count": int(item_count),
+                        "revenue": int(revenue),
+                        "cost": int(cost),
+                        "profit": int(revenue) - int(cost),
+                    }
+                )
+                group["order_count"] += int(order_count)
+                group["item_count"] += int(item_count)
+                group["revenue"] += int(revenue)
+                group["cost"] += int(cost)
+                group["active_count"] += int(bool(rule.active and effective_price))
+                if rule.updated_at and (
+                    group["last_updated"] is None or rule.updated_at > group["last_updated"]
+                ):
+                    group["last_updated"] = rule.updated_at
+
+            seller_groups = []
+            for user_id in seller_user_ids:
+                group = grouped_by_user.get(user_id)
+                if group is None:
+                    continue
+                group["rules"].sort(key=lambda item: (item["product"].name_vi, item["product"].id))
+                group["profit"] = int(group["revenue"]) - int(group["cost"])
+                seller_groups.append(group)
+
+            editor_rows = (
+                list(
+                    await session.execute(
+                        select(SellerPrice, User)
+                        .join(User, User.telegram_id == SellerPrice.user_id)
+                        .where(SellerPrice.product_id.in_([product.id for product in products]))
+                        .order_by(User.updated_at.desc(), SellerPrice.product_id)
+                    )
+                )
+                if products
+                else []
+            )
+            seller_editor_data: dict[str, dict[str, object]] = {}
+            configured_users: dict[int, User] = {}
+            for rule, user in editor_rows:
+                configured_users[user.telegram_id] = user
+                editor_entry = seller_editor_data.setdefault(
+                    str(user.telegram_id),
+                    {
+                        "label": seller_user_label(user),
+                        "username": user.username or "",
+                        "rules": {},
+                    },
+                )
+                editor_entry["rules"][str(rule.product_id)] = {
+                    "profit": int(rule.profit_per_unit),
+                    "active": bool(rule.active),
+                }
+
+            recent_users = list(
                 await session.scalars(
                     select(User)
                     .where(User.has_started.is_(True))
@@ -3100,6 +3090,10 @@ def create_dashboard_router(
                     .limit(100)
                 )
             )
+            suggested_user_map = dict(configured_users)
+            for user in recent_users:
+                suggested_user_map.setdefault(user.telegram_id, user)
+            suggested_users = list(suggested_user_map.values())
             totals = (
                 await session.execute(
                     select(
@@ -3121,9 +3115,7 @@ def create_dashboard_router(
             ).one()
             history = list(
                 await session.scalars(
-                    select(SellerPriceAudit)
-                    .order_by(SellerPriceAudit.id.desc())
-                    .limit(100)
+                    select(SellerPriceAudit).order_by(SellerPriceAudit.id.desc()).limit(100)
                 )
             )
 
@@ -3134,9 +3126,11 @@ def create_dashboard_router(
                 request,
                 "Giá riêng seller",
                 "seller-prices",
-                rows=rows,
+                seller_groups=seller_groups,
                 product_options=product_options,
                 suggested_users=suggested_users,
+                seller_editor_data=seller_editor_data,
+                selected_seller=edit.strip(),
                 history=history,
                 query=q,
                 status=status,
@@ -3158,8 +3152,6 @@ def create_dashboard_router(
         request: Request,
         csrf: str = Form(...),
         seller_user: str = Form(...),
-        product_id: int = Form(...),
-        profit_per_unit: str = Form(...),
     ) -> RedirectResponse:
         redirect_url = "/admin/seller-prices"
         if not is_admin(request):
@@ -3167,98 +3159,212 @@ def create_dashboard_router(
         if not valid_csrf(request, csrf):
             flash(request, "Phiên biểu mẫu không hợp lệ.", "error")
             return RedirectResponse(redirect_url, status_code=303)
-        profit = int(parse_vnd(profit_per_unit) or 0)
-        if profit <= 0:
-            flash(request, "Mức lời seller phải lớn hơn 0đ.", "error")
+        form = await request.form()
+        submitted: dict[int, tuple[str, bool]] = {}
+        for key, value in form.items():
+            if not key.startswith("profit_"):
+                continue
+            try:
+                product_id = int(key.removeprefix("profit_"))
+            except ValueError:
+                flash(request, "Dữ liệu sản phẩm không hợp lệ.", "error")
+                return RedirectResponse(redirect_url, status_code=303)
+            submitted[product_id] = (
+                str(value).strip(),
+                f"active_{product_id}" in form,
+            )
+        if not submitted:
+            flash(request, "Không có sản phẩm nào để lưu giá seller.", "error")
             return RedirectResponse(redirect_url, status_code=303)
+        changed_count = 0
         async with session_factory() as session:
             async with session.begin():
                 user = await resolve_seller_user(session, seller_user)
-                product = await session.scalar(
-                    select(Product)
-                    .where(Product.id == product_id)
-                    .with_for_update()
-                )
                 if user is None:
                     flash(request, "Không tìm thấy khách hàng theo ID hoặc @username.", "error")
                     return RedirectResponse(redirect_url, status_code=303)
-                if (
-                    product is None
-                    or not product.active
+                products = list(
+                    await session.scalars(
+                        select(Product).where(Product.id.in_(submitted)).with_for_update()
+                    )
+                )
+                products_by_id = {product.id: product for product in products}
+                if len(products_by_id) != len(submitted) or any(
+                    not product.active
                     or product.archived_at is not None
                     or product.product_type != "account"
                     or product.fulfillment_source not in SELLABLE_FULFILLMENT_SOURCES
+                    for product in products
                 ):
                     flash(request, "Sản phẩm không hợp lệ hoặc đang bị ẩn.", "error")
                     return RedirectResponse(redirect_url, status_code=303)
-                source_cost, _source_label = await seller_source_cost_context(
-                    session,
-                    product,
-                )
-                effective_price = seller_unit_price(
-                    product,
-                    source_cost,
-                    profit,
-                    public_unit_price=product.price,
-                )
-                if source_cost <= 0:
-                    flash(
-                        request,
-                        "Chưa có giá vốn để kiểm tra. Hãy đồng bộ API hoặc nhập kho có giá vốn trước.",
-                        "error",
+                existing_rules = {
+                    rule.product_id: rule
+                    for rule in await session.scalars(
+                        select(SellerPrice)
+                        .where(
+                            SellerPrice.user_id == user.telegram_id,
+                            SellerPrice.product_id.in_(submitted),
+                        )
+                        .with_for_update()
                     )
-                    return RedirectResponse(redirect_url, status_code=303)
-                if effective_price is None:
-                    flash(
-                        request,
-                        "Giá vốn + mức lời phải thấp hơn giá bán thường hiện tại.",
-                        "error",
+                }
+                desired: dict[int, tuple[int | None, bool]] = {}
+                for product_id, (raw_profit, active) in submitted.items():
+                    product = products_by_id[product_id]
+                    if not raw_profit:
+                        if active:
+                            flash(
+                                request,
+                                f"{product.name_vi}: cần nhập mức lời trước khi bật áp dụng.",
+                                "error",
+                            )
+                            return RedirectResponse(redirect_url, status_code=303)
+                        desired[product_id] = (None, False)
+                        continue
+                    profit = int(parse_vnd(raw_profit) or 0)
+                    if profit <= 0:
+                        flash(
+                            request,
+                            f"{product.name_vi}: mức lời seller phải lớn hơn 0đ.",
+                            "error",
+                        )
+                        return RedirectResponse(redirect_url, status_code=303)
+                    source_cost, _source_label = await seller_source_cost_context(
+                        session,
+                        product,
                     )
-                    return RedirectResponse(redirect_url, status_code=303)
-                rule = await session.scalar(
-                    select(SellerPrice)
-                    .where(
-                        SellerPrice.user_id == user.telegram_id,
-                        SellerPrice.product_id == product.id,
+                    if source_cost <= 0:
+                        flash(
+                            request,
+                            f"{product.name_vi}: chưa có giá vốn để kiểm tra.",
+                            "error",
+                        )
+                        return RedirectResponse(redirect_url, status_code=303)
+                    if (
+                        seller_unit_price(
+                            product,
+                            source_cost,
+                            profit,
+                            public_unit_price=product.price,
+                        )
+                        is None
+                    ):
+                        flash(
+                            request,
+                            f"{product.name_vi}: giá vốn + mức lời phải thấp hơn giá bán thường hiện tại.",
+                            "error",
+                        )
+                        return RedirectResponse(redirect_url, status_code=303)
+                    desired[product_id] = (profit, active)
+
+                referenced_rule_ids: set[int] = set()
+                existing_rule_ids = [rule.id for rule in existing_rules.values()]
+                if existing_rule_ids:
+                    referenced_rule_ids.update(
+                        int(rule_id)
+                        for rule_id in await session.scalars(
+                            select(Order.seller_price_id)
+                            .where(Order.seller_price_id.in_(existing_rule_ids))
+                            .distinct()
+                        )
+                        if rule_id is not None
                     )
-                    .with_for_update()
-                )
-                old_profit = rule.profit_per_unit if rule is not None else None
-                old_active = rule.active if rule is not None else None
-                action = "updated" if rule is not None else "created"
-                if rule is None:
-                    rule = SellerPrice(
-                        user_id=user.telegram_id,
-                        product_id=product.id,
-                        profit_per_unit=profit,
-                        active=True,
-                        created_by=str(request.session.get("dashboard_admin") or "admin"),
+                    referenced_rule_ids.update(
+                        int(rule_id)
+                        for rule_id in await session.scalars(
+                            select(Deposit.seller_price_id)
+                            .where(Deposit.seller_price_id.in_(existing_rule_ids))
+                            .distinct()
+                        )
+                        if rule_id is not None
                     )
-                    session.add(rule)
-                    await session.flush()
-                else:
-                    rule.profit_per_unit = profit
-                    rule.active = True
-                session.add(
-                    SellerPriceAudit(
-                        seller_price_id=rule.id,
-                        user_id=user.telegram_id,
-                        product_id=product.id,
-                        user_label=seller_user_label(user),
-                        product_name=product.name_vi,
-                        action=action,
-                        old_profit_per_unit=old_profit,
-                        new_profit_per_unit=profit,
-                        old_active=old_active,
-                        new_active=True,
-                        created_by=str(request.session.get("dashboard_admin") or "admin"),
+
+                created_by = str(request.session.get("dashboard_admin") or "admin")
+                user_label = seller_user_label(user)
+                for product_id, (profit, active) in desired.items():
+                    product = products_by_id[product_id]
+                    rule = existing_rules.get(product_id)
+                    if profit is None:
+                        if rule is None:
+                            continue
+                        action = "archived" if rule.id in referenced_rule_ids else "deleted"
+                        session.add(
+                            SellerPriceAudit(
+                                seller_price_id=rule.id,
+                                user_id=user.telegram_id,
+                                product_id=product.id,
+                                user_label=user_label,
+                                product_name=product.name_vi,
+                                action=action,
+                                old_profit_per_unit=rule.profit_per_unit,
+                                new_profit_per_unit=None,
+                                old_active=rule.active,
+                                new_active=False,
+                                created_by=created_by,
+                            )
+                        )
+                        if rule.id in referenced_rule_ids:
+                            rule.active = False
+                        else:
+                            await session.delete(rule)
+                        changed_count += 1
+                        continue
+
+                    if rule is None:
+                        rule = SellerPrice(
+                            user_id=user.telegram_id,
+                            product_id=product.id,
+                            profit_per_unit=profit,
+                            active=active,
+                            created_by=created_by,
+                        )
+                        session.add(rule)
+                        await session.flush()
+                        action = "created"
+                        old_profit = None
+                        old_active = None
+                    else:
+                        old_profit = int(rule.profit_per_unit)
+                        old_active = bool(rule.active)
+                        if old_profit == profit and old_active == active:
+                            continue
+                        action = (
+                            "updated"
+                            if old_profit != profit
+                            else "enabled"
+                            if active
+                            else "disabled"
+                        )
+                        rule.profit_per_unit = profit
+                        rule.active = active
+                    session.add(
+                        SellerPriceAudit(
+                            seller_price_id=rule.id,
+                            user_id=user.telegram_id,
+                            product_id=product.id,
+                            user_label=user_label,
+                            product_name=product.name_vi,
+                            action=action,
+                            old_profit_per_unit=old_profit,
+                            new_profit_per_unit=profit,
+                            old_active=old_active,
+                            new_active=active,
+                            created_by=created_by,
+                        )
                     )
-                )
-        flash(
-            request,
-            f"Đã lưu mức lời {format_vnd(profit)}/1 cho {seller_user_label(user)} · giá hiện tại {format_vnd(effective_price)}.",
+                    changed_count += 1
+        if changed_count:
+            flash(
+                request,
+                f"Đã lưu {changed_count} thay đổi giá cho {seller_user_label(user)}.",
+            )
+        else:
+            flash(request, f"Giá của {seller_user_label(user)} không có thay đổi.")
+        return RedirectResponse(
+            f"{redirect_url}?{urlencode({'edit': str(user.telegram_id)})}",
+            status_code=303,
         )
-        return RedirectResponse(redirect_url, status_code=303)
 
     @router.post("/admin/seller-prices/{seller_price_id}/toggle")
     async def toggle_seller_price(
@@ -3274,9 +3380,7 @@ def create_dashboard_router(
         async with session_factory() as session:
             async with session.begin():
                 rule = await session.scalar(
-                    select(SellerPrice)
-                    .where(SellerPrice.id == seller_price_id)
-                    .with_for_update()
+                    select(SellerPrice).where(SellerPrice.id == seller_price_id).with_for_update()
                 )
                 if rule is None:
                     return RedirectResponse(redirect_url, status_code=303)
@@ -3290,12 +3394,15 @@ def create_dashboard_router(
                         session,
                         product,
                     )
-                    if seller_unit_price(
-                        product,
-                        source_cost,
-                        rule.profit_per_unit,
-                        public_unit_price=product.price,
-                    ) is None:
+                    if (
+                        seller_unit_price(
+                            product,
+                            source_cost,
+                            rule.profit_per_unit,
+                            public_unit_price=product.price,
+                        )
+                        is None
+                    ):
                         flash(
                             request,
                             "Không thể bật: giá vốn hiện tại + mức lời không còn thấp hơn giá bán thường.",
@@ -3336,9 +3443,7 @@ def create_dashboard_router(
         async with session_factory() as session:
             async with session.begin():
                 rule = await session.scalar(
-                    select(SellerPrice)
-                    .where(SellerPrice.id == seller_price_id)
-                    .with_for_update()
+                    select(SellerPrice).where(SellerPrice.id == seller_price_id).with_for_update()
                 )
                 if rule is None:
                     return RedirectResponse(redirect_url, status_code=303)
@@ -3346,16 +3451,12 @@ def create_dashboard_router(
                 product = await session.get(Product, rule.product_id)
                 reference_count = int(
                     await session.scalar(
-                        select(func.count(Order.id)).where(
-                            Order.seller_price_id == rule.id
-                        )
+                        select(func.count(Order.id)).where(Order.seller_price_id == rule.id)
                     )
                     or 0
                 ) + int(
                     await session.scalar(
-                        select(func.count(Deposit.id)).where(
-                            Deposit.seller_price_id == rule.id
-                        )
+                        select(func.count(Deposit.id)).where(Deposit.seller_price_id == rule.id)
                     )
                     or 0
                 )
@@ -3367,7 +3468,9 @@ def create_dashboard_router(
                         user_label=(
                             seller_user_label(user) if user is not None else str(rule.user_id)
                         ),
-                        product_name=(product.name_vi if product is not None else str(rule.product_id)),
+                        product_name=(
+                            product.name_vi if product is not None else str(rule.product_id)
+                        ),
                         action="archived" if reference_count else "deleted",
                         old_profit_per_unit=rule.profit_per_unit,
                         new_profit_per_unit=None,
@@ -3382,7 +3485,9 @@ def create_dashboard_router(
                     await session.delete(rule)
         flash(
             request,
-            "Đã tắt và lưu lịch sử giá seller." if reference_count else "Đã xóa giá seller chưa phát sinh đơn.",
+            "Đã tắt và lưu lịch sử giá seller."
+            if reference_count
+            else "Đã xóa giá seller chưa phát sinh đơn.",
         )
         return RedirectResponse(redirect_url, status_code=303)
 
@@ -3548,16 +3653,13 @@ def create_dashboard_router(
                 "Nhập kho",
                 "inventory",
                 products=products,
-                import_products=[
-                    row for row in products if bool(row["product"].active)
-                ],
+                import_products=[row for row in products if bool(row["product"].active)],
                 withdrawal_products=[
                     row
                     for row in products
                     if int(row["local_stock"]) > 0
                     or (
-                        row["product"].fulfillment_source
-                        in EXTERNAL_FULFILLMENT_SOURCES
+                        row["product"].fulfillment_source in EXTERNAL_FULFILLMENT_SOURCES
                         and bool(row["api_routes_enabled"])
                     )
                 ],
@@ -3681,9 +3783,7 @@ def create_dashboard_router(
             )
             total_stock_after = local_stock + supplier_stock
             if product.fulfillment_source in EXTERNAL_FULFILLMENT_SOURCES:
-                product.external_stock = (
-                    local_stock + max(0, int(product.supplier_available_stock))
-                )
+                product.external_stock = local_stock + max(0, int(product.supplier_available_stock))
             notification_queued = False
             notification_note = ""
             if notify_stock_arrival is not None:
@@ -3698,7 +3798,9 @@ def create_dashboard_router(
                 elif getattr(product, "stock_notifications_enabled", True) is False:
                     notification_note = "; công tắc thông báo hàng về đang tắt"
                 elif not product.active or product.force_out_of_stock:
-                    notification_note = "; sản phẩm đang ẩn hoặc đang bị đưa về 0 hàng nên không gửi thông báo"
+                    notification_note = (
+                        "; sản phẩm đang ẩn hoặc đang bị đưa về 0 hàng nên không gửi thông báo"
+                    )
             await session.commit()
         lock_note = " và đã khóa giá bán" if lock_applied else ""
         flash(
@@ -3889,9 +3991,7 @@ def create_dashboard_router(
                                     "rút an toàn.",
                                     "error",
                                 )
-                                return RedirectResponse(
-                                    "/admin/inventory", status_code=303
-                                )
+                                return RedirectResponse("/admin/inventory", status_code=303)
                             purchase = await buy_supplier_product(
                                 session,
                                 selected_route.client,
@@ -3914,8 +4014,7 @@ def create_dashboard_router(
                                 ),
                             )
                             api_stock_before = sum(
-                                route.snapshot.effective_stock
-                                for route in route_fetch.routes
+                                route.snapshot.effective_stock for route in route_fetch.routes
                             )
                         else:
                             external_client = supplier_client_for_product(
@@ -3933,9 +4032,7 @@ def create_dashboard_router(
                                     "Nguồn API của sản phẩm đang tắt hoặc chưa cấu hình.",
                                     "error",
                                 )
-                                return RedirectResponse(
-                                    "/admin/inventory", status_code=303
-                                )
+                                return RedirectResponse("/admin/inventory", status_code=303)
                             api_snapshot = await external_client.fetch_snapshot(
                                 product.supplier_product_id
                             )
@@ -3946,9 +4043,7 @@ def create_dashboard_router(
                                     "Nguồn API hiện không đủ số lượng để rút.",
                                     "error",
                                 )
-                                return RedirectResponse(
-                                    "/admin/inventory", status_code=303
-                                )
+                                return RedirectResponse("/admin/inventory", status_code=303)
                             purchase = await buy_supplier_product(
                                 session,
                                 external_client,
@@ -3979,9 +4074,7 @@ def create_dashboard_router(
                                 .where(
                                     SupplierRecoveryRequest.product_id == product.id,
                                     SupplierRecoveryRequest.status == "pending",
-                                    SupplierRecoveryRequest.request_key.startswith(
-                                        request_key
-                                    ),
+                                    SupplierRecoveryRequest.request_key.startswith(request_key),
                                 )
                                 .with_for_update()
                             )
@@ -3992,8 +4085,7 @@ def create_dashboard_router(
                             recovery.inventory_withdrawal_reason = normalized_reason
                         await session.commit()
                         logger.warning(
-                            "Admin API warranty withdrawal failed: product=%s quantity=%s "
-                            "code=%s",
+                            "Admin API warranty withdrawal failed: product=%s quantity=%s code=%s",
                             product.id,
                             quantity,
                             exc.code,
@@ -4051,9 +4143,7 @@ def create_dashboard_router(
                                 InventoryItem(
                                     product_id=product.id,
                                     encrypted_secret=cipher.encrypt(secret_value),
-                                    account_fingerprint=cipher.inventory_fingerprint(
-                                        secret_value
-                                    ),
+                                    account_fingerprint=cipher.inventory_fingerprint(secret_value),
                                     cost_amount=unit_cost,
                                     supplier_order_code=purchase.order_code or None,
                                     supplier_provider=purchase.provider,
@@ -4157,9 +4247,7 @@ def create_dashboard_router(
                 item_ids=item_ids,
                 total_cost=total_cost,
                 withdrawal_sources=list(source_summary.values()),
-                withdrawal_source_label=(
-                    "API" if first_item.supplier_provider else "Kho nhập"
-                ),
+                withdrawal_source_label=("API" if first_item.supplier_provider else "Kho nhập"),
             ),
         )
         response.headers["Cache-Control"] = "no-store, private"
@@ -4189,19 +4277,12 @@ def create_dashboard_router(
             item = await session.scalar(
                 select(InventoryItem).where(InventoryItem.id == item_id).with_for_update()
             )
-            if (
-                item is None
-                or item.product_id != product_id
-                or item.status != "available"
-            ):
+            if item is None or item.product_id != product_id or item.status != "available":
                 flash(request, "Chỉ có thể xóa mục kho chưa bán.", "error")
                 return RedirectResponse("/admin/inventory", status_code=303)
             await session.delete(item)
             await session.flush()
-            if (
-                product is not None
-                and product.fulfillment_source in EXTERNAL_FULFILLMENT_SOURCES
-            ):
+            if product is not None and product.fulfillment_source in EXTERNAL_FULFILLMENT_SOURCES:
                 local_stock = int(
                     await session.scalar(
                         select(func.count(InventoryItem.id)).where(
@@ -4211,9 +4292,7 @@ def create_dashboard_router(
                     )
                     or 0
                 )
-                product.external_stock = (
-                    local_stock + max(0, int(product.supplier_available_stock))
-                )
+                product.external_stock = local_stock + max(0, int(product.supplier_available_stock))
                 if product.price_lock_enabled:
                     await release_price_lock_if_inventory_empty(session, product)
             await session.commit()
@@ -4276,9 +4355,8 @@ def create_dashboard_router(
                 .group_by(PaymentTransaction.user_id)
                 .subquery()
             )
-            total_spent = (
-                func.coalesce(order_stats.c.spent, 0)
-                + func.coalesce(sms_stats.c.sms_spent, 0)
+            total_spent = func.coalesce(order_stats.c.spent, 0) + func.coalesce(
+                sms_stats.c.sms_spent, 0
             )
             if status == "blocked":
                 user_conditions.append(User.is_blocked.is_(True))
@@ -4308,9 +4386,7 @@ def create_dashboard_router(
             )
             if user_conditions:
                 user_count_statement = user_count_statement.where(*user_conditions)
-            user_count, filtered_wallet_total = (
-                await session.execute(user_count_statement)
-            ).one()
+            user_count, filtered_wallet_total = (await session.execute(user_count_statement)).one()
             pager = admin_pager(request, int(user_count), page)
             statement = (
                 select(
@@ -4369,8 +4445,7 @@ def create_dashboard_router(
                     last_sms_at,
                     deposited,
                     last_deposit_at,
-                )
-                in await session.execute(statement)
+                ) in await session.execute(statement)
             ]
         return templates.TemplateResponse(
             request,
@@ -4462,9 +4537,7 @@ def create_dashboard_router(
             )
             sms_count = int(
                 await session.scalar(
-                    select(func.count(SmsRental.id)).where(
-                        SmsRental.user_id == user.telegram_id
-                    )
+                    select(func.count(SmsRental.id)).where(SmsRental.user_id == user.telegram_id)
                 )
                 or 0
             )
@@ -4508,9 +4581,7 @@ def create_dashboard_router(
                 )
                 or 0
             )
-            broadcast_count = int(
-                await session.scalar(select(func.count(BroadcastLog.id))) or 0
-            )
+            broadcast_count = int(await session.scalar(select(func.count(BroadcastLog.id))) or 0)
             active_broadcasts = int(
                 await session.scalar(
                     select(func.count(BroadcastLog.id)).where(
@@ -4526,9 +4597,7 @@ def create_dashboard_router(
                 or 0
             )
             failed_count = int(
-                await session.scalar(
-                    select(func.coalesce(func.sum(BroadcastLog.failed_count), 0))
-                )
+                await session.scalar(select(func.coalesce(func.sum(BroadcastLog.failed_count), 0)))
                 or 0
             )
             broadcast_pager = admin_pager(
@@ -4601,9 +4670,7 @@ def create_dashboard_router(
                         "processed": processed,
                         "remaining": max(0, broadcast.total_recipients - processed),
                         "speed": (
-                            round(processed / elapsed_seconds, 1)
-                            if elapsed_seconds > 0
-                            else 0
+                            round(processed / elapsed_seconds, 1) if elapsed_seconds > 0 else 0
                         ),
                         "duration": duration,
                         "failures": failure_groups.get(broadcast.id, []),
@@ -4714,21 +4781,13 @@ def create_dashboard_router(
                     "product": product,
                     "processed": processed,
                     "remaining": max(0, alert.total_recipients - processed),
-                    "speed": (
-                        round(processed / elapsed_seconds, 1)
-                        if elapsed_seconds > 0
-                        else 0
-                    ),
+                    "speed": (round(processed / elapsed_seconds, 1) if elapsed_seconds > 0 else 0),
                     "duration": duration,
                     "failures": alert_failures.get((alert_type, alert.id), []),
                 }
 
-            sale_alerts = [
-                alert_row(alert, product, "sale") for alert, product in sale_records
-            ]
-            stock_alerts = [
-                alert_row(alert, product, "stock") for alert, product in stock_records
-            ]
+            sale_alerts = [alert_row(alert, product, "sale") for alert, product in sale_records]
+            stock_alerts = [alert_row(alert, product, "stock") for alert, product in stock_records]
             active_sale_alerts = int(
                 await session.scalar(
                     select(func.count(ProductPriceAlert.id)).where(
@@ -4899,9 +4958,7 @@ def create_dashboard_router(
                     int(row_count),
                 )
                 for row_status, row_count in await session.execute(
-                    select(Preorder.status, func.count(Preorder.id)).group_by(
-                        Preorder.status
-                    )
+                    select(Preorder.status, func.count(Preorder.id)).group_by(Preorder.status)
                 )
             )
             pending_value = int(
@@ -5258,9 +5315,7 @@ def create_dashboard_router(
         if not is_admin(request):
             return redirect_to_login()
         selected_status = (
-            status
-            if status in {"all", "active", "paused", "blocked", "attention"}
-            else "all"
+            status if status in {"all", "active", "paused", "blocked", "attention"} else "all"
         )
         recent_since = datetime.now(UTC) - timedelta(hours=24)
         async with session_factory() as session:
@@ -5346,15 +5401,11 @@ def create_dashboard_router(
                     )
                 )
             client_count = int(
-                await session.scalar(
-                    select(func.count()).select_from(statement.subquery())
-                )
-                or 0
+                await session.scalar(select(func.count()).select_from(statement.subquery())) or 0
             )
             pager = admin_pager(request, client_count, page)
             statement = (
-                statement
-                .order_by(request_stats.c.last_request_at.desc(), ApiClient.id.desc())
+                statement.order_by(request_stats.c.last_request_at.desc(), ApiClient.id.desc())
                 .offset(pager.offset)
                 .limit(ADMIN_PAGE_SIZE)
             )
@@ -5370,14 +5421,17 @@ def create_dashboard_router(
                     "average_duration_ms": int(average_duration_ms),
                     "last_request_at": last_request_at,
                     "success_rate": (
-                        round((recent_request_count - recent_error_count) / recent_request_count * 100, 1)
+                        round(
+                            (recent_request_count - recent_error_count)
+                            / recent_request_count
+                            * 100,
+                            1,
+                        )
                         if recent_request_count
                         else None
                     ),
                     "needs_attention": bool(
-                        client.admin_blocked
-                        or not client.active
-                        or recent_error_count
+                        client.admin_blocked or not client.active or recent_error_count
                     ),
                 }
                 for (
@@ -5412,9 +5466,7 @@ def create_dashboard_router(
                 await session.execute(
                     select(
                         func.count(ApiRequestAudit.id),
-                        func.count(ApiRequestAudit.id).filter(
-                            ApiRequestAudit.status_code >= 400
-                        ),
+                        func.count(ApiRequestAudit.id).filter(ApiRequestAudit.status_code >= 400),
                         func.coalesce(func.avg(ApiRequestAudit.duration_ms), 0),
                     ).where(ApiRequestAudit.created_at >= recent_since)
                 )
@@ -5517,9 +5569,7 @@ def create_dashboard_router(
         referrer = aliased(User)
         referred = aliased(User)
         async with session_factory() as session:
-            reward_count = int(
-                await session.scalar(select(func.count(ReferralReward.id))) or 0
-            )
+            reward_count = int(await session.scalar(select(func.count(ReferralReward.id))) or 0)
             pager = admin_pager(request, reward_count, page)
             rewards = [
                 {"reward": reward, "referrer": source, "referred": target}
@@ -5617,17 +5667,12 @@ def create_dashboard_router(
             deposit_conditions.append(Deposit.status == status)
         periods = dashboard_periods()
         async with session_factory() as session:
-            deposit_count_statement = (
-                select(func.count(Deposit.id))
-                .join(User, User.telegram_id == Deposit.user_id)
+            deposit_count_statement = select(func.count(Deposit.id)).join(
+                User, User.telegram_id == Deposit.user_id
             )
             if deposit_conditions:
-                deposit_count_statement = deposit_count_statement.where(
-                    *deposit_conditions
-                )
-            deposit_count = int(
-                await session.scalar(deposit_count_statement) or 0
-            )
+                deposit_count_statement = deposit_count_statement.where(*deposit_conditions)
+            deposit_count = int(await session.scalar(deposit_count_statement) or 0)
             transaction_count = int(
                 await session.scalar(select(func.count(PaymentTransaction.id))) or 0
             )
@@ -5775,7 +5820,11 @@ def create_dashboard_router(
         if not valid_csrf(request, csrf):
             if wants_json:
                 return JSONResponse(
-                    {"ok": False, "status": "invalid_csrf", "message": "Phiên duyệt nạp không hợp lệ."},
+                    {
+                        "ok": False,
+                        "status": "invalid_csrf",
+                        "message": "Phiên duyệt nạp không hợp lệ.",
+                    },
                     status_code=400,
                 )
             flash(request, "Phiên duyệt nạp không hợp lệ.", "error")
@@ -5849,7 +5898,11 @@ def create_dashboard_router(
         if not valid_csrf(request, csrf):
             if wants_json:
                 return JSONResponse(
-                    {"ok": False, "status": "invalid_csrf", "message": "Phiên hủy yêu cầu nạp không hợp lệ."},
+                    {
+                        "ok": False,
+                        "status": "invalid_csrf",
+                        "message": "Phiên hủy yêu cầu nạp không hợp lệ.",
+                    },
                     status_code=400,
                 )
             flash(request, "Phiên hủy yêu cầu nạp không hợp lệ.", "error")
@@ -5900,21 +5953,15 @@ def create_dashboard_router(
         if not is_admin(request):
             return redirect_to_login()
         selected_status = (
-            status
-            if status in {"all", "pending", "unknown", "success", "refunded"}
-            else "all"
+            status if status in {"all", "pending", "unknown", "success", "refunded"} else "all"
         )
-        selected_provider = (
-            provider if provider in {"all", "autosms", "rentsim"} else "all"
-        )
+        selected_provider = provider if provider in {"all", "autosms", "rentsim"} else "all"
         search = q.strip()[:100]
         rental_conditions = []
         if selected_provider != "all":
             rental_conditions.append(SmsRental.provider == selected_provider)
         if selected_status == "pending":
-            rental_conditions.append(
-                SmsRental.status.in_(("requesting", "pending"))
-            )
+            rental_conditions.append(SmsRental.status.in_(("requesting", "pending")))
         elif selected_status != "all":
             rental_conditions.append(SmsRental.status == selected_status)
         if search:
@@ -5934,17 +5981,12 @@ def create_dashboard_router(
             )
         async with session_factory() as session:
             maintenance_enabled = await sms_rental_maintenance_enabled(session)
-            rental_count_statement = (
-                select(func.count(SmsRental.id))
-                .join(User, User.telegram_id == SmsRental.user_id)
+            rental_count_statement = select(func.count(SmsRental.id)).join(
+                User, User.telegram_id == SmsRental.user_id
             )
             if rental_conditions:
-                rental_count_statement = rental_count_statement.where(
-                    *rental_conditions
-                )
-            rental_count = int(
-                await session.scalar(rental_count_statement) or 0
-            )
+                rental_count_statement = rental_count_statement.where(*rental_conditions)
+            rental_count = int(await session.scalar(rental_count_statement) or 0)
             pager = admin_pager(request, rental_count, page)
             statement = (
                 select(SmsRental, User)
@@ -5971,21 +6013,15 @@ def create_dashboard_router(
                         func.count(SmsRental.id).filter(SmsRental.status == "refunded"),
                         func.count(func.distinct(SmsRental.user_id)),
                         func.coalesce(
-                            func.sum(SmsRental.sale_amount).filter(
-                                SmsRental.status == "success"
-                            ),
+                            func.sum(SmsRental.sale_amount).filter(SmsRental.status == "success"),
                             0,
                         ),
                         func.coalesce(
-                            func.sum(SmsRental.cost_amount).filter(
-                                SmsRental.status == "success"
-                            ),
+                            func.sum(SmsRental.cost_amount).filter(SmsRental.status == "success"),
                             0,
                         ),
                         func.coalesce(
-                            func.sum(SmsRental.sale_amount).filter(
-                                SmsRental.status == "refunded"
-                            ),
+                            func.sum(SmsRental.sale_amount).filter(SmsRental.status == "refunded"),
                             0,
                         ),
                     )
@@ -5993,9 +6029,7 @@ def create_dashboard_router(
             ).one()
             referral = int(
                 await session.scalar(
-                    select(
-                        func.coalesce(func.sum(ReferralReward.commission_amount), 0)
-                    ).where(
+                    select(func.coalesce(func.sum(ReferralReward.commission_amount), 0)).where(
                         ReferralReward.shop_order_code.in_(
                             select(SmsRental.shop_order_code).where(
                                 SmsRental.status == "success",
@@ -6133,24 +6167,17 @@ def create_dashboard_router(
         selected_client = provider_clients[selected_provider]
         selected_kind = (
             kind
-            if kind
-            in {"all", "suspicious", "recovered", "refunded", "purchase", "credit"}
+            if kind in {"all", "suspicious", "recovered", "refunded", "purchase", "credit"}
             else "all"
         )
         async with session_factory() as session:
             state = await session.get(SupplierBalanceState, selected_provider)
-            transaction_conditions = [
-                SupplierBalanceTransaction.provider == selected_provider
-            ]
+            transaction_conditions = [SupplierBalanceTransaction.provider == selected_provider]
             if selected_kind != "all":
-                transaction_conditions.append(
-                    SupplierBalanceTransaction.kind == selected_kind
-                )
+                transaction_conditions.append(SupplierBalanceTransaction.kind == selected_kind)
             transaction_count = int(
                 await session.scalar(
-                    select(func.count(SupplierBalanceTransaction.id)).where(
-                        *transaction_conditions
-                    )
+                    select(func.count(SupplierBalanceTransaction.id)).where(*transaction_conditions)
                 )
                 or 0
             )
