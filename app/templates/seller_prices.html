@@ -34,18 +34,14 @@
       {% set initial_seller = seller_editor_data.get(selected_seller) %}
       <div class="seller-product-editor">
         <div class="seller-product-editor-head">
-          <span>Sản phẩm</span><span>Nguồn giá hiện tại</span><span>Mức lời / tài khoản</span><span>Giá seller dự kiến</span><span>Áp dụng</span>
+          <span>Sản phẩm và giá vốn</span><span>Mức lời / tài khoản</span><span>Giá seller</span><span>Bật</span>
         </div>
         {% for item in product_options %}
         {% set initial_rule = initial_seller.rules.get(item.product.id|string) if initial_seller else none %}
         <article class="seller-product-rate" data-product-id="{{ item.product.id }}" data-cost="{{ item.source_cost }}" data-retail="{{ item.product.price }}" data-source="{{ item.source_label }}">
           <div class="seller-product-name">
             <a class="text-link" href="/admin/products/{{ item.product.id }}">#{{ item.product.id }} · {{ item.product.name_vi }}</a>
-            <small>Giá thường {{ item.product.price|vnd }}</small>
-          </div>
-          <div class="seller-product-source">
-            <strong>{{ item.source_cost|vnd if item.source_cost else 'Chưa có giá vốn' }}</strong>
-            <small>{{ item.source_label }}</small>
+            <small>{{ item.source_label }}: {{ item.source_cost|vnd if item.source_cost else 'chưa có giá vốn' }} · Giá thường {{ item.product.price|vnd }}</small>
           </div>
           <label class="seller-profit-field">
             <span>Mức lời</span>
@@ -94,8 +90,8 @@
 
   <div class="seller-group-list">
     {% for group in seller_groups %}
-    <article class="seller-group-card">
-      <header>
+    <details class="seller-group-card">
+      <summary>
         <div class="seller-group-identity">
           <span class="seller-avatar">{{ (group.user.full_name or 'S')[:1]|upper }}</span>
           <div>
@@ -109,8 +105,12 @@
           <span><small>Đã bán</small><strong>{{ group.item_count }} nick</strong></span>
           <span><small>Lợi nhuận</small><strong>{{ group.profit|vnd }}</strong></span>
         </div>
+        <span class="seller-expand-icon" aria-hidden="true">⌄</span>
+      </summary>
+      <div class="seller-group-toolbar">
+        <div><strong>{{ group.order_count }} đơn · {{ group.revenue|vnd }} doanh thu</strong><small>Cập nhật {{ group.last_updated|localtime }}</small></div>
         <button class="button compact secondary seller-edit-button" type="button" data-seller-id="{{ group.user.telegram_id }}">Chỉnh toàn bộ giá</button>
-      </header>
+      </div>
       <div class="seller-group-products">
         {% for row in group.rules %}
         <div class="seller-group-product">
@@ -118,16 +118,14 @@
             <a class="text-link" href="/admin/products/{{ row.product.id }}">#{{ row.product.id }} · {{ row.product.name_vi }}</a>
             <small>Giá thường {{ row.product.price|vnd }} · cập nhật {{ row.rule.updated_at|localtime }}</small>
           </div>
-          <div><small>Mức lời</small><strong>+{{ row.rule.profit_per_unit|vnd }}/1</strong></div>
-          <div><small>Giá hiện tại</small>{% if row.effective_price %}<strong>{{ row.effective_price|vnd }}</strong><small>{{ row.source_label }} {{ row.source_cost|vnd }}</small>{% else %}<strong class="profit-text loss">Dùng giá thường</strong><small>Biên giá không còn hợp lệ</small>{% endif %}</div>
-          <div><small>Kết quả bán</small><strong>{{ row.item_count }} nick · {{ row.order_count }} đơn</strong><small>Lời {{ row.profit|vnd }}</small></div>
-          <div><span class="status {{ 'on' if row.rule.active and row.effective_price else 'off' }}">{{ 'Đang áp dụng' if row.rule.active and row.effective_price else 'Đã tắt' if not row.rule.active else 'Tạm dừng an toàn' }}</span></div>
+          <div><small>Giá seller hiện tại</small>{% if row.effective_price %}<strong>{{ row.effective_price|vnd }}</strong><small>Vốn {{ row.source_cost|vnd }} + lời {{ row.rule.profit_per_unit|vnd }}</small>{% else %}<strong class="profit-text loss">Dùng giá thường</strong><small>Biên giá không còn hợp lệ</small>{% endif %}</div>
+          <div><small>Đã bán</small><strong>{{ row.item_count }} nick · {{ row.order_count }} đơn</strong><small>Lợi nhuận {{ row.profit|vnd }}</small></div>
+          <div><span class="status {{ 'on' if row.rule.active and row.effective_price else 'off' }}">{{ 'Đang bật' if row.rule.active and row.effective_price else 'Đã tắt' if not row.rule.active else 'Tạm dừng' }}</span></div>
           <div class="row-actions"><form method="post" action="/admin/seller-prices/{{ row.rule.id }}/toggle"><input type="hidden" name="csrf" value="{{ csrf_token }}"><button class="button compact quiet">{{ 'Tắt' if row.rule.active else 'Bật' }}</button></form><form method="post" action="/admin/seller-prices/{{ row.rule.id }}/delete" onsubmit="return confirm('Xóa giá seller này? Lịch sử đơn đã bán vẫn được giữ nguyên.')"><input type="hidden" name="csrf" value="{{ csrf_token }}"><button class="button compact danger">Xóa</button></form></div>
         </div>
         {% endfor %}
       </div>
-      <footer><span>{{ group.order_count }} đơn · {{ group.revenue|vnd }} doanh thu</span><span>Cập nhật gần nhất {{ group.last_updated|localtime }}</span></footer>
-    </article>
+    </details>
     {% else %}
     <div class="empty">Chưa có seller phù hợp bộ lọc.</div>
     {% endfor %}

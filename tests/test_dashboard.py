@@ -227,11 +227,13 @@ def test_admin_can_manage_dynamic_seller_profit_by_user_and_product(tmp_path) ->
         assert created.status_code == 303
         configured = client.get("/admin/seller-prices")
         assert "Seller Test" in configured.text
-        assert "+5.000đ/1" in configured.text
-        assert "+3.000đ/1" in configured.text
+        assert "Vốn 30.000đ + lời 5.000đ" in configured.text
+        assert "Vốn 20.000đ + lời 3.000đ" in configured.text
         assert "35.000đ" in configured.text
         assert "23.000đ" in configured.text
         assert configured.text.count('class="seller-group-card"') == 1
+        assert "<details class=\"seller-group-card\">" in configured.text
+        assert "Chỉnh toàn bộ giá" in configured.text
 
         editing = client.get(f"/admin/seller-prices?edit={seller_id}")
         assert f'name="profit_{product_id}" inputmode="numeric" value="5000"' in editing.text
