@@ -419,6 +419,7 @@ class InventoryItem(Base):
         String(64), nullable=True, index=True
     )
     cost_amount: Mapped[int] = mapped_column(BigInteger, default=0)
+    import_note: Mapped[str | None] = mapped_column(String(255), nullable=True)
     supplier_order_code: Mapped[str | None] = mapped_column(
         String(64), nullable=True, index=True
     )
@@ -439,6 +440,19 @@ class InventoryItem(Base):
     withdrawal_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
 
     product: Mapped[Product] = relationship(back_populates="inventory")
+
+
+class InventoryImportNote(Base):
+    __tablename__ = "inventory_import_notes"
+
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    note: Mapped[str] = mapped_column(String(255), unique=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+    last_used_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), index=True
+    )
 
 
 class InventoryDuplicateAlert(Base):
@@ -593,6 +607,9 @@ class Order(Base):
     )
     seller_profit_per_unit: Mapped[int] = mapped_column(
         BigInteger, default=0, server_default="0"
+    )
+    inventory_import_note: Mapped[str | None] = mapped_column(
+        String(255), nullable=True
     )
     batch_code: Mapped[str | None] = mapped_column(String(32), nullable=True, index=True)
     supplier_order_code: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)

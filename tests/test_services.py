@@ -764,6 +764,7 @@ def test_purchase_is_atomic_and_delivers_stock() -> None:
             item = InventoryItem(
                 product_id=product.id,
                 encrypted_secret=cipher.encrypt("account:password"),
+                import_note="Nguồn test nội bộ",
             )
             session.add(item)
             await session.commit()
@@ -773,6 +774,7 @@ def test_purchase_is_atomic_and_delivers_stock() -> None:
             assert result.secret == "account:password"
             assert result.orders[0].product_name_vi == "Item"
             assert result.orders[0].product_name_en == "Item"
+            assert result.orders[0].inventory_import_note == "Nguồn test nội bộ"
 
             product.name_vi = "Renamed item"
             product.name_en = "Renamed item"

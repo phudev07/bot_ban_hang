@@ -21,6 +21,7 @@ from app.models import (
     Deposit,
     DiscountCode,
     InventoryDuplicateAlert,
+    InventoryImportNote,
     InventoryItem,
     Order,
     PaymentTransaction,
@@ -2160,6 +2161,8 @@ def test_admin_can_import_recovered_external_inventory(tmp_path) -> None:
         assert 'name="cost_amount"' in inventory_page.text
         assert 'name="lock_sale_price"' in inventory_page.text
         assert 'name="notify_stock_arrival"' in inventory_page.text
+        assert 'name="import_note_id"' in inventory_page.text
+        assert 'name="new_import_note"' in inventory_page.text
         assert "data-inventory-items" in inventory_page.text
         assert "data-inventory-count" in inventory_page.text
         assert "Mỗi tài khoản một dòng" in inventory_page.text
@@ -2171,6 +2174,7 @@ def test_admin_can_import_recovered_external_inventory(tmp_path) -> None:
                 "product_id": str(product_id),
                 "items": "mics.retry-6h+5frux@icloud.com|password|key",
                 "cost_amount": "8.000",
+                "new_import_note": "Nguồn ngoài A · lô đầu",
                 "lock_sale_price": "1",
                 "notify_stock_arrival": "1",
             },
@@ -2179,6 +2183,14 @@ def test_admin_can_import_recovered_external_inventory(tmp_path) -> None:
         assert imported.status_code == 303
         assert "Kho nhập" in client.get("/admin/broadcasts?tab=stock").text
         assert "Kho nhập" in client.get("/admin").text
+        inventory_page = client.get("/admin/inventory")
+        assert "Nguồn ngoài A · lô đầu" in inventory_page.text
+        note_id = int(
+            re.search(
+                r'<option value="(\d+)">Nguồn ngoài A · lô đầu</option>',
+                inventory_page.text,
+            ).group(1)  # type: ignore[union-attr]
+        )
 
         checked_import = client.post(
             "/admin/inventory",
@@ -2191,6 +2203,7 @@ def test_admin_can_import_recovered_external_inventory(tmp_path) -> None:
                     "clean-account@example.com|another-password|another-key"
                 ),
                 "cost_amount": "9.000",
+                "import_note_id": str(note_id),
             },
             follow_redirects=False,
         )
@@ -2207,9 +2220,13 @@ def test_admin_can_import_recovered_external_inventory(tmp_path) -> None:
             assert len(items) == 2
             assert items[0].product_id == product_id
             assert items[0].cost_amount == 8_000
+            assert items[0].import_note == "Nguồn ngoài A · lô đầu"
             assert items[0].account_fingerprint is not None
             assert items[1].cost_amount == 9_000
+            assert items[1].import_note == "Nguồn ngoài A · lô đầu"
             assert items[1].account_fingerprint is not None
+            notes = list(await session.scalars(select(InventoryImportNote)))
+            assert [note.note for note in notes] == ["Nguồn ngoài A · lô đầu"]
             alerts = list(
                 await session.scalars(
                     select(InventoryDuplicateAlert).order_by(InventoryDuplicateAlert.id)
@@ -2844,10 +2861,11 @@ def test_dashboard_groups_multi_item_purchase_as_one_order(tmp_path) -> None:
                 InventoryItem(
                     product_id=product.id,
                     encrypted_secret=cipher.encrypt(secret),
+                    import_note=("Nguồn A" if index == 0 else "Nguồn B"),
                     supplier_provider="lehai",
                     status="sold",
                 )
-                for secret in ("account-one:secret", "account-two:secret")
+                for index, secret in enumerate(("account-one:secret", "account-two:secret"))
             ]
             session.add_all(items)
             await session.flush()
@@ -2861,6 +2879,7 @@ def test_dashboard_groups_multi_item_purchase_as_one_order(tmp_path) -> None:
                         inventory_item_id=item.id,
                         amount=20_000,
                         cost_amount=15_000,
+                        inventory_import_note=item.import_note,
                         batch_code="B-SHOP-123",
                         supplier_order_code="API-ORDER-999",
                         supplier_provider="lehai",
@@ -2902,6 +2921,8 @@ def test_dashboard_groups_multi_item_purchase_as_one_order(tmp_path) -> None:
         assert "40.000đ" in orders_page.text
         assert "Tên sản phẩm lúc mua" in orders_page.text
         assert re.search(r'<span class="status wait">Lê Hải</span>', orders_page.text)
+        assert "Ghi chú nhập: Nguồn A" in orders_page.text
+        assert "Ghi chú nhập: Nguồn B" in orders_page.text
         assert "B-SHOP-123" in client.get("/admin/orders", params={"q": "@groupedbuyer"}).text
         assert (
             "B-SHOP-123" in client.get("/admin/orders", params={"q": "Tên sản phẩm lúc mua"}).text
@@ -2917,6 +2938,7 @@ def test_dashboard_groups_multi_item_purchase_as_one_order(tmp_path) -> None:
         assert "Mã đơn API" in detail.text
         assert "API-ORDER-999" in detail.text
         assert "Nguồn hàng</dt><dd>Lê Hải" in detail.text
+        assert "Ghi chú lô nhập</dt><dd>Nguồn A · Nguồn B" in detail.text
         assert "Tên sản phẩm lúc mua" in detail.text
         assert "account-one:secret" in detail.text
         assert "account-two:secret" in detail.text

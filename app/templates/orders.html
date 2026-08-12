@@ -13,7 +13,7 @@
 
 <section class="panel filter-panel">
   <form class="filter-grid" method="get">
-    <label class="wide">Tìm nhanh<input name="q" value="{{ query }}" placeholder="Mã đơn shop, mã API, ID, username, sản phẩm"></label>
+    <label class="wide">Tìm nhanh<input name="q" value="{{ query }}" placeholder="Mã đơn shop, mã API, ID, username, sản phẩm, ghi chú nhập"></label>
     <label>Trạng thái<select name="status"><option value="all">Tất cả</option><option value="completed" {{ 'selected' if status == 'completed' else '' }}>Hoàn thành</option><option value="pending" {{ 'selected' if status == 'pending' else '' }}>Đang xử lý</option><option value="failed" {{ 'selected' if status == 'failed' else '' }}>Thất bại</option></select></label>
     <label>Nguồn hàng<select name="source"><option value="all">Tất cả</option><option value="local" {{ 'selected' if source == 'local' else '' }}>Kho local</option><option value="sumistore" {{ 'selected' if source == 'sumistore' else '' }}>Sumistore</option><option value="canboso" {{ 'selected' if source == 'canboso' else '' }}>Canboso</option><option value="lehai" {{ 'selected' if source == 'lehai' else '' }}>Lê Hải Premium</option><option value="haji" {{ 'selected' if source == 'haji' else '' }}>Haji</option></select></label>
     <label>Kênh bán<select name="channel"><option value="all">Tất cả</option><option value="telegram" {{ 'selected' if channel == 'telegram' else '' }}>Telegram</option><option value="preorder" {{ 'selected' if channel == 'preorder' else '' }}>Đặt trước</option><option value="api" {{ 'selected' if channel == 'api' else '' }}>API đấu kho</option></select></label>
@@ -31,7 +31,7 @@
     <td><strong>Mã shop <code>{{ row.shop_order_code }}</code></strong><small>Mã API <code>{{ row.supplier_order_code or '—' }}</code><br>ID #{{ row.primary_order_id }} · {{ row.quantity }} tài khoản</small></td>
     <td><strong>{{ row.user.full_name }}</strong><small>@{{ row.user.username or '—' }} · {{ row.user.telegram_id }}</small></td>
     <td>{{ row.product_name_vi }}</td>
-    <td><span class="status {{ 'wait' if row.supplier_source_external else 'on' }}">{{ row.supplier_source_label }}</span><small>{{ row.sales_channel }}</small></td>
+    <td><span class="status {{ 'wait' if row.supplier_source_external else 'on' }}">{{ row.supplier_source_label }}</span><small>{{ row.sales_channel }}</small>{% for note in row.inventory_import_notes %}<small>Ghi chú nhập: {{ note }}</small>{% endfor %}</td>
     <td><strong>{{ row.amount|vnd }}</strong>{% if row.seller_price_id %}<small>Giá seller · lời +{{ row.seller_profit_per_unit|vnd }}/1</small>{% endif %}</td>
     <td>{{ row.cost_amount|vnd }}</td>
     <td><strong class="profit-text {{ 'loss' if row.amount < row.cost_amount else '' }}">{{ (row.amount - row.cost_amount)|vnd }}</strong></td>

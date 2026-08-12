@@ -24,6 +24,7 @@
       <div><dt>Mã đơn API</dt><dd><code>{{ order.supplier_order_code or '—' }}</code></dd></div>
       <div><dt>Số lượng</dt><dd>{{ order.quantity }} tài khoản</dd></div>
       <div><dt>Nguồn hàng</dt><dd>{{ order.supplier_source_label }}</dd></div>
+      <div><dt>Ghi chú lô nhập</dt><dd>{% if order.inventory_import_notes %}{{ order.inventory_import_notes|join(' · ') }}{% else %}—{% endif %}</dd></div>
       <div><dt>Kênh bán</dt><dd>{{ order.sales_channel }}</dd></div>
       <div><dt>Giá seller</dt><dd>{% if order.seller_price_id %}Có · lời +{{ order.seller_profit_per_unit|vnd }}/1{% else %}—{% endif %}</dd></div>
       <div><dt>Doanh thu</dt><dd>{{ order.amount|vnd }}</dd></div>
@@ -57,8 +58,8 @@
 
 <section class="panel">
   <div class="panel-head"><div><span>ORDER ITEMS</span><h2>Các tài khoản thuộc đơn {{ order.shop_order_code }}</h2></div></div>
-  <div class="table-wrap"><table><thead><tr><th>Mục giao</th><th>Giá bán</th><th>Giá vốn</th><th>Lợi nhuận</th><th>Giảm giá</th><th>Trạng thái</th><th>Giao lúc</th></tr></thead><tbody>
-    {% for item in related_orders %}<tr><td><code>Mục #{{ loop.index }}</code><small>ID nội bộ {{ item.id }}</small></td><td>{{ item.amount|vnd }}</td><td>{{ item.cost_amount|vnd }}</td><td class="profit-text">{{ (item.amount - item.cost_amount)|vnd }}</td><td>{{ item.discount_amount|vnd }}</td><td><span class="status on">{{ item.status }}</span></td><td>{{ item.delivered_at|localtime }}</td></tr>{% endfor %}
+  <div class="table-wrap"><table><thead><tr><th>Mục giao</th><th>Ghi chú nhập</th><th>Giá bán</th><th>Giá vốn</th><th>Lợi nhuận</th><th>Giảm giá</th><th>Trạng thái</th><th>Giao lúc</th></tr></thead><tbody>
+    {% for row in related_order_items %}{% set item = row.order %}<tr><td><code>Mục #{{ loop.index }}</code><small>ID nội bộ {{ item.id }}</small></td><td>{{ item.inventory_import_note or row.item.import_note or '—' }}</td><td>{{ item.amount|vnd }}</td><td>{{ item.cost_amount|vnd }}</td><td class="profit-text">{{ (item.amount - item.cost_amount)|vnd }}</td><td>{{ item.discount_amount|vnd }}</td><td><span class="status on">{{ item.status }}</span></td><td>{{ item.delivered_at|localtime }}</td></tr>{% endfor %}
   </tbody></table></div>
 </section>
 

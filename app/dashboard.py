@@ -45,6 +45,7 @@ from app.models import (
     DiscountCode,
     FlashSaleCampaign,
     InventoryDuplicateAlert,
+    InventoryImportNote,
     InventoryItem,
     Order,
     PaymentTransaction,
@@ -117,6 +118,7 @@ LOCAL_TIMEZONE = ZoneInfo("Asia/Bangkok")
 ADMIN_PAGE_SIZE = 100
 MAX_FLASH_SALE_IMAGE_BYTES = 8 * 1024 * 1024
 MAX_INVENTORY_WITHDRAWAL_QUANTITY = 1000
+MAX_INVENTORY_IMPORT_NOTE_LENGTH = 255
 logger = logging.getLogger(__name__)
 SUPPLIER_PROVIDER_LABELS = {
     "sumistore": "Sumi",
@@ -323,6 +325,7 @@ def group_order_rows(rows, limit: int | None = None) -> list[dict[str, object]]:
                 "product_name_en": order.product_name_en or product.name_en,
                 "user": user,
                 "item_ids": [],
+                "inventory_import_notes": [],
             }
             groups[key] = group
         group["primary_order_id"] = min(int(group["primary_order_id"]), order.id)
@@ -334,6 +337,11 @@ def group_order_rows(rows, limit: int | None = None) -> list[dict[str, object]]:
             group["seller_price_id"] = order.seller_price_id
             group["seller_profit_per_unit"] = order.seller_profit_per_unit
         group["item_ids"].append(order.id)
+        if (
+            order.inventory_import_note
+            and order.inventory_import_note not in group["inventory_import_notes"]
+        ):
+            group["inventory_import_notes"].append(order.inventory_import_note)
         group["supplier_providers"].add(order_supplier_provider(order))
         if (
             order.supplier_order_code
@@ -3692,6 +3700,16 @@ def create_dashboard_router(
                 {"recovery": recovery, "product": product}
                 for recovery, product in pending_withdrawal_results
             ]
+            import_notes = list(
+                await session.scalars(
+                    select(InventoryImportNote)
+                    .order_by(
+                        InventoryImportNote.last_used_at.desc(),
+                        InventoryImportNote.id.desc(),
+                    )
+                    .limit(ADMIN_PAGE_SIZE)
+                )
+            )
         return templates.TemplateResponse(
             request,
             "inventory.html",
@@ -3715,6 +3733,7 @@ def create_dashboard_router(
                 pending_withdrawals=pending_withdrawals,
                 duplicate_rows=duplicate_rows,
                 duplicate_alert_count=duplicate_alert_count,
+                import_notes=import_notes,
                 pager=pager,
             ),
         )
@@ -3726,6 +3745,8 @@ def create_dashboard_router(
         product_id: int = Form(...),
         items: str = Form(...),
         cost_amount: str = Form(...),
+        import_note_id: str = Form(""),
+        new_import_note: str = Form(""),
         lock_sale_price: str | None = Form(None),
         notify_stock_arrival: str | None = Form(None),
     ) -> RedirectResponse:
@@ -3738,6 +3759,15 @@ def create_dashboard_router(
         if parsed_cost is None or parsed_cost < 0:
             flash(request, "Giá vốn mỗi tài khoản không hợp lệ.", "error")
             return RedirectResponse("/admin/inventory", status_code=303)
+        normalized_new_note = " ".join(new_import_note.split())
+        if len(normalized_new_note) > MAX_INVENTORY_IMPORT_NOTE_LENGTH:
+            flash(
+                request,
+                f"Ghi chú nguồn nhập tối đa {MAX_INVENTORY_IMPORT_NOTE_LENGTH} ký tự.",
+                "error",
+            )
+            return RedirectResponse("/admin/inventory", status_code=303)
+        selected_note_id = int(import_note_id) if import_note_id.isdigit() else None
         lock_applied = False
         duplicate_count = 0
         accepted_items: list[str] = []
@@ -3778,6 +3808,28 @@ def create_dashboard_router(
                     "error",
                 )
                 return RedirectResponse("/admin/inventory", status_code=303)
+            import_note = normalized_new_note
+            note_record = None
+            if import_note:
+                note_record = await session.scalar(
+                    select(InventoryImportNote)
+                    .where(func.lower(InventoryImportNote.note) == import_note.lower())
+                    .with_for_update()
+                )
+                if note_record is None:
+                    note_record = InventoryImportNote(note=import_note)
+                    session.add(note_record)
+                    await session.flush()
+                else:
+                    import_note = note_record.note
+            elif selected_note_id is not None:
+                note_record = await session.get(InventoryImportNote, selected_note_id)
+                if note_record is None:
+                    flash(request, "Ghi chú nguồn nhập đã chọn không còn tồn tại.", "error")
+                    return RedirectResponse("/admin/inventory", status_code=303)
+                import_note = note_record.note
+            if note_record is not None:
+                note_record.last_used_at = datetime.now(UTC)
             local_stock_before = int(
                 await session.scalar(
                     select(func.count(InventoryItem.id)).where(
@@ -3800,6 +3852,7 @@ def create_dashboard_router(
                         encrypted_secret=cipher.encrypt(candidate.raw_item),
                         account_fingerprint=candidate.account_fingerprint,
                         cost_amount=parsed_cost,
+                        import_note=import_note or None,
                     )
                     for candidate in duplicate_check.accepted
                 ]
@@ -3853,11 +3906,15 @@ def create_dashboard_router(
         flash(
             request,
             f"Đã thêm {len(accepted_items)} sản phẩm vào kho với giá vốn "
-            f"{format_vnd(parsed_cost)}/tài khoản{lock_note}{notification_note}"
+            f"{format_vnd(parsed_cost)}/tài khoản"
+            f"{' · ghi chú: ' + import_note if import_note else ''}"
+            f"{lock_note}{notification_note}"
             f"; bỏ qua {duplicate_count} tài khoản nghi ngờ/trùng."
             if duplicate_count
             else f"Đã thêm {len(accepted_items)} sản phẩm vào kho với giá vốn "
-            f"{format_vnd(parsed_cost)}/tài khoản{lock_note}{notification_note}.",
+            f"{format_vnd(parsed_cost)}/tài khoản"
+            f"{' · ghi chú: ' + import_note if import_note else ''}"
+            f"{lock_note}{notification_note}.",
         )
         return RedirectResponse("/admin/inventory", status_code=303)
 
@@ -5126,6 +5183,7 @@ def create_dashboard_router(
                 User.full_name.ilike(needle),
                 User.username.ilike(username_needle),
                 Order.product_name_vi.ilike(needle),
+                Order.inventory_import_note.ilike(needle),
                 Product.name_vi.ilike(needle),
             )
         if status in {"completed", "pending", "failed"}:
@@ -5280,6 +5338,10 @@ def create_dashboard_router(
                 related_statement = related_statement.where(Order.id == order.id)
             related_rows = list((await session.execute(related_statement)).all())
             related_orders = [related_order for related_order, _item in related_rows]
+            related_order_items = [
+                {"order": related_order, "item": item}
+                for related_order, item in related_rows
+            ]
             order_group = group_order_rows(
                 [(related_order, product, user) for related_order in related_orders]
             )[0]
@@ -5344,6 +5406,7 @@ def create_dashboard_router(
                 user=user,
                 secret=secret,
                 related_orders=related_orders,
+                related_order_items=related_order_items,
                 user_order_count=user_order_count,
                 user_spent=user_spent,
                 deposits=deposits,

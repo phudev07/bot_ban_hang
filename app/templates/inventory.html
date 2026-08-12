@@ -24,6 +24,17 @@
         <input name="cost_amount" inputmode="numeric" placeholder="Ví dụ: 35.000" required>
         <small>Nhập đúng số tiền thực tế bạn đã bỏ ra cho một tài khoản. Doanh thu vẫn lấy theo giá bán; lợi nhuận sẽ bằng giá bán trừ giá vốn này và các chi phí liên quan.</small>
       </label>
+      <label>Nguồn / ghi chú lô nhập
+        <select name="import_note_id" data-import-note-select>
+          <option value="">Không dùng ghi chú cũ</option>
+          {% for note in import_notes %}<option value="{{ note.id }}">{{ note.note }}</option>{% endfor %}
+        </select>
+        <small>Chọn một ghi chú đã dùng trước đây, hoặc nhập ghi chú mới bên dưới.</small>
+      </label>
+      <label>Ghi chú mới
+        <input name="new_import_note" maxlength="255" data-new-import-note placeholder="Ví dụ: Ôm từ shop A · lô ngày 12/08">
+        <small>Nếu có nội dung mới, hệ thống ưu tiên nội dung này và lưu lại để lần sau chọn nhanh. Ghi chú chỉ hiện trong Admin.</small>
+      </label>
       <label class="check wide">
         <input type="checkbox" name="lock_sale_price" value="1">
         <span>Khóa cứng giá bán hiện tại cho lô hàng ôm này</span>
@@ -138,12 +149,13 @@
 <section class="panel">
   <div class="panel-head"><div><span>INVENTORY LOG</span><h2>Toàn bộ lịch sử kho</h2></div><small>100 mục mỗi trang</small></div>
   <div class="table-wrap"><table>
-    <thead><tr><th>ID kho</th><th>Sản phẩm</th><th>Giá vốn</th><th>Trạng thái</th><th>Ngày nhập</th><th>Ngày bán / rút</th><th></th></tr></thead>
+    <thead><tr><th>ID kho</th><th>Sản phẩm</th><th>Ghi chú nhập</th><th>Giá vốn</th><th>Trạng thái</th><th>Ngày nhập</th><th>Ngày bán / rút</th><th></th></tr></thead>
     <tbody>
       {% for row in recent_items %}
       <tr>
         <td><code>#{{ row.item.id }}</code></td>
         <td>{{ row.product.name_vi }}<small>#{{ row.product.id }}</small></td>
+        <td>{{ row.item.import_note or '—' }}</td>
         <td><strong>{{ row.item.cost_amount|vnd }}</strong></td>
         <td><span class="status {{ 'on' if row.item.status == 'available' else ('wait' if row.item.status == 'withdrawn' else 'off') }}">{{ 'Còn kho' if row.item.status == 'available' else ('Đã rút bảo hành' if row.item.status == 'withdrawn' else 'Đã bán') }}</span></td>
         <td>{{ row.item.created_at|localtime }}</td>
@@ -159,7 +171,7 @@
           {% else %}—{% endif %}
         </td>
       </tr>
-      {% else %}<tr><td colspan="7" class="empty">Chưa có dữ liệu kho.</td></tr>{% endfor %}
+      {% else %}<tr><td colspan="8" class="empty">Chưa có dữ liệu kho.</td></tr>{% endfor %}
     </tbody>
   </table></div>
   {{ render_pager(pager, 'mục kho') }}
@@ -187,6 +199,19 @@
 
     textarea.addEventListener('input', updateCounter);
     updateCounter();
+  })();
+
+  (() => {
+    const oldNote = document.querySelector('[data-import-note-select]');
+    const newNote = document.querySelector('[data-new-import-note]');
+    if (!oldNote || !newNote) return;
+
+    newNote.addEventListener('input', () => {
+      if (newNote.value.trim()) oldNote.value = '';
+    });
+    oldNote.addEventListener('change', () => {
+      if (oldNote.value) newNote.value = '';
+    });
   })();
 </script>
 {% endblock %}
