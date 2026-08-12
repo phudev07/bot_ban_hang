@@ -99,6 +99,100 @@ def test_canboso_converts_usd_catalog_balance_and_purchase_to_vnd() -> None:
     asyncio.run(scenario())
 
 
+def test_canboso_supports_current_v21_catalog_and_purchase_response() -> None:
+    purchase_bodies: list[dict[str, object]] = []
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path.endswith("/products"):
+            return httpx.Response(
+                200,
+                json={
+                    "success": True,
+                    "walletCurrency": "USD",
+                    "products": [
+                        {
+                            "productId": "6a492e1100b843ce3de675a7",
+                            "name": "GEMINI PRO 18M LINK",
+                            "description": "Gemini AI Pro package for 18 months",
+                            "productType": "account",
+                            "price": {
+                                "amount": 0.45,
+                                "currency": "USD",
+                                "text": "$0.45",
+                            },
+                            "availability": {"available": 23, "sold": 32306},
+                            "promotions": [],
+                        }
+                    ],
+                },
+            )
+        if request.url.path.endswith("/balance"):
+            return httpx.Response(
+                200,
+                json={
+                    "success": True,
+                    "walletCurrency": "USD",
+                    "balanceUsd": 27.4,
+                },
+            )
+        purchase_bodies.append(json.loads((await request.aread()).decode()))
+        return httpx.Response(
+            200,
+            json={
+                "success": True,
+                "lang": "en",
+                "order": {
+                    "orderCode": "ORDER-CURRENT-1",
+                    "status": "completed",
+                    "productId": "6a492e1100b843ce3de675a7",
+                    "productName": "GEMINI PRO 18M LINK",
+                    "productType": "account",
+                    "quantity": 1,
+                    "bonusQuantity": 0,
+                    "finalQuantity": 1,
+                },
+                "payment": {
+                    "amount": 0.45,
+                    "currency": "USD",
+                    "balance": 26.95,
+                },
+                "delivery": {
+                    "accounts": [{"user": "https://offer.test/current"}],
+                },
+            },
+        )
+
+    async def scenario() -> None:
+        client = CanbosoClient(
+            "https://supplier.test",
+            "tgb_test",
+            transport=httpx.MockTransport(handler),
+        )
+        snapshot = await client.fetch_snapshot(CANBOSO_GG18M_ROUTE_ID)
+        purchase = await client.buy(
+            CANBOSO_GG18M_ROUTE_ID,
+            1,
+            idempotency_key="purchase-current-v21",
+        )
+
+        assert snapshot.unit_price == 12_375
+        assert snapshot.source_stock == 23
+        assert snapshot.owner_balance == 753_500
+        assert purchase.unit_price == 12_375
+        assert purchase.order_code == "CBS-ORDER-CURRENT-1"
+        assert purchase.accounts == ("https://offer.test/current",)
+        assert purchase_bodies == [
+            {
+                "key": "tgb_test",
+                "product_id": "6a492e1100b843ce3de675a7",
+                "quantity": 1,
+            }
+        ]
+        await client.aclose()
+
+    asyncio.run(scenario())
+
+
 class RoutedSupplier:
     def __init__(self, provider: str, *, price: int, stock: int) -> None:
         self.provider = provider

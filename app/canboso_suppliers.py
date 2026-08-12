@@ -173,13 +173,20 @@ class CanbosoClient:
         return await self._decode_response(response)
 
     def _matches_gg18m(self, raw_product: dict[str, object]) -> bool:
-        product_id = str(raw_product.get("_id") or raw_product.get("id") or "").strip()
+        product_id = str(
+            raw_product.get("productId")
+            or raw_product.get("_id")
+            or raw_product.get("id")
+            or ""
+        ).strip()
         if self.configured_product_id:
             return product_id == self.configured_product_id
         name = _plain_text(
+            f"{raw_product.get('name') or ''} "
             f"{raw_product.get('product_name') or ''} "
             f"{raw_product.get('product_name_raw') or ''} "
-            f"{raw_product.get('description_raw') or ''}"
+            f"{raw_product.get('description_raw') or ''} "
+            f"{raw_product.get('description') or ''}"
         )
         has_duration = "18m" in name or "18 month" in name or "18 thang" in name
         has_product = any(token in name for token in ("jio", "gg pro", "google pro", "gemini"))
@@ -197,21 +204,44 @@ class CanbosoClient:
                 continue
             stats = raw_product.get("stats")
             stats_data = stats if isinstance(stats, dict) else {}
-            currency = str(raw_product.get("walletCurrency") or payload_currency).upper()
+            availability = raw_product.get("availability")
+            availability_data = availability if isinstance(availability, dict) else {}
+            price = raw_product.get("price")
+            price_data = price if isinstance(price, dict) else {}
+            currency = str(
+                price_data.get("currency")
+                or raw_product.get("walletCurrency")
+                or payload_currency
+            ).upper()
             price_value = raw_product.get("walletPricing")
             if price_value is None and currency == "USD":
                 price_value = raw_product.get("usdPricing")
+            if price_value is None:
+                price_value = price_data.get("amount")
             try:
                 unit_price = _vnd_amount(price_value, currency, self.usd_to_vnd)
-                stock = int(stats_data.get("available") or 0)
+                stock = int(
+                    availability_data.get("available")
+                    if availability_data.get("available") is not None
+                    else stats_data.get("available") or 0
+                )
             except (TypeError, ValueError):
                 continue
-            product_id = str(raw_product.get("_id") or raw_product.get("id") or "").strip()
+            product_id = str(
+                raw_product.get("productId")
+                or raw_product.get("_id")
+                or raw_product.get("id")
+                or ""
+            ).strip()
             if product_id and unit_price > 0:
                 values.append(
                     CanbosoProduct(
                         product_id=product_id,
-                        name=str(raw_product.get("product_name") or product_id),
+                        name=str(
+                            raw_product.get("name")
+                            or raw_product.get("product_name")
+                            or product_id
+                        ),
                         description=str(raw_product.get("description") or ""),
                         unit_price=unit_price,
                         stock=max(0, stock),
@@ -313,7 +343,13 @@ class CanbosoClient:
                 )
             raise
         self.invalidate_snapshot_cache()
-        delivered = payload.get("deliveredAccounts") or payload.get("delivered_accounts")
+        delivery = payload.get("delivery")
+        delivery_data = delivery if isinstance(delivery, dict) else {}
+        delivered = (
+            payload.get("deliveredAccounts")
+            or payload.get("delivered_accounts")
+            or delivery_data.get("accounts")
+        )
         if not isinstance(delivered, list):
             raise SupplierError("SUPPLIER_DELIVERY_INCOMPLETE")
         accounts: list[str] = []
@@ -332,14 +368,22 @@ class CanbosoClient:
                 accounts.append(str(item).strip())
         if len(accounts) != quantity:
             raise SupplierError("SUPPLIER_DELIVERY_INCOMPLETE")
-        currency = str(payload.get("walletCurrency") or "USD").upper()
+        payment = payload.get("payment")
+        payment_data = payment if isinstance(payment, dict) else {}
+        currency = str(
+            payment_data.get("currency") or payload.get("walletCurrency") or "USD"
+        ).upper()
         total_value = payload.get("amountUsd") if currency == "USD" else payload.get("amount")
         if total_value is None:
-            total_value = payload.get("amount")
+            total_value = payment_data.get("amount")
         total_amount = _vnd_amount(total_value, currency, self.usd_to_vnd)
         if total_amount <= 0:
             raise SupplierError("SUPPLIER_INVALID_RESPONSE")
-        raw_order_code = str(payload.get("orderCode") or request_key).strip()
+        order = payload.get("order")
+        order_data = order if isinstance(order, dict) else {}
+        raw_order_code = str(
+            payload.get("orderCode") or order_data.get("orderCode") or request_key
+        ).strip()
         return SupplierPurchase(
             order_code=f"CBS-{raw_order_code}",
             unit_price=math.ceil(total_amount / quantity),
