@@ -206,7 +206,7 @@ def create_public_api_docs_router(settings: Settings) -> APIRouter:
         return FileResponse(
             portable_zip,
             media_type="application/zip",
-            filename="VietShare-Codex-Portable.zip",
+            filename="Custom-Codex-Portable.zip",
             headers={
                 "Cache-Control": "public, max-age=300",
                 "X-Content-Type-Options": "nosniff",

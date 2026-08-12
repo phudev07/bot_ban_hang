@@ -494,6 +494,20 @@ async def initialize_database(engine, session_factory, seed_demo_data: bool) -> 
         )
         await connection.execute(
             text(
+                "UPDATE products SET "
+                "description_vi = REPLACE(REPLACE(REPLACE(description_vi, "
+                "'CDK kích hoạt', 'Key kích hoạt'), 'nhận CDK', 'nhận key'), "
+                "'VietShare Codex Portable', 'Custom Codex'), "
+                "description_en = REPLACE(REPLACE(description_en, "
+                "'A CDK for a Codex API package', "
+                "'An activation key for a Codex API package'), "
+                "'VietShare Codex Portable', 'Custom Codex') "
+                "WHERE supplier_product_id IN "
+                "('apicodex_10m_1day', 'apicodex_50m_1day', 'apicodex_100m_1day')"
+            )
+        )
+        await connection.execute(
+            text(
                 "ALTER TABLE product_stock_alerts ADD COLUMN IF NOT EXISTS "
                 "message_vi TEXT NULL"
             )

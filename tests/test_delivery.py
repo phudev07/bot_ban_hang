@@ -79,9 +79,16 @@ def test_delivery_file_contains_all_accounts() -> None:
 
 
 def test_codex_delivery_can_open_setup_guide() -> None:
+    text = delivery_text(
+        shop_order_code="BCODEX13",
+        product_name="API Codex 10M Token · 24 giờ",
+        secrets=["key-codex-test"],
+        total_amount=30_000,
+        language="vi",
+    )
     keyboard = delivery_keyboard(
         primary_order_id=13,
-        secrets=["CDK-CODEX-TEST"],
+        secrets=["key-codex-test"],
         language="vi",
         guide_url="https://token.vietshare.site/codex-api",
     )
@@ -94,3 +101,5 @@ def test_codex_delivery_can_open_setup_guide() -> None:
     ]
     assert len(guide_buttons) == 1
     assert "Codex" in guide_buttons[0].text
+    assert "Key kích hoạt của bạn" in text
+    assert "CDK" not in text

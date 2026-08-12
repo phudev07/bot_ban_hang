@@ -130,7 +130,7 @@ class Settings(BaseSettings):
     shop_api_rate_limit_per_minute: int = 60
     shop_api_signature_tolerance_seconds: int = 300
     shop_api_audit_retention_days: int = 30
-    codex_portable_zip_path: str = "/app/downloads/VietShare-Codex-Portable.zip"
+    codex_portable_zip_path: str = "/app/downloads/Custom-Codex-Portable.zip"
     referral_commission_percent: int = 2
 
     inventory_encryption_key: SecretStr

@@ -463,14 +463,14 @@ async def ensure_haji_products(
             name_vi, name_en = haji_product_names(source)
             if source.kind == "codex":
                 description_vi = (
-                    "CDK kích hoạt gói API Codex, hạn sử dụng 24 giờ tính từ lúc kích hoạt. "
-                    "Sau khi nhận CDK, mở trang hướng dẫn để kích hoạt và kết nối bằng "
-                    "9Router hoặc ứng dụng VietShare Codex Portable."
+                    "Key kích hoạt gói API Codex, hạn sử dụng 24 giờ tính từ lúc kích hoạt. "
+                    "Sau khi nhận key, mở trang hướng dẫn để kích hoạt và kết nối bằng "
+                    "9Router hoặc ứng dụng Custom Codex."
                 )
                 description_en = (
-                    "A CDK for a Codex API package valid for 24 hours after activation. "
+                    "An activation key for a Codex API package valid for 24 hours after activation. "
                     "Open the setup guide after delivery to activate it and connect through "
-                    "9Router or VietShare Codex Portable."
+                    "9Router or Custom Codex."
                 )
             else:
                 description_vi = (

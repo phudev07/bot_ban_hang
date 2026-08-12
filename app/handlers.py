@@ -792,10 +792,10 @@ def create_router(
         )
         text = (
             "🤖 <b>API CODEX</b>\n\n"
-            "Chọn gói token cần mua. Mỗi gói có hạn 24 giờ tính từ lúc kích hoạt CDK."
+            "Chọn gói token cần mua. Mỗi gói có hạn 24 giờ tính từ lúc kích hoạt key."
             if user.language == "vi"
             else "🤖 <b>CODEX API</b>\n\n"
-            "Choose a token package. Each package is valid for 24 hours after CDK activation."
+            "Choose a token package. Each package is valid for 24 hours after key activation."
         )
         if not products:
             text += (

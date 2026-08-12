@@ -104,11 +104,11 @@ and binds port 8080 only to localhost. Caddy is the public reverse proxy.
 - The old NCE Codex/Claude catalog is archived at startup. Historical rows remain intact.
   The current Codex-only catalog is supplied through Haji with the product IDs
   `apicodex_10m_1day`, `apicodex_50m_1day`, and `apicodex_100m_1day`.
-- Codex CDK products are bot-only and remain excluded from the public warehouse API.
+- Codex key products are bot-only and remain excluded from the public warehouse API.
   Their customer guide is `https://token.vietshare.site/codex-api`.
 - The portable Windows app is not stored in Git. Production serves the ZIP from
-  `/opt/telegram-sepay-shop/downloads/VietShare-Codex-Portable.zip`, mounted read-only
-  into the app container at `/app/downloads/VietShare-Codex-Portable.zip`.
+  `/opt/telegram-sepay-shop/downloads/Custom-Codex-Portable.zip`, mounted read-only
+  into the app container at `/app/downloads/Custom-Codex-Portable.zip`.
 - Warehouse API partners receive shop product IDs and shop selling prices, never supplier
   keys, supplier URLs, supplier product IDs, supplier order IDs, or supplier cost.
 - Warehouse API only sells active account products. SMS rental is excluded.
@@ -205,11 +205,11 @@ When the portable Codex app changes, upload its ZIP separately before recreating
 
 ```powershell
 scp -q -i "$HOME\.ssh\codex_vps" `
-  downloads\VietShare-Codex-Portable.zip `
-  root@160.191.243.91:/tmp/VietShare-Codex-Portable.zip
+  downloads\Custom-Codex-Portable.zip `
+  root@160.191.243.91:/tmp/Custom-Codex-Portable.zip
 
 ssh -i "$HOME\.ssh\codex_vps" root@160.191.243.91 `
-  "install -d -m 755 /opt/telegram-sepay-shop/downloads && install -m 644 /tmp/VietShare-Codex-Portable.zip /opt/telegram-sepay-shop/downloads/VietShare-Codex-Portable.zip && rm -f /tmp/VietShare-Codex-Portable.zip"
+  "install -d -m 755 /opt/telegram-sepay-shop/downloads && install -m 644 /tmp/Custom-Codex-Portable.zip /opt/telegram-sepay-shop/downloads/Custom-Codex-Portable.zip && rm -f /tmp/Custom-Codex-Portable.zip"
 ```
 
 ## 8. Verify a deployment

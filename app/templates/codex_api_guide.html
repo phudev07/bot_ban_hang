@@ -3,471 +3,338 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <meta name="description" content="Hướng dẫn kích hoạt CDK API Codex và sử dụng bằng 9Router hoặc VietShare Codex Portable.">
-  <title>Hướng dẫn API Codex · VietShare</title>
+  <meta name="description" content="Hướng dẫn kích hoạt key API Codex và sử dụng bằng 9Router hoặc Custom Codex.">
+  <title>Hướng dẫn API Codex · PHP TOOL Shop</title>
   <style>
     :root {
-      --canvas: #f2eee3;
-      --paper: #fffdf7;
-      --ink: #17211d;
-      --muted: #66706a;
-      --green: #125e49;
-      --green-2: #1c8064;
-      --lime: #d8f17d;
-      --orange: #ec7048;
-      --line: rgba(23, 33, 29, .14);
-      --code: #14211d;
-      --shadow: 0 22px 60px rgba(27, 42, 35, .11);
+      --void: #030809;
+      --panel: #071315;
+      --panel-2: #0a1b1e;
+      --line: rgba(60, 255, 218, .22);
+      --cyan: #3cffda;
+      --cyan-soft: rgba(60, 255, 218, .1);
+      --acid: #d8ff4f;
+      --text: #eafffa;
+      --muted: #8ba8a3;
+      --danger: #ff765f;
+      --shadow: 0 0 0 1px rgba(60, 255, 218, .06), 0 26px 80px rgba(0, 0, 0, .42);
     }
 
     * { box-sizing: border-box; }
     html { scroll-behavior: smooth; scroll-padding-top: 24px; }
     body {
       margin: 0;
-      color: var(--ink);
+      color: var(--text);
       background:
-        radial-gradient(circle at 86% 2%, rgba(216, 241, 125, .62), transparent 26rem),
-        linear-gradient(rgba(18, 94, 73, .05) 1px, transparent 1px),
-        linear-gradient(90deg, rgba(18, 94, 73, .05) 1px, transparent 1px),
-        var(--canvas);
-      background-size: auto, 32px 32px, 32px 32px, auto;
-      font-family: "Trebuchet MS", "Gill Sans", sans-serif;
+        radial-gradient(circle at 82% 8%, rgba(60, 255, 218, .11), transparent 30rem),
+        radial-gradient(circle at 5% 88%, rgba(216, 255, 79, .08), transparent 26rem),
+        linear-gradient(rgba(60, 255, 218, .035) 1px, transparent 1px),
+        linear-gradient(90deg, rgba(60, 255, 218, .035) 1px, transparent 1px),
+        var(--void);
+      background-size: auto, auto, 38px 38px, 38px 38px, auto;
+      font-family: "Segoe UI", "Trebuchet MS", sans-serif;
+      font-size: 18px;
       line-height: 1.65;
     }
     a { color: inherit; }
-    code, pre { font-family: "Cascadia Code", Consolas, monospace; }
-    button { font: inherit; }
+    code { font-family: "Cascadia Code", Consolas, monospace; }
 
-    .page { width: min(1460px, calc(100% - 28px)); margin: 0 auto; padding: 18px 0 70px; }
-    .topbar {
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-      gap: 16px;
-      margin-bottom: 18px;
-      padding: 12px 14px;
-      border: 1px solid var(--line);
-      border-radius: 18px;
-      background: rgba(255, 253, 247, .88);
-      box-shadow: 0 10px 35px rgba(23, 33, 29, .08);
-      backdrop-filter: blur(14px);
-    }
-    .brand { display: flex; align-items: center; gap: 11px; text-decoration: none; }
-    .brand-mark {
+    .shell {
       display: grid;
-      width: 40px;
-      aspect-ratio: 1;
-      place-items: center;
-      border-radius: 13px;
-      color: var(--lime);
-      background: var(--green);
-      font: 800 19px/1 Georgia, serif;
+      grid-template-columns: 290px minmax(0, 1040px);
+      justify-content: center;
+      gap: 28px;
+      width: min(1420px, calc(100% - 32px));
+      margin: 0 auto;
+      padding: 28px 0 80px;
     }
-    .brand strong, .brand small { display: block; }
-    .brand strong { letter-spacing: .05em; }
-    .brand small { color: var(--muted); font-size: 11px; }
-    .top-note { color: var(--muted); font-size: 12px; text-align: right; }
-
-    .layout { display: grid; grid-template-columns: 255px minmax(0, 1fr); gap: 22px; }
     .sidebar {
       position: sticky;
-      top: 18px;
+      top: 20px;
       align-self: start;
-      max-height: calc(100vh - 36px);
-      overflow: auto;
-      padding: 19px;
+      padding: 24px;
       border: 1px solid var(--line);
-      border-radius: 23px;
-      background: rgba(255, 253, 247, .92);
+      border-radius: 22px;
+      background: rgba(7, 19, 21, .9);
       box-shadow: var(--shadow);
+      backdrop-filter: blur(16px);
     }
-    .sidebar-label {
-      margin: 0 0 12px;
+    .brand {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      margin-bottom: 28px;
+      text-decoration: none;
+    }
+    .brand-mark {
+      display: grid;
+      width: 48px;
+      height: 48px;
+      place-items: center;
+      border: 1px solid var(--cyan);
+      border-radius: 13px;
+      color: var(--void);
+      background: var(--cyan);
+      font-weight: 950;
+      box-shadow: 0 0 24px rgba(60, 255, 218, .28);
+    }
+    .brand strong, .brand small { display: block; }
+    .brand strong { font-size: 17px; letter-spacing: .12em; }
+    .brand small { color: var(--muted); font-size: 12px; }
+    .nav-label {
+      margin: 0 0 10px;
       color: var(--muted);
-      font-size: 10px;
+      font-size: 11px;
       font-weight: 800;
       letter-spacing: .16em;
       text-transform: uppercase;
     }
-    .nav { display: grid; gap: 7px; }
+    .nav { display: grid; gap: 9px; }
     .nav a {
       display: grid;
-      grid-template-columns: 28px 1fr;
-      gap: 10px;
+      grid-template-columns: 38px 1fr;
       align-items: center;
-      padding: 10px;
-      border-radius: 12px;
-      color: #33423b;
-      font-size: 13px;
-      font-weight: 700;
+      gap: 11px;
+      padding: 12px;
+      border: 1px solid transparent;
+      border-radius: 13px;
+      color: #bcd2ce;
+      font-size: 15px;
+      font-weight: 750;
       text-decoration: none;
     }
-    .nav a:hover { color: var(--green); background: #edf3df; }
+    .nav a:hover {
+      color: var(--text);
+      border-color: var(--line);
+      background: var(--cyan-soft);
+    }
     .nav b {
       display: grid;
-      width: 28px;
-      height: 28px;
+      height: 38px;
       place-items: center;
-      border-radius: 9px;
-      color: var(--green);
-      background: var(--lime);
-      font-size: 11px;
+      border: 1px solid var(--line);
+      border-radius: 10px;
+      color: var(--cyan);
+      font: 800 12px/1 "Cascadia Code", Consolas, monospace;
     }
-    .sidebar-download {
-      display: block;
-      margin-top: 18px;
-      padding: 13px;
-      border-radius: 13px;
-      color: white;
-      background: var(--orange);
-      font-size: 12px;
-      font-weight: 800;
-      text-align: center;
-      text-decoration: none;
+    .support {
+      margin: 26px 0 0;
+      padding-top: 18px;
+      border-top: 1px solid var(--line);
+      color: var(--muted);
+      font-size: 13px;
     }
+    .support strong { color: var(--cyan); }
 
-    .content { min-width: 0; }
-    .hero {
+    .content { display: grid; gap: 24px; min-width: 0; }
+    .section {
       position: relative;
       overflow: hidden;
-      display: grid;
-      grid-template-columns: minmax(0, 1.25fr) minmax(280px, .75fr);
-      gap: 20px;
-      min-height: 390px;
-      padding: 46px;
+      padding: clamp(30px, 5vw, 58px);
+      border: 1px solid var(--line);
       border-radius: 28px;
-      color: white;
-      background:
-        linear-gradient(130deg, rgba(18, 94, 73, .98), rgba(16, 48, 39, .98)),
-        var(--green);
+      background: linear-gradient(145deg, rgba(10, 27, 30, .96), rgba(5, 14, 16, .97));
       box-shadow: var(--shadow);
     }
-    .hero::after {
+    .section::before {
       position: absolute;
-      right: -90px;
-      bottom: -150px;
-      width: 380px;
-      height: 380px;
-      border: 55px solid rgba(216, 241, 125, .13);
-      border-radius: 50%;
+      top: 0;
+      left: 0;
+      width: 160px;
+      height: 3px;
+      background: linear-gradient(90deg, var(--cyan), transparent);
       content: "";
     }
-    .hero-copy { position: relative; z-index: 1; align-self: center; }
-    .eyebrow {
+    .kicker {
       display: inline-flex;
-      padding: 6px 10px;
-      border: 1px solid rgba(255, 255, 255, .25);
-      border-radius: 999px;
-      color: var(--lime);
-      font-size: 11px;
-      font-weight: 800;
-      letter-spacing: .14em;
+      align-items: center;
+      gap: 9px;
+      margin-bottom: 15px;
+      color: var(--cyan);
+      font: 850 13px/1 "Cascadia Code", Consolas, monospace;
+      letter-spacing: .15em;
       text-transform: uppercase;
     }
-    h1 { max-width: 780px; margin: 19px 0 15px; font: 700 clamp(44px, 6vw, 76px)/.96 Georgia, serif; }
-    h1 em { color: var(--lime); font-weight: inherit; }
-    .hero p { max-width: 690px; margin: 0; color: rgba(255,255,255,.78); font-size: 17px; }
-    .actions { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 25px; }
+    .kicker::before {
+      width: 9px;
+      height: 9px;
+      border-radius: 50%;
+      background: var(--acid);
+      box-shadow: 0 0 14px var(--acid);
+      content: "";
+    }
+    h1, h2 { margin: 0; letter-spacing: -.045em; }
+    h1 { max-width: 780px; font-size: clamp(46px, 7vw, 82px); line-height: .98; }
+    h2 { font-size: clamp(40px, 6vw, 66px); line-height: 1.02; }
+    h1 em, h2 em { color: var(--acid); font-style: normal; }
+    .lead {
+      max-width: 820px;
+      margin: 22px 0 0;
+      color: #bad0cc;
+      font-size: clamp(19px, 2.3vw, 24px);
+    }
     .button {
       display: inline-flex;
       align-items: center;
       justify-content: center;
-      min-height: 44px;
-      padding: 10px 16px;
-      border: 0;
-      border-radius: 12px;
-      font-weight: 800;
-      text-decoration: none;
-      cursor: pointer;
-    }
-    .button.lime { color: var(--ink); background: var(--lime); }
-    .button.light { color: white; border: 1px solid rgba(255,255,255,.28); background: rgba(255,255,255,.08); }
-    .button.orange { color: white; background: var(--orange); }
-    .button.dark { color: white; background: var(--green); }
-
-    .package-card {
-      position: relative;
-      z-index: 1;
-      align-self: center;
-      padding: 21px;
-      border: 1px solid rgba(255,255,255,.16);
-      border-radius: 21px;
-      background: rgba(5, 23, 18, .32);
-      backdrop-filter: blur(12px);
-    }
-    .package-card span { display: block; color: rgba(255,255,255,.55); font-size: 10px; font-weight: 800; letter-spacing: .13em; }
-    .package { display: flex; align-items: baseline; justify-content: space-between; gap: 15px; padding: 14px 0; border-bottom: 1px solid rgba(255,255,255,.12); }
-    .package:last-child { border-bottom: 0; }
-    .package strong { color: var(--lime); font-size: 20px; }
-    .package b { font-size: 15px; }
-
-    .section {
-      margin-top: 22px;
-      padding: 34px;
-      border: 1px solid var(--line);
-      border-radius: 25px;
-      background: rgba(255, 253, 247, .93);
-      box-shadow: 0 14px 44px rgba(23, 33, 29, .07);
-    }
-    .section-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 18px; margin-bottom: 22px; }
-    .section-number { color: var(--orange); font-size: 11px; font-weight: 900; letter-spacing: .16em; }
-    h2 { margin: 4px 0 4px; font: 700 clamp(30px, 4vw, 47px)/1.03 Georgia, serif; }
-    h3 { margin: 0 0 8px; font-size: 21px; }
-    .muted { color: var(--muted); }
-    .step-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; }
-    .step-card, .info-card {
-      padding: 19px;
-      border: 1px solid var(--line);
-      border-radius: 17px;
-      background: var(--paper);
-    }
-    .step-card b {
-      display: grid;
-      width: 34px;
-      height: 34px;
-      margin-bottom: 12px;
-      place-items: center;
-      border-radius: 10px;
-      color: var(--green);
-      background: var(--lime);
-    }
-    .step-card p, .info-card p { margin: 6px 0 0; color: var(--muted); font-size: 14px; }
-    .notice {
-      margin-top: 15px;
-      padding: 14px 16px;
-      border-left: 4px solid var(--orange);
-      border-radius: 10px;
-      background: #fff0e9;
-      font-size: 14px;
-    }
-
-    .method {
-      display: grid;
-      grid-template-columns: minmax(250px, .7fr) minmax(0, 1.3fr);
-      gap: 22px;
-    }
-    .method-aside { padding: 24px; border-radius: 18px; color: white; background: var(--green); }
-    .method-aside p { color: rgba(255,255,255,.76); }
-    .method-body { min-width: 0; }
-    .ordered { margin: 0; padding: 0; list-style: none; counter-reset: guide; }
-    .ordered li { position: relative; min-height: 44px; padding: 0 0 18px 52px; counter-increment: guide; }
-    .ordered li::before {
-      position: absolute;
-      left: 0;
-      top: 0;
-      display: grid;
-      width: 36px;
-      height: 36px;
-      place-items: center;
-      border-radius: 11px;
-      color: var(--green);
-      background: var(--lime);
+      min-height: 58px;
+      margin-top: 28px;
+      padding: 13px 22px;
+      border: 1px solid var(--cyan);
+      border-radius: 13px;
+      color: #00110e;
+      background: var(--cyan);
+      font-size: 17px;
       font-weight: 900;
-      content: counter(guide);
+      text-decoration: none;
+      box-shadow: 0 0 28px rgba(60, 255, 218, .18);
     }
-    .ordered strong, .ordered span { display: block; }
-    .ordered span { color: var(--muted); font-size: 14px; }
-    .inline-code { padding: 2px 6px; border-radius: 6px; color: #d9f47c; background: var(--code); font-size: .88em; overflow-wrap: anywhere; }
+    .button:hover { filter: brightness(1.12); transform: translateY(-1px); }
+    .button.alt { border-color: var(--acid); background: var(--acid); }
+    .key-box {
+      display: grid;
+      grid-template-columns: auto 1fr;
+      gap: 18px;
+      align-items: center;
+      margin-top: 32px;
+      padding: 22px;
+      border: 1px solid var(--line);
+      border-radius: 18px;
+      background: rgba(0, 0, 0, .26);
+    }
+    .key-box span {
+      color: var(--muted);
+      font-size: 13px;
+      font-weight: 800;
+      letter-spacing: .12em;
+      text-transform: uppercase;
+    }
+    .key-box code { color: var(--acid); font-size: clamp(20px, 3vw, 29px); overflow-wrap: anywhere; }
+    .note {
+      margin: 22px 0 0;
+      padding-left: 17px;
+      border-left: 3px solid var(--danger);
+      color: #d7aaa2;
+      font-size: 16px;
+    }
+    .access-link {
+      display: block;
+      margin-top: 28px;
+      padding: 21px 24px;
+      border: 1px solid var(--line);
+      border-radius: 16px;
+      color: var(--cyan);
+      background: #020707;
+      font: 750 clamp(15px, 2.2vw, 21px)/1.45 "Cascadia Code", Consolas, monospace;
+      overflow-wrap: anywhere;
+      text-decoration: none;
+    }
     .screenshot {
       display: block;
       width: 100%;
-      margin-top: 18px;
+      margin-top: 22px;
       border: 1px solid var(--line);
-      border-radius: 16px;
-      box-shadow: 0 14px 35px rgba(0,0,0,.12);
+      border-radius: 18px;
+      box-shadow: 0 22px 60px rgba(0, 0, 0, .42);
     }
-
-    .portable {
+    .steps {
       display: grid;
-      grid-template-columns: minmax(0, 1fr) minmax(260px, .75fr);
-      gap: 16px;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 13px;
+      margin-top: 30px;
     }
-    .recommended { padding: 25px; border-radius: 19px; color: white; background: var(--green); }
-    .recommended-tag { display: inline-block; padding: 5px 9px; border-radius: 999px; color: var(--ink); background: var(--lime); font-size: 10px; font-weight: 900; letter-spacing: .1em; }
-    .recommended ul { padding-left: 20px; color: rgba(255,255,255,.82); }
-    .portable-flow { display: grid; gap: 10px; }
-    .flow-row { padding: 15px; border: 1px solid var(--line); border-radius: 14px; background: var(--paper); }
-    .flow-row b, .flow-row span { display: block; }
-    .flow-row span { color: var(--muted); font-size: 13px; }
-
-    .model-list { display: flex; flex-wrap: wrap; gap: 8px; }
-    .model-list code { padding: 8px 10px; border-radius: 9px; color: #dff79a; background: var(--code); font-size: 12px; }
-    .faq { display: grid; grid-template-columns: repeat(2, 1fr); gap: 12px; }
-    .footer { margin-top: 22px; padding: 18px; color: var(--muted); font-size: 12px; text-align: center; }
-
-    @media (max-width: 1040px) {
-      .layout { grid-template-columns: 210px minmax(0, 1fr); }
-      .hero { grid-template-columns: 1fr; padding: 36px; }
-      .package-card { max-width: 520px; }
-      .method, .portable { grid-template-columns: 1fr; }
-      .step-grid { grid-template-columns: 1fr; }
+    .step {
+      min-width: 0;
+      padding: 20px;
+      border: 1px solid var(--line);
+      border-radius: 17px;
+      background: rgba(0, 0, 0, .24);
     }
+    .step b {
+      display: block;
+      margin-bottom: 9px;
+      color: var(--acid);
+      font: 900 13px/1 "Cascadia Code", Consolas, monospace;
+      letter-spacing: .08em;
+    }
+    .step strong { display: block; font-size: 19px; }
+    .step p { margin: 8px 0 0; color: var(--muted); font-size: 15px; }
 
-    @media (max-width: 760px) {
-      .page { width: min(100% - 18px, 1460px); padding-top: 9px; }
-      .topbar { border-radius: 15px; }
-      .top-note { display: none; }
-      .layout { display: block; }
+    @media (max-width: 900px) {
+      body { font-size: 17px; }
+      .shell { display: block; width: min(100% - 20px, 1040px); padding-top: 10px; }
       .sidebar {
         position: sticky;
-        top: 7px;
+        top: 8px;
         z-index: 20;
         display: flex;
-        gap: 8px;
-        max-height: none;
-        margin-bottom: 12px;
-        padding: 9px;
-        overflow: hidden;
-        border-radius: 15px;
+        align-items: center;
+        gap: 12px;
+        margin-bottom: 14px;
+        padding: 10px;
+        border-radius: 16px;
       }
-      .sidebar-label, .sidebar-download { display: none; }
-      .nav {
-        display: flex;
-        flex: none;
-        width: 100%;
-        gap: 5px;
-        overflow-x: auto;
-        padding-bottom: 2px;
-        scrollbar-width: none;
-      }
+      .brand { flex: none; margin: 0; }
+      .brand-mark { width: 40px; height: 40px; }
+      .brand div, .nav-label, .support { display: none; }
+      .nav { display: flex; flex: 1; gap: 6px; overflow-x: auto; scrollbar-width: none; }
       .nav::-webkit-scrollbar { display: none; }
-      .nav a {
-        display: flex;
-        flex: 0 0 auto;
-        width: auto;
-        white-space: nowrap;
-        padding: 7px 8px;
-        font-size: 11px;
-      }
-      .nav b { width: 25px; height: 25px; }
-      .hero { min-height: auto; padding: 29px 22px; border-radius: 21px; }
-      h1 { font-size: 46px; }
-      .hero p { font-size: 15px; }
-      .actions { display: grid; }
+      .nav a { flex: 0 0 auto; grid-template-columns: 32px auto; padding: 7px 9px; font-size: 13px; }
+      .nav b { height: 32px; }
+      .content { gap: 14px; }
+      .section { padding: 32px 20px; border-radius: 21px; }
+      .key-box { grid-template-columns: 1fr; gap: 4px; }
+      .steps { grid-template-columns: 1fr; }
       .button { width: 100%; }
-      .section { padding: 24px 18px; border-radius: 20px; }
-      .section-head { display: block; }
-      .method-aside, .recommended { padding: 20px; }
-      .faq { grid-template-columns: 1fr; }
     }
   </style>
 </head>
 <body>
-  <div class="page">
-    <header class="topbar">
-      <a class="brand" href="#top"><span class="brand-mark">VS</span><span><strong>VIETSHARE</strong><small>API Codex · hướng dẫn sử dụng</small></span></a>
-      <div class="top-note">CDK → kích hoạt key → kết nối Codex<br>Gói có hạn 24 giờ từ lúc kích hoạt</div>
-    </header>
+  <div class="shell">
+    <aside class="sidebar" aria-label="Mục lục hướng dẫn">
+      <a class="brand" href="#activate">
+        <span class="brand-mark">PT</span>
+        <div><strong>PHP TOOL SHOP</strong><small>Codex access guide</small></div>
+      </a>
+      <p class="nav-label">Ba bước sử dụng</p>
+      <nav class="nav">
+        <a href="#activate"><b>01</b>Kích hoạt key</a>
+        <a href="#router"><b>02</b>Dùng 9Router</a>
+        <a href="#portable"><b>03</b>Custom Codex</a>
+      </nav>
+      <p class="support">Hỗ trợ mua hàng<br><strong>@phptool_bot</strong></p>
+    </aside>
 
-    <div class="layout">
-      <aside class="sidebar" aria-label="Mục lục hướng dẫn">
-        <p class="sidebar-label">Nội dung chính</p>
-        <nav class="nav">
-          <a href="#top"><b>00</b>Tổng quan</a>
-          <a href="#kich-hoat"><b>01</b>Kích hoạt CDK</a>
-          <a href="#router"><b>02</b>Dùng 9Router</a>
-          <a href="#portable"><b>03</b>App portable</a>
-          <a href="#models"><b>04</b>Model hỗ trợ</a>
-          <a href="#luu-y"><b>05</b>Lưu ý & lỗi</a>
-        </nav>
-        <a class="sidebar-download" href="/codex-api/download">Tải app portable (.zip)</a>
-      </aside>
+    <main class="content">
+      <section class="section" id="activate">
+        <span class="kicker">Phần 01</span>
+        <h1>Kích hoạt <em>key</em></h1>
+        <p class="lead">Copy key bot đã giao, mở trang kích hoạt rồi dán key vào. Sau khi kích hoạt thành công, hệ thống trả về key API bắt đầu bằng <code>sk-</code>.</p>
+        <a class="button" href="{{ activation_url }}" target="_blank" rel="noreferrer">Mở trang kích hoạt key ↗</a>
+        <div class="key-box"><span>Key API nhận được</span><code>sk-xxxxxxxxxxxxxxxx</code></div>
+        <p class="note">Giữ kín key <code>sk-</code>. Thời hạn gói bắt đầu tính ngay khi kích hoạt thành công.</p>
+      </section>
 
-      <main class="content" id="top">
-        <section class="hero">
-          <div class="hero-copy">
-            <span class="eyebrow">API CODEX · 24 GIỜ</span>
-            <h1>Từ CDK đến <em>Codex</em> trong vài phút.</h1>
-            <p>Sau khi bot giao mã CDK, kích hoạt để nhận key <code>sk-...</code>. Bạn có thể kết nối qua 9Router hoặc mở app VietShare Codex Portable và chạy ngay.</p>
-            <div class="actions">
-              <a class="button lime" href="{{ activation_url }}" target="_blank" rel="noreferrer">Mở trang kích hoạt ↗</a>
-              <a class="button light" href="/codex-api/download">Tải app portable ZIP</a>
-            </div>
-          </div>
-          <aside class="package-card" aria-label="Các gói API Codex">
-            <span>GIÁ BÁN TRÊN BOT</span>
-            <div class="package"><b>10M token</b><strong>30.000đ</strong></div>
-            <div class="package"><b>50M token</b><strong>50.000đ</strong></div>
-            <div class="package"><b>100M token</b><strong>70.000đ</strong></div>
-          </aside>
-        </section>
+      <section class="section" id="router">
+        <span class="kicker">Phần 02</span>
+        <h2>Dùng key trong <em>9Router</em></h2>
+        <p class="lead">Nếu máy đã có 9Router, mở đường dẫn dưới đây và thiết lập đúng như hình.</p>
+        <a class="access-link" href="{{ router_url }}" target="_blank" rel="noreferrer">{{ router_url }}</a>
+        <img class="screenshot" src="/codex-api/assets/9router.png" alt="Thiết lập key API Codex trong 9Router" loading="lazy">
+      </section>
 
-        <section class="section" id="kich-hoat">
-          <div class="section-head"><div><span class="section-number">BƯỚC 01</span><h2>Kích hoạt mã CDK</h2><p class="muted">Chỉ bắt đầu tính 24 giờ sau khi bạn kích hoạt CDK.</p></div></div>
-          <div class="step-grid">
-            <article class="step-card"><b>1</b><h3>Copy CDK từ bot</h3><p>Copy nguyên dòng mã được giao trong đơn hàng, không thêm dấu cách.</p></article>
-            <article class="step-card"><b>2</b><h3>Mở trang kích hoạt</h3><p>Truy cập <a href="{{ activation_url }}" target="_blank" rel="noreferrer">api.maxdonchal.bond</a>, dán CDK và xác nhận kích hoạt.</p></article>
-            <article class="step-card"><b>3</b><h3>Lưu key sk-</h3><p>Sau khi kích hoạt, copy key bắt đầu bằng <code>sk-</code>. Key này dùng cho cả hai cách bên dưới.</p></article>
-          </div>
-          <div class="notice"><strong>Quan trọng:</strong> không kích hoạt trước khi cần sử dụng, vì thời hạn 24 giờ được tính ngay từ lúc kích hoạt thành công.</div>
-        </section>
-
-        <section class="section" id="router">
-          <div class="section-head"><div><span class="section-number">CÁCH 01</span><h2>Kết nối qua 9Router</h2><p class="muted">Dùng cách này nếu máy đã cài và đang chạy 9Router.</p></div></div>
-          <div class="method">
-            <aside class="method-aside">
-              <h3>OpenAI Codex CLI / App</h3>
-              <p>Mở đúng trang CLI Tools của 9Router rồi điền endpoint, key, model và subagent model như hình.</p>
-              <a class="button lime" href="{{ router_url }}" target="_blank" rel="noreferrer">Mở 9Router trên máy</a>
-            </aside>
-            <div class="method-body">
-              <ol class="ordered">
-                <li><strong>Select Endpoint → Custom URL...</strong><span>Nhập <code class="inline-code">{{ gateway_url }}</code></span></li>
-                <li><strong>Khóa API → Custom...</strong><span>Dán key <code class="inline-code">sk-...</code> vừa nhận.</span></li>
-                <li><strong>Model</strong><span>Chọn ví dụ <code class="inline-code">cx/gpt-5.6-sol</code>.</span></li>
-                <li><strong>Subagent Model</strong><span>Chọn cùng model hoặc một model khác trong danh sách hỗ trợ.</span></li>
-                <li><strong>Bấm Áp dụng</strong><span>Nếu Codex đang mở, hãy đóng hoàn toàn rồi mở lại để nhận cấu hình.</span></li>
-              </ol>
-            </div>
-          </div>
-          <img class="screenshot" src="/codex-api/assets/9router.png" alt="Mẫu thiết lập API Codex trong 9Router" loading="lazy">
-        </section>
-
-        <section class="section" id="portable">
-          <div class="section-head"><div><span class="section-number">CÁCH 02 · KHUYÊN DÙNG</span><h2>Chạy app portable</h2><p class="muted">Không cần cài đặt. Tải ZIP, giải nén và mở file EXE.</p></div></div>
-          <div class="portable">
-            <div class="recommended">
-              <span class="recommended-tag">DỄ DÙNG NHẤT</span>
-              <h3 style="margin-top:14px">VietShare Codex Portable</h3>
-              <p>App dùng giao diện làm việc riêng nhưng tiếp tục đọc các cuộc trò chuyện Codex hiện có. Bạn chỉ cần nhập key, chọn model rồi làm việc.</p>
-              <ul>
-                <li>ZIP chỉ chứa một file EXE portable, không có bộ cài.</li>
-                <li>Không ghi đè <code>config.toml</code> hoặc <code>auth.json</code> của Codex chính.</li>
-                <li>Không làm mất lịch sử hội thoại Codex hiện có.</li>
-                <li>Khi đóng app portable, bạn mở Codex chính và sử dụng như trước.</li>
-              </ul>
-              <a class="button orange" href="/codex-api/download">Tải VietShare Codex Portable (.zip)</a>
-            </div>
-            <div class="portable-flow">
-              <div class="flow-row"><b>1 · Đóng Codex chính</b><span>Không chạy Codex chính và app portable cùng lúc để tránh hai app cùng ghi trạng thái hội thoại.</span></div>
-              <div class="flow-row"><b>2 · Giải nén ZIP</b><span>Giải nén ra thư mục riêng, sau đó mở <code>VietShare Codex Portable.exe</code>.</span></div>
-              <div class="flow-row"><b>3 · Nhập key</b><span>Dán key <code>sk-...</code>, chọn model và thư mục dự án cần làm việc.</span></div>
-              <div class="flow-row"><b>4 · Quay lại Codex chính</b><span>Đóng hẳn app portable rồi mở Codex chính. Cấu hình và đăng nhập cũ vẫn được giữ nguyên.</span></div>
-            </div>
-          </div>
-          <div class="notice"><strong>Windows:</strong> ưu tiên Windows 11 64-bit. Windows 10 đã cập nhật vẫn có thể chạy, nhưng nên dùng bản hệ điều hành còn được hỗ trợ và cập nhật WebView2.</div>
-        </section>
-
-        <section class="section" id="models">
-          <div class="section-head"><div><span class="section-number">MODEL</span><h2>Các model được phép</h2><p class="muted">Tên model phải nhập/chọn đúng hoàn toàn.</p></div></div>
-          <div class="model-list">{% for model in models %}<code>{{ model }}</code>{% endfor %}</div>
-        </section>
-
-        <section class="section" id="luu-y">
-          <div class="section-head"><div><span class="section-number">KIỂM TRA NHANH</span><h2>Lưu ý và xử lý lỗi</h2></div></div>
-          <div class="faq">
-            <article class="info-card"><h3>Lỗi 401</h3><p>Kiểm tra key có đúng dạng <code>sk-...</code>, còn hiệu lực và không bị thừa dấu cách khi dán.</p></article>
-            <article class="info-card"><h3>Lỗi model</h3><p>Đổi sang một model đúng trong danh sách hỗ trợ. Không bỏ tiền tố <code>cx/</code>.</p></article>
-            <article class="info-card"><h3>9Router chưa nhận cấu hình</h3><p>Bấm Áp dụng, sau đó thoát hoàn toàn Codex App/CLI rồi mở lại.</p></article>
-            <article class="info-card"><h3>Không thấy cuộc trò chuyện cũ</h3><p>Đóng cả hai app, chỉ mở lại một app. Không chạy Codex chính và bản portable đồng thời.</p></article>
-            <article class="info-card"><h3>Hết thời hạn hoặc token</h3><p>Key tự ngừng hoạt động khi hết quota hoặc hết 24 giờ. Mua CDK mới nếu cần tiếp tục.</p></article>
-            <article class="info-card"><h3>Bảo mật key</h3><p>Không gửi ảnh chụp có key và không dán key vào website/phần mềm không tin cậy.</p></article>
-          </div>
-        </section>
-      </main>
-    </div>
-
-    <footer class="footer">VietShare · Hướng dẫn API Codex · Hỗ trợ qua bot bán hàng</footer>
+      <section class="section" id="portable">
+        <span class="kicker">Phần 03</span>
+        <h2><em>Custom Codex</em> chạy ngay</h2>
+        <p class="lead">Không cần cài đặt. Tải file ZIP, giải nén rồi mở file EXE để sử dụng.</p>
+        <a class="button alt" href="/codex-api/download">Tải Custom Codex (.zip)</a>
+        <div class="steps">
+          <article class="step"><b>01</b><strong>Đóng Codex chính</strong><p>Không mở hai ứng dụng cùng lúc.</p></article>
+          <article class="step"><b>02</b><strong>Mở file EXE</strong><p>Giải nén ZIP và chạy app trực tiếp.</p></article>
+          <article class="step"><b>03</b><strong>Nhập key</strong><p>Dán key <code>sk-</code>, chọn model và bắt đầu làm việc.</p></article>
+        </div>
+      </section>
+    </main>
   </div>
 </body>
 </html>

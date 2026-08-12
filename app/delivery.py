@@ -23,6 +23,7 @@ def delivery_text(
     paid_by_qr: bool = False,
 ) -> str:
     product_name = sanitize_customer_text(product_name)
+    is_codex_key = "codex" in product_name.casefold()
     brand_emoji = product_brand_emoji(product_name)
     preview = secrets[:MAX_MESSAGE_PREVIEW]
     items = "\n".join(safe_html(secret) for secret in preview)
@@ -37,24 +38,26 @@ def delivery_text(
 
     if language == "en":
         title = "Payment and delivery successful" if paid_by_qr else "Purchase successful"
+        delivered_label = "Your activation key" if is_codex_key else "Your accounts/codes"
         return (
             f"✅ <b>{title}</b>\n\n"
             f"🧾 Shop order: <code>{safe_html(shop_order_code)}</code>\n"
             f"📦 Product: {brand_emoji} <b>{safe_html(product_name)}</b>\n"
             f"🧮 Quantity: <b>{len(secrets)}</b>\n"
             f"💰 Total: <b>{format_vnd(total_amount)}</b>\n\n"
-            f"📋 <b>Your accounts/codes:</b>\n{account_block}\n\n"
+            f"📋 <b>{delivered_label}:</b>\n{account_block}\n\n"
             "Use the copy-all button or download the TXT file. Keep this information private."
         )
 
     title = "Thanh toán và giao hàng thành công" if paid_by_qr else "Mua hàng thành công"
+    delivered_label = "Key kích hoạt của bạn" if is_codex_key else "Tài khoản/code của bạn"
     return (
         f"✅ <b>{title}</b>\n\n"
         f"🧾 Mã đơn shop: <code>{safe_html(shop_order_code)}</code>\n"
         f"📦 Sản phẩm: {brand_emoji} <b>{safe_html(product_name)}</b>\n"
         f"🧮 Số lượng: <b>{len(secrets)}</b>\n"
         f"💰 Tổng tiền: <b>{format_vnd(total_amount)}</b>\n\n"
-        f"📋 <b>Tài khoản/code của bạn:</b>\n{account_block}\n\n"
+        f"📋 <b>{delivered_label}:</b>\n{account_block}\n\n"
         "Dùng nút sao chép hoặc tải file TXT. Không chia sẻ thông tin này cho người khác."
     )
 
@@ -125,6 +128,7 @@ def delivery_file(
     language: str,
 ) -> BufferedInputFile:
     product_name = sanitize_customer_text(product_name)
+    is_codex_key = "codex" in product_name.casefold()
     if language == "en":
         header = [
             "PURCHASED DIGITAL GOODS",
@@ -133,7 +137,7 @@ def delivery_file(
             f"Quantity: {len(secrets)}",
             f"Total: {format_vnd(total_amount)}",
             "",
-            "ACCOUNTS / CODES",
+            "ACTIVATION KEY" if is_codex_key else "ACCOUNTS / CODES",
         ]
     else:
         header = [
@@ -143,7 +147,7 @@ def delivery_file(
             f"Số lượng: {len(secrets)}",
             f"Tổng tiền: {format_vnd(total_amount)}",
             "",
-            "TÀI KHOẢN / CODE",
+            "KEY KÍCH HOẠT" if is_codex_key else "TÀI KHOẢN / CODE",
         ]
     body = list(secrets)
     content = "\n".join([*header, *body, "", "PHP Tool Shop"])

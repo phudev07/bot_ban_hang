@@ -274,7 +274,7 @@ def test_warehouse_api_origin_is_cloudflare_only_and_body_is_bounded() -> None:
 
 
 def test_codex_guide_and_zip_download_are_public_but_raw_exe_is_not(tmp_path) -> None:
-    zip_path = tmp_path / "VietShare-Codex-Portable.zip"
+    zip_path = tmp_path / "Custom-Codex-Portable.zip"
     zip_path.write_bytes(b"PK\x03\x04test-archive")
     settings = Settings(
         _env_file=None,
@@ -299,18 +299,18 @@ def test_codex_guide_and_zip_download_are_public_but_raw_exe_is_not(tmp_path) ->
         assert guide.status_code == 200
         assert "https://api.maxdonchal.bond/" in guide.text
         assert "http://localhost:20128/dashboard/cli-tools/codex" in guide.text
-        assert "https://api.maxdonchal.bond/v1" in guide.text
-        assert "30.000đ" in guide.text
-        assert "50.000đ" in guide.text
-        assert "70.000đ" in guide.text
+        assert "Kích hoạt key" in guide.text
+        assert "Custom Codex" in guide.text
+        assert "30.000đ" not in guide.text
+        assert "CDK" not in guide.text
         assert 'href="/codex-api/download"' in guide.text
         assert 'class="sidebar"' in guide.text
 
         download = client.get("/codex-api/download")
         assert download.status_code == 200
         assert download.headers["content-type"].startswith("application/zip")
-        assert "VietShare-Codex-Portable.zip" in download.headers["content-disposition"]
-        assert client.get("/codex-api/VietShare-Codex-Portable.exe").status_code == 404
+        assert "Custom-Codex-Portable.zip" in download.headers["content-disposition"]
+        assert client.get("/codex-api/custom-codex.exe").status_code == 404
 
     asyncio.run(engine.dispose())
 
