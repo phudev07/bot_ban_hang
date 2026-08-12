@@ -270,8 +270,49 @@ def test_warehouse_api_origin_is_cloudflare_only_and_body_is_bounded() -> None:
     assert "@direct_origin not remote_ip" in token_site
     assert "respond @direct_origin 403" in token_site
     assert "max_size 64KB" in token_site
-    assert "/codex-claude" not in token_site
-    assert "/codex-setup" not in token_site
+    assert "@codex_docs path /codex-api /codex-api/ /codex-api/*" in token_site
+
+
+def test_codex_guide_and_zip_download_are_public_but_raw_exe_is_not(tmp_path) -> None:
+    zip_path = tmp_path / "VietShare-Codex-Portable.zip"
+    zip_path.write_bytes(b"PK\x03\x04test-archive")
+    settings = Settings(
+        _env_file=None,
+        bot_token="123456:ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghi",
+        inventory_encryption_key=Fernet.generate_key().decode(),
+        sepay_enabled=False,
+        shop_api_enabled=True,
+        codex_portable_zip_path=str(zip_path),
+    )
+    engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+    sessions = async_sessionmaker(engine, expire_on_commit=False)
+    app = create_api(
+        settings,
+        sessions,
+        FakeBot(),  # type: ignore[arg-type]
+        SecretCipher(settings.inventory_encryption_key.get_secret_value()),
+        api_redis=FakeRedis(),  # type: ignore[arg-type]
+    )
+
+    with TestClient(app, base_url="https://testserver") as client:
+        guide = client.get("/codex-api")
+        assert guide.status_code == 200
+        assert "https://api.maxdonchal.bond/" in guide.text
+        assert "http://localhost:20128/dashboard/cli-tools/codex" in guide.text
+        assert "https://api.maxdonchal.bond/v1" in guide.text
+        assert "30.000đ" in guide.text
+        assert "50.000đ" in guide.text
+        assert "70.000đ" in guide.text
+        assert 'href="/codex-api/download"' in guide.text
+        assert 'class="sidebar"' in guide.text
+
+        download = client.get("/codex-api/download")
+        assert download.status_code == 200
+        assert download.headers["content-type"].startswith("application/zip")
+        assert "VietShare-Codex-Portable.zip" in download.headers["content-disposition"]
+        assert client.get("/codex-api/VietShare-Codex-Portable.exe").status_code == 404
+
+    asyncio.run(engine.dispose())
 
 
 def test_client_ip_trusts_cloudflare_header_only_from_cloudflare() -> None:

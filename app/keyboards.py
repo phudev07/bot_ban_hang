@@ -45,6 +45,7 @@ def main_menu(
     language: str,
     *,
     sms_enabled: bool = False,
+    codex_enabled: bool = False,
 ) -> InlineKeyboardMarkup:
     builder = InlineKeyboardBuilder()
     builder.row(
@@ -57,6 +58,12 @@ def main_menu(
     )
     if sms_enabled:
         builder.row(InlineKeyboardButton(text=tr(language, "sms"), callback_data="menu:sms"))
+    if codex_enabled:
+        builder.row(
+            InlineKeyboardButton(
+                text=tr(language, "codex_api"), callback_data="menu:codex-api"
+            )
+        )
     builder.row(
         InlineKeyboardButton(text=tr(language, "preorder"), callback_data="menu:preorders")
     )
@@ -345,7 +352,9 @@ def categories_menu(categories: list[Category], language: str) -> InlineKeyboard
     for category in categories:
         name = sanitize_customer_text(category.name_en if language == "en" else category.name_vi)
         normalized = f"{category.name_vi} {category.name_en}".lower()
-        if "gemini" in normalized or "veo3" in normalized:
+        if "api codex" in normalized:
+            name = tr(language, "codex_api")
+        elif "gemini" in normalized or "veo3" in normalized:
             name = "💎 GG Pro 18M"
         elif "gpt" in normalized or "chatgpt" in normalized:
             name = "🤖 Tài khoản GPT" if language == "vi" else "🤖 GPT accounts"
@@ -353,6 +362,20 @@ def categories_menu(categories: list[Category], language: str) -> InlineKeyboard
     builder.adjust(1)
     builder.row(InlineKeyboardButton(text=tr(language, "back"), callback_data="back:menu"))
     return builder.as_markup()
+
+
+def codex_products_menu(
+    products: list[Product],
+    language: str,
+    prices: dict[int, int] | None = None,
+) -> InlineKeyboardMarkup:
+    return products_menu(
+        products,
+        language,
+        "back:menu",
+        prices,
+        origin="codex",
+    )
 
 
 def products_menu(
@@ -410,7 +433,13 @@ def product_detail(
             rows.append(
                 [InlineKeyboardButton(text=coupon_label, callback_data=f"coupon:{product.id}")]
             )
-    back_callback = "menu:quick" if origin == "quick" else f"cat:{product.category_id}"
+    back_callback = (
+        "menu:quick"
+        if origin == "quick"
+        else "menu:codex-api"
+        if origin == "codex"
+        else f"cat:{product.category_id}"
+    )
     rows.append(
         [
             InlineKeyboardButton(

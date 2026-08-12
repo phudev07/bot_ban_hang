@@ -11,6 +11,8 @@ services:
         condition: service_healthy
     ports:
       - "127.0.0.1:8080:8080"
+    volumes:
+      - ./downloads:/app/downloads:ro
     read_only: true
     tmpfs:
       - /tmp:size=64m,mode=1777

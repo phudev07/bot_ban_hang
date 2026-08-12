@@ -10,7 +10,7 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Request
-from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
 from pydantic import BaseModel, ConfigDict, Field
 from redis.asyncio import Redis
@@ -50,6 +50,23 @@ from app.utils import SecretCipher, sanitize_customer_text
 
 templates = Jinja2Templates(directory=Path(__file__).parent / "templates")
 logger = logging.getLogger(__name__)
+CODEX_ACTIVATION_URL = "https://api.maxdonchal.bond/"
+CODEX_GATEWAY_URL = "https://api.maxdonchal.bond/v1"
+CODEX_9ROUTER_URL = "http://localhost:20128/dashboard/cli-tools/codex"
+CODEX_SCREENSHOT_PATH = Path(__file__).parent / "static" / "codex-9router.png"
+CODEX_MODELS = (
+    "cx/gpt-5.6",
+    "cx/gpt-5.6-sol",
+    "cx/gpt-5.6-terra",
+    "cx/gpt-5.6-luna",
+    "cx/gpt-5.6-sol-review",
+    "cx/gpt-5.6-terra-review",
+    "cx/gpt-5.6-luna-review",
+    "cx/gpt-5.5",
+    "cx/gpt-5.5-review",
+    "cx/gpt-5.4",
+    "cx/gpt-5.4-review",
+)
 API_PROCESSING_RECOVERY_AFTER = timedelta(minutes=15)
 API_ID_PATTERN = re.compile(r"^VS[0-9A-F]{16}$")
 API_SIGNATURE_PATTERN = re.compile(r"^[0-9a-fA-F]{64}$")
@@ -154,6 +171,47 @@ def public_order_failure_code(message: str) -> str:
 
 def create_public_api_docs_router(settings: Settings) -> APIRouter:
     router = APIRouter(tags=["shop-api-docs"])
+
+    @router.get("/codex-api", response_class=HTMLResponse)
+    @router.get("/codex-api/", response_class=HTMLResponse, include_in_schema=False)
+    async def codex_api_guide(request: Request) -> HTMLResponse:
+        response = templates.TemplateResponse(
+            request,
+            "codex_api_guide.html",
+            {
+                "activation_url": CODEX_ACTIVATION_URL,
+                "gateway_url": CODEX_GATEWAY_URL,
+                "router_url": CODEX_9ROUTER_URL,
+                "models": CODEX_MODELS,
+            },
+        )
+        response.headers["Cache-Control"] = "public, max-age=300"
+        return response
+
+    @router.get("/codex-api/assets/9router.png", response_class=FileResponse)
+    async def codex_9router_screenshot() -> FileResponse:
+        if not CODEX_SCREENSHOT_PATH.is_file():
+            raise HTTPException(status_code=404, detail="Guide image is unavailable")
+        return FileResponse(
+            CODEX_SCREENSHOT_PATH,
+            media_type="image/png",
+            headers={"Cache-Control": "public, max-age=86400, immutable"},
+        )
+
+    @router.get("/codex-api/download", response_class=FileResponse)
+    async def download_codex_portable() -> FileResponse:
+        portable_zip = Path(settings.codex_portable_zip_path)
+        if not portable_zip.is_file():
+            raise HTTPException(status_code=404, detail="Portable app is temporarily unavailable")
+        return FileResponse(
+            portable_zip,
+            media_type="application/zip",
+            filename="VietShare-Codex-Portable.zip",
+            headers={
+                "Cache-Control": "public, max-age=300",
+                "X-Content-Type-Options": "nosniff",
+            },
+        )
 
     @router.get("/docs", response_class=HTMLResponse)
     @router.get("/docs/", response_class=HTMLResponse, include_in_schema=False)

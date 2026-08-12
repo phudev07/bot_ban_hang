@@ -96,7 +96,7 @@ def product_brand_emoji_id(name: str) -> str:
         marker in normalized for marker in ("gg", "google", "jio")
     ):
         return GEMINI_EMOJI_ID
-    if any(marker in normalized for marker in ("chatgpt", "openai", "gpt")):
+    if any(marker in normalized for marker in ("chatgpt", "openai", "gpt", "codex")):
         return CHATGPT_EMOJI_ID
     if any(marker in normalized for marker in ("google", "pixel", "gg pro")):
         return GOOGLE_EMOJI_ID
@@ -150,6 +150,7 @@ def button_emoji_id(text: str) -> str | None:
             "chatgpt",
             "openai",
             "gpt",
+            "codex",
             "gemini",
             "veo",
             "antigravity",

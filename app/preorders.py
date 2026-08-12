@@ -755,6 +755,7 @@ async def _send_preorder_notification(
     bot: Bot,
     cipher: SecretCipher,
     preorder_id: int,
+    codex_docs_url: str,
 ) -> None:
     async with session_factory() as session:
         preorder = await session.scalar(
@@ -809,6 +810,16 @@ async def _send_preorder_notification(
                     primary_order_id=min(order_ids),
                     secrets=secrets,
                     language=user.language,
+                    guide_url=(
+                        codex_docs_url
+                        if (
+                            preorder.product
+                            and (preorder.product.supplier_product_id or "").startswith(
+                                "apicodex_"
+                            )
+                        )
+                        else None
+                    ),
                 ),
             )
             await send_purchase_tutorials(
@@ -857,6 +868,7 @@ async def preorder_worker(
     *,
     interval_seconds: int,
     referral_commission_percent: int,
+    codex_docs_url: str = "",
 ) -> None:
     interval = max(2, int(interval_seconds))
     loop = asyncio.get_running_loop()
@@ -894,6 +906,7 @@ async def preorder_worker(
                     bot,
                     cipher,
                     notification_id,
+                    codex_docs_url,
                 )
         except asyncio.CancelledError:
             raise

@@ -1613,6 +1613,9 @@ async def main() -> None:
             haji_client,
             interval_seconds=settings.preorder_worker_seconds,
             referral_commission_percent=settings.referral_commission_percent,
+            codex_docs_url=(
+                f"{settings.shop_api_base_url.rstrip('/').removesuffix('/v1')}/codex-api"
+            ),
         )
     )
     notification_limiter = BroadcastRateLimiter(settings.broadcast_rate_per_second)

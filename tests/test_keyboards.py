@@ -1,4 +1,5 @@
 from app.keyboards import (
+    codex_products_menu,
     main_menu,
     order_history_menu,
     product_detail,
@@ -87,13 +88,16 @@ def test_quick_buy_product_returns_to_quick_buy_list() -> None:
 
 
 def test_main_menu_exposes_warehouse_api_and_referrals() -> None:
-    keyboard = main_menu("vi", sms_enabled=True)
+    keyboard = main_menu("vi", sms_enabled=True, codex_enabled=True)
     callbacks = [button.callback_data for row in keyboard.inline_keyboard for button in row]
 
     assert "menu:warehouse-api" in callbacks
     assert "menu:referral" in callbacks
     assert "menu:sms" in callbacks
+    assert "menu:codex-api" in callbacks
     assert "menu:preorders" in callbacks
+    rows = [[button.callback_data for button in row] for row in keyboard.inline_keyboard]
+    assert rows.index(["menu:codex-api"]) == rows.index(["menu:sms"]) + 1
 
 
 def test_main_menu_hides_sms_until_provider_is_configured() -> None:
@@ -101,6 +105,18 @@ def test_main_menu_hides_sms_until_provider_is_configured() -> None:
     callbacks = [button.callback_data for row in keyboard.inline_keyboard for button in row]
 
     assert "menu:sms" not in callbacks
+    assert "menu:codex-api" not in callbacks
+
+
+def test_codex_product_navigation_returns_to_dedicated_menu() -> None:
+    product = make_product()
+    product.external_stock = 2
+    listing = codex_products_menu([product], "vi")
+    assert listing.inline_keyboard[0][0].callback_data == "prod:10:codex"
+
+    detail = product_detail(product, "vi", stock=2, origin="codex")
+    callbacks = [button.callback_data for row in detail.inline_keyboard for button in row]
+    assert "menu:codex-api" in callbacks
 
 
 def test_sms_menu_shows_one_button_per_available_country() -> None:

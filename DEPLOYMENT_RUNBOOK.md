@@ -101,8 +101,14 @@ and binds port 8080 only to localhost. Caddy is the public reverse proxy.
 - Supplier cost is saved at delivery time. Dashboard profit is revenue minus cost minus
   referral commission.
 - Sumi, Le Hai, Canboso, Haji, RentSim, and AutoSMS keys live only in production `.env`.
-- The discontinued Codex/Claude catalog is archived at startup. Historical order rows stay
-  intact for support and accounting, but the products are not shown or sold.
+- The old NCE Codex/Claude catalog is archived at startup. Historical rows remain intact.
+  The current Codex-only catalog is supplied through Haji with the product IDs
+  `apicodex_10m_1day`, `apicodex_50m_1day`, and `apicodex_100m_1day`.
+- Codex CDK products are bot-only and remain excluded from the public warehouse API.
+  Their customer guide is `https://token.vietshare.site/codex-api`.
+- The portable Windows app is not stored in Git. Production serves the ZIP from
+  `/opt/telegram-sepay-shop/downloads/VietShare-Codex-Portable.zip`, mounted read-only
+  into the app container at `/app/downloads/VietShare-Codex-Portable.zip`.
 - Warehouse API partners receive shop product IDs and shop selling prices, never supplier
   keys, supplier URLs, supplier product IDs, supplier order IDs, or supplier cost.
 - Warehouse API only sells active account products. SMS rental is excluded.
@@ -195,6 +201,17 @@ Remove-Item -LiteralPath $archive
 This recreates only `app`; PostgreSQL and Redis remain running. Do not run
 `docker compose down -v`, because `-v` deletes persistent volumes.
 
+When the portable Codex app changes, upload its ZIP separately before recreating `app`:
+
+```powershell
+scp -q -i "$HOME\.ssh\codex_vps" `
+  downloads\VietShare-Codex-Portable.zip `
+  root@160.191.243.91:/tmp/VietShare-Codex-Portable.zip
+
+ssh -i "$HOME\.ssh\codex_vps" root@160.191.243.91 `
+  "install -d -m 755 /opt/telegram-sepay-shop/downloads && install -m 644 /tmp/VietShare-Codex-Portable.zip /opt/telegram-sepay-shop/downloads/VietShare-Codex-Portable.zip && rm -f /tmp/VietShare-Codex-Portable.zip"
+```
+
 ## 8. Verify a deployment
 
 Check the marker, containers, internal health, and recent errors:
@@ -228,13 +245,17 @@ curl.exe -sS -o NUL -w "Warehouse health: %{http_code}`n" `
   "https://token.vietshare.site/v1/health"
 curl.exe -sS -o NUL -w "API docs: %{http_code}`n" `
   "https://token.vietshare.site/docs"
+curl.exe -sS -o NUL -w "Codex guide: %{http_code}`n" `
+  "https://token.vietshare.site/codex-api"
+curl.exe -sS -o NUL -w "Codex portable ZIP: %{http_code}`n" `
+  "https://token.vietshare.site/codex-api/download"
 curl.exe -sS -o NUL -w "Admin: %{http_code}`n" `
   "https://160-191-243-91.sslip.io/admin"
 curl.exe -sS -o NUL -w "Blocked API on sslip.io: %{http_code}`n" `
   "https://160-191-243-91.sslip.io/v1"
 ```
 
-Warehouse health and API docs should return `200`. Admin should return `303` to the login
+Warehouse health, API docs, Codex guide, and Codex ZIP should return `200`. Admin should return `303` to the login
 page when there is no session (or `200` after following the redirect). The blocked
 sslip.io API check should return `404`.
 

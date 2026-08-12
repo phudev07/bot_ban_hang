@@ -53,13 +53,40 @@ def catalog_payload() -> dict[str, object]:
                     "description": "Giao ngay",
                 },
                 {
+                    "product_id": "apicodex_10m_1day",
+                    "name": "API Codex 10M Token 1 ngay (BHF)",
+                    "price": 25_000,
+                    "currency": "VND",
+                    "stock_count": 0,
+                    "available": False,
+                    "description": "24 gio sau kich hoat",
+                },
+                {
+                    "product_id": "apicodex_50m_1day",
+                    "name": "API Codex 50M Token 1 ngay (BHF)",
+                    "price": 35_000,
+                    "currency": "VND",
+                    "stock_count": 2,
+                    "available": True,
+                    "description": "24 gio sau kich hoat",
+                },
+                {
+                    "product_id": "apicodex_100m_1day",
+                    "name": "API Codex 100M Token 1 ngay (BHF)",
+                    "price": 55_000,
+                    "currency": "VND",
+                    "stock_count": 3,
+                    "available": True,
+                    "description": "24 gio sau kich hoat",
+                },
+                {
                     "product_id": "other_product",
                     "name": "Other account",
                     "price": 1_000,
                     "stock_count": 100,
                 },
             ],
-            "total_products": 4,
+            "total_products": 7,
         },
     }
 
@@ -72,6 +99,10 @@ def test_haji_product_matching_is_limited_to_requested_families() -> None:
     assert haji_product_kind("12K ChatGPT") == "gpt_k12"
     assert haji_product_kind("ChatGPT Go 1 month") is None
     assert haji_product_kind("ChatGPT Plus iCloud") is None
+    assert haji_product_kind("apicodex_10m_1day API Codex 10M Token") == "codex"
+    assert haji_product_kind("API Codex 50M Token 1 ngay") == "codex"
+    assert haji_product_kind("API Codex 100M Token 1 ngay") == "codex"
+    assert haji_product_kind("API Codex 500M Token") is None
 
 
 def test_haji_catalog_balance_and_bulk_purchase_use_documented_contract() -> None:
@@ -129,6 +160,9 @@ def test_haji_catalog_balance_and_bulk_purchase_use_documented_contract() -> Non
             "netflix",
             "gpt_gcash",
             "gpt_k12",
+            "codex",
+            "codex",
+            "codex",
         ]
         snapshot = await client.fetch_snapshot("netflix_4k")
         assert snapshot.unit_price == 20_000
@@ -247,7 +281,7 @@ def test_haji_retry_reuses_the_same_idempotency_key() -> None:
     asyncio.run(scenario())
 
 
-def test_haji_products_are_imported_into_netflix_and_existing_gpt_categories() -> None:
+def test_haji_products_are_imported_with_fixed_codex_sale_prices() -> None:
     def handler(request: httpx.Request) -> httpx.Response:
         if request.url.path == "/api/v2/catalog":
             return httpx.Response(200, json=catalog_payload())
@@ -281,7 +315,7 @@ def test_haji_products_are_imported_into_netflix_and_existing_gpt_categories() -
                     .order_by(Product.supplier_product_id)
                 )
             ).all()
-            assert len(rows) == 3
+            assert len(rows) == 6
             by_id = {product.supplier_product_id: (product, category) for product, category in rows}
             netflix, netflix_category = by_id["netflix_4k"]
             assert netflix.price == 25_000
@@ -289,6 +323,16 @@ def test_haji_products_are_imported_into_netflix_and_existing_gpt_categories() -
             assert netflix_category.name_vi == "Netflix"
             assert by_id["gpt_gcash_1m"][1].name_vi == "ChatGPT"
             assert by_id["chatgpt_k12"][1].name_vi == "ChatGPT"
+            codex_10m, codex_category = by_id["apicodex_10m_1day"]
+            codex_50m = by_id["apicodex_50m_1day"][0]
+            codex_100m = by_id["apicodex_100m_1day"][0]
+            assert codex_category.name_vi == "API CODEX"
+            assert codex_10m.price == 30_000 and codex_10m.supplier_markup == 5_000
+            assert codex_50m.price == 50_000 and codex_50m.supplier_markup == 15_000
+            assert codex_100m.price == 70_000 and codex_100m.supplier_markup == 15_000
+            assert codex_10m.allow_quantity is False and codex_10m.max_quantity == 1
+            assert codex_50m.allow_quantity is False and codex_50m.max_quantity == 1
+            assert codex_100m.allow_quantity is False and codex_100m.max_quantity == 1
         await client.aclose()
         await engine.dispose()
 

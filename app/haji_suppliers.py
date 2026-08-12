@@ -20,7 +20,23 @@ HAJI_PROVIDER = "haji"
 HAJI_NETFLIX_CATEGORY_VI = "Netflix"
 HAJI_NETFLIX_CATEGORY_EN = "Netflix"
 HAJI_NETFLIX_CATEGORY_POSITION = 3
-HAJI_SUPPORTED_KINDS = frozenset({"netflix", "gpt_gcash", "gpt_k12"})
+HAJI_CODEX_CATEGORY_VI = "API CODEX"
+HAJI_CODEX_CATEGORY_EN = "CODEX API"
+HAJI_CODEX_CATEGORY_POSITION = 4
+HAJI_CODEX_PRODUCT_MARKUPS = {
+    "apicodex_10m_1day": 5_000,
+    "apicodex_50m_1day": 15_000,
+    "apicodex_100m_1day": 15_000,
+}
+HAJI_CODEX_PRODUCT_NAMES = {
+    "apicodex_10m_1day": ("API Codex 10M Token · 24 giờ", "Codex API 10M Tokens · 24 hours"),
+    "apicodex_50m_1day": ("API Codex 50M Token · 24 giờ", "Codex API 50M Tokens · 24 hours"),
+    "apicodex_100m_1day": (
+        "API Codex 100M Token · 24 giờ",
+        "Codex API 100M Tokens · 24 hours",
+    ),
+}
+HAJI_SUPPORTED_KINDS = frozenset({"netflix", "gpt_gcash", "gpt_k12", "codex"})
 
 
 @dataclass(frozen=True)
@@ -54,6 +70,8 @@ def _safe_int(value: object) -> int:
 def haji_product_kind(value: object) -> str | None:
     normalized = _normalized(value).replace("_", " ").replace("-", " ")
     normalized = re.sub(r"\s+", " ", normalized).strip()
+    if "codex" in normalized and re.search(r"\b(?:10|50|100)\s*m\b", normalized):
+        return "codex"
     if "netflix" in normalized:
         return "netflix"
     if ("gpt" in normalized or "chatgpt" in normalized) and "gcash" in normalized:
@@ -65,6 +83,14 @@ def haji_product_kind(value: object) -> str | None:
     ):
         return "gpt_k12"
     return None
+
+
+def haji_product_markup(product_id: str, default_markup: int) -> int:
+    return HAJI_CODEX_PRODUCT_MARKUPS.get(product_id, max(0, int(default_markup)))
+
+
+def haji_product_names(source: HajiProduct) -> tuple[str, str]:
+    return HAJI_CODEX_PRODUCT_NAMES.get(source.product_id, (source.name, source.name))
 
 
 def _delivery_items(data: dict[str, object]) -> tuple[str, ...]:
@@ -322,7 +348,7 @@ def _category_matches(category: Category, *markers: str) -> bool:
     return any(marker in normalized for marker in markers)
 
 
-async def _ensure_categories(session: AsyncSession) -> tuple[Category, Category]:
+async def _ensure_categories(session: AsyncSession) -> tuple[Category, Category, Category]:
     categories = list(
         await session.scalars(
             select(Category)
@@ -365,7 +391,27 @@ async def _ensure_categories(session: AsyncSession) -> tuple[Category, Category]
         await session.flush()
     else:
         netflix_category.active = True
-    return gpt_category, netflix_category
+
+    codex_category = next(
+        (category for category in categories if _category_matches(category, "api codex")),
+        None,
+    )
+    if codex_category is None:
+        codex_category = Category(
+            name_vi=HAJI_CODEX_CATEGORY_VI,
+            name_en=HAJI_CODEX_CATEGORY_EN,
+            position=HAJI_CODEX_CATEGORY_POSITION,
+            active=True,
+        )
+        session.add(codex_category)
+        await session.flush()
+    else:
+        codex_category.name_vi = HAJI_CODEX_CATEGORY_VI
+        codex_category.name_en = HAJI_CODEX_CATEGORY_EN
+        codex_category.position = HAJI_CODEX_CATEGORY_POSITION
+        codex_category.active = True
+        codex_category.archived_at = None
+    return gpt_category, netflix_category, codex_category
 
 
 async def ensure_haji_products(
@@ -395,7 +441,7 @@ async def ensure_haji_products(
         if catalog_failed:
             return
 
-        gpt_category, netflix_category = await _ensure_categories(session)
+        gpt_category, netflix_category, codex_category = await _ensure_categories(session)
         by_supplier_id = {
             product.supplier_product_id: product
             for product in existing
@@ -407,29 +453,49 @@ async def ensure_haji_products(
                 product.external_stock = 0
 
         for source in products:
-            category = netflix_category if source.kind == "netflix" else gpt_category
-            description_vi = (
-                f"{source.name}. Tài khoản được giao tự động ngay sau khi thanh toán thành công."
+            category = (
+                netflix_category
+                if source.kind == "netflix"
+                else codex_category
+                if source.kind == "codex"
+                else gpt_category
             )
-            description_en = (
-                f"{source.name}. The account is delivered automatically after payment."
-            )
+            name_vi, name_en = haji_product_names(source)
+            if source.kind == "codex":
+                description_vi = (
+                    "CDK kích hoạt gói API Codex, hạn sử dụng 24 giờ tính từ lúc kích hoạt. "
+                    "Sau khi nhận CDK, mở trang hướng dẫn để kích hoạt và kết nối bằng "
+                    "9Router hoặc ứng dụng VietShare Codex Portable."
+                )
+                description_en = (
+                    "A CDK for a Codex API package valid for 24 hours after activation. "
+                    "Open the setup guide after delivery to activate it and connect through "
+                    "9Router or VietShare Codex Portable."
+                )
+            else:
+                description_vi = (
+                    f"{source.name}. Tài khoản được giao tự động ngay sau khi thanh toán thành công."
+                )
+                description_en = (
+                    f"{source.name}. The account is delivered automatically after payment."
+                )
+            markup_value = haji_product_markup(source.product_id, markup)
             product = by_supplier_id.get(source.product_id)
             if product is None:
                 session.add(
                     Product(
                         category_id=category.id,
-                        name_vi=source.name,
-                        name_en=source.name,
+                        name_vi=name_vi,
+                        name_en=name_en,
                         description_vi=description_vi,
                         description_en=description_en,
-                        price=source.unit_price + markup,
+                        price=source.unit_price + markup_value,
                         product_type="account",
-                        allow_quantity=True,
-                        max_quantity=100,
+                        allow_quantity=source.kind != "codex",
+                        max_quantity=1 if source.kind == "codex" else 100,
                         fulfillment_source=HAJI_PROVIDER,
                         supplier_product_id=source.product_id,
-                        supplier_markup=markup,
+                        supplier_markup=markup_value,
                         supplier_price=source.unit_price,
                         external_stock=0,
                         active=True,

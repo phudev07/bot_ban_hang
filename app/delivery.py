@@ -64,6 +64,7 @@ def delivery_keyboard(
     primary_order_id: int,
     secrets: list[str],
     language: str,
+    guide_url: str | None = None,
 ) -> InlineKeyboardMarkup:
     rows: list[list[InlineKeyboardButton]] = []
     combined = "\n".join(secrets)
@@ -87,6 +88,19 @@ def delivery_keyboard(
             )
         ]
     )
+    if guide_url:
+        rows.append(
+            [
+                InlineKeyboardButton(
+                    text=(
+                        "📘 Hướng dẫn kích hoạt API Codex"
+                        if language == "vi"
+                        else "📘 Codex API setup guide"
+                    ),
+                    url=guide_url,
+                )
+            ]
+        )
     rows.append(
         [
             InlineKeyboardButton(

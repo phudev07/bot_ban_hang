@@ -76,6 +76,7 @@ def test_start_home_keeps_quick_actions_and_shows_main_menu() -> None:
             user,  # type: ignore[arg-type]
             settings,  # type: ignore[arg-type]
             sms_enabled=True,
+            codex_enabled=True,
         )
 
         assert message.answer.await_count == 3
@@ -92,6 +93,7 @@ def test_start_home_keeps_quick_actions_and_shows_main_menu() -> None:
         assert "menu:quick" in menu_callbacks
         assert "menu:deposit" in menu_callbacks
         assert "menu:sms" in menu_callbacks
+        assert "menu:codex-api" in menu_callbacks
 
     asyncio.run(scenario())
 

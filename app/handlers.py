@@ -30,6 +30,7 @@ from app.haji_suppliers import HajiClient
 from app.keyboards import (
     back_menu,
     categories_menu,
+    codex_products_menu,
     coupon_quantity_menu,
     deposit_amounts,
     language_menu,
@@ -277,6 +278,7 @@ async def send_home_with_navigation(
     settings: Settings,
     *,
     sms_enabled: bool,
+    codex_enabled: bool = False,
 ) -> None:
     quick_access_text = (
         "⌨️ <b>Phím thao tác nhanh đã sẵn sàng</b>"
@@ -303,6 +305,7 @@ async def send_home_with_navigation(
         reply_markup=main_menu(
             user.language,
             sms_enabled=sms_enabled,
+            codex_enabled=codex_enabled,
         ),
         disable_web_page_preview=True,
     )
@@ -325,6 +328,10 @@ def create_router(
     warehouse_docs_url = (
         f"{settings.shop_api_base_url.rstrip('/').removesuffix('/v1')}/docs"
     )
+    codex_docs_url = (
+        f"{settings.shop_api_base_url.rstrip('/').removesuffix('/v1')}/codex-api"
+    )
+    codex_enabled = haji_client is not None
     sms_sources = {
         key: value
         for key, value in (("1", autosms_client), ("855", rentsim_client))
@@ -550,6 +557,7 @@ def create_router(
             user,
             settings,
             sms_enabled=sms_enabled,
+            codex_enabled=codex_enabled,
         )
 
     @router.message(Command("muanhanh"))
@@ -582,6 +590,7 @@ def create_router(
             reply_markup=main_menu(
                 user.language,
                 sms_enabled=sms_enabled,
+                codex_enabled=codex_enabled,
             ),
             disable_web_page_preview=True,
         )
@@ -677,6 +686,7 @@ def create_router(
                 reply_markup=main_menu(
                     user.language,
                     sms_enabled=sms_enabled,
+                    codex_enabled=codex_enabled,
                 ),
                 disable_web_page_preview=True,
             )
@@ -758,6 +768,49 @@ def create_router(
                     "back:menu",
                     display_prices,
                     origin="quick",
+                ),
+            )
+
+    @router.callback_query(F.data == "menu:codex-api")
+    async def show_codex_products(callback: CallbackQuery, session: AsyncSession) -> None:
+        await callback.answer()
+        user = await get_or_create_user(callback, session)
+        products = [
+            product
+            for product in await active_products(session)
+            if product.fulfillment_source == "haji"
+            and (product.supplier_product_id or "").startswith("apicodex_")
+        ]
+        flash_prices = await active_flash_sale_prices(
+            session, [product.id for product in products]
+        )
+        display_prices = await customer_product_prices(
+            session,
+            products,
+            user.telegram_id,
+            flash_prices,
+        )
+        text = (
+            "🤖 <b>API CODEX</b>\n\n"
+            "Chọn gói token cần mua. Mỗi gói có hạn 24 giờ tính từ lúc kích hoạt CDK."
+            if user.language == "vi"
+            else "🤖 <b>CODEX API</b>\n\n"
+            "Choose a token package. Each package is valid for 24 hours after CDK activation."
+        )
+        if not products:
+            text += (
+                "\n\nCác gói hiện đang tạm hết hàng."
+                if user.language == "vi"
+                else "\n\nAll packages are temporarily unavailable."
+            )
+        if callback.message:
+            await edit_or_send_text(
+                callback.message,
+                text,
+                reply_markup=codex_products_menu(
+                    products,
+                    user.language,
+                    display_prices,
                 ),
             )
 
@@ -1064,6 +1117,13 @@ def create_router(
                     primary_order_id=min(order_ids),
                     secrets=secrets,
                     language=user.language,
+                    guide_url=(
+                        codex_docs_url
+                        if (orders[0].product.supplier_product_id or "").startswith(
+                            "apicodex_"
+                        )
+                        else None
+                    ),
                 ),
             )
         await callback.answer()
@@ -1418,7 +1478,7 @@ def create_router(
         user = await get_or_create_user(callback, session)
         parts = callback.data.split(":")
         product_id = int(parts[1])
-        origin = parts[2] if len(parts) >= 3 and parts[2] == "quick" else None
+        origin = parts[2] if len(parts) >= 3 and parts[2] in {"quick", "codex"} else None
         product = await session.get(Product, product_id)
         if product is None or not product.active:
             await callback.answer("Sản phẩm không tồn tại.", show_alert=True)
@@ -1714,6 +1774,13 @@ def create_router(
                     primary_order_id=min(order_ids),
                     secrets=result.secrets,
                     language=user.language,
+                    guide_url=(
+                        codex_docs_url
+                        if (result.orders[0].product.supplier_product_id or "").startswith(
+                            "apicodex_"
+                        )
+                        else None
+                    ),
                 ),
             )
             await send_purchase_tutorials(
@@ -2736,6 +2803,13 @@ def create_router(
                     primary_order_id=min(order_ids),
                     secrets=secrets,
                     language=user.language,
+                    guide_url=(
+                        codex_docs_url
+                        if (orders[0].product.supplier_product_id or "").startswith(
+                            "apicodex_"
+                        )
+                        else None
+                    ),
                 ),
             )
         await callback.answer()
@@ -2994,6 +3068,7 @@ def create_router(
                 reply_markup=main_menu(
                     user.language,
                     sms_enabled=sms_enabled,
+                    codex_enabled=codex_enabled,
                 ),
                 disable_web_page_preview=True,
             )
@@ -3021,6 +3096,7 @@ def create_router(
                 reply_markup=main_menu(
                     user.language,
                     sms_enabled=sms_enabled,
+                    codex_enabled=codex_enabled,
                 ),
                 disable_web_page_preview=True,
             )

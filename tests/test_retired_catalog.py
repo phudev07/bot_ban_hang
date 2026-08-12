@@ -53,6 +53,45 @@ def test_discontinued_api_catalog_is_archived_without_deleting_rows() -> None:
     asyncio.run(scenario())
 
 
+def test_new_haji_codex_product_survives_legacy_catalog_cleanup() -> None:
+    async def scenario() -> None:
+        engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+        async with engine.begin() as connection:
+            await connection.run_sync(Base.metadata.create_all)
+        sessions = async_sessionmaker(engine, expire_on_commit=False)
+        async with sessions() as session:
+            category = Category(
+                name_vi="API CODEX & CLAUDE",
+                name_en="CODEX & CLAUDE API",
+                position=4,
+            )
+            session.add(category)
+            await session.flush()
+            session.add(
+                Product(
+                    category_id=category.id,
+                    name_vi="API Codex 50M Token",
+                    name_en="Codex API 50M Tokens",
+                    price=50_000,
+                    fulfillment_source="haji",
+                    supplier_product_id="apicodex_50m_1day",
+                )
+            )
+            await session.commit()
+
+        assert await retire_discontinued_api_catalog(sessions) == 0
+        async with sessions() as session:
+            category = await session.scalar(select(Category))
+            product = await session.scalar(select(Product))
+            assert category is not None and category.active is True
+            assert category.archived_at is None
+            assert product is not None and product.active is True
+            assert product.archived_at is None
+        await engine.dispose()
+
+    asyncio.run(scenario())
+
+
 def test_discontinued_source_is_archived_after_category_rename() -> None:
     async def scenario() -> None:
         engine = create_async_engine("sqlite+aiosqlite:///:memory:")

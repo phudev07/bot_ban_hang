@@ -18,7 +18,7 @@
 160-191-243-91.sslip.io {
 	import shop_security
 
-	@warehouse_public path /v1 /v1/* /docs /docs/
+	@warehouse_public path /v1 /v1/* /docs /docs/ /codex-api /codex-api/ /codex-api/*
 	handle @warehouse_public {
 		respond 404
 	}
@@ -44,6 +44,14 @@ token.vietshare.site {
 
 		@api_docs path /docs /docs/
 		handle @api_docs {
+			reverse_proxy 127.0.0.1:8080 {
+				lb_try_duration 30s
+				lb_try_interval 250ms
+			}
+		}
+
+		@codex_docs path /codex-api /codex-api/ /codex-api/*
+		handle @codex_docs {
 			reverse_proxy 127.0.0.1:8080 {
 				lb_try_duration 30s
 				lb_try_interval 250ms

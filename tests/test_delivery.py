@@ -76,3 +76,21 @@ def test_delivery_file_contains_all_accounts() -> None:
     assert "first:secret\nsecond:secret" in content
     assert "1. first:secret" not in content
     assert "2. second:secret" not in content
+
+
+def test_codex_delivery_can_open_setup_guide() -> None:
+    keyboard = delivery_keyboard(
+        primary_order_id=13,
+        secrets=["CDK-CODEX-TEST"],
+        language="vi",
+        guide_url="https://token.vietshare.site/codex-api",
+    )
+
+    guide_buttons = [
+        button
+        for row in keyboard.inline_keyboard
+        for button in row
+        if button.url == "https://token.vietshare.site/codex-api"
+    ]
+    assert len(guide_buttons) == 1
+    assert "Codex" in guide_buttons[0].text

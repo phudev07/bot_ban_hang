@@ -67,6 +67,9 @@ def create_api(
     owned_api_redis = api_redis is None
     api_redis_client = api_redis or Redis.from_url(settings.redis_url, decode_responses=True)
     ingress_limiter = FixedWindowRateLimiter(api_redis_client, "http-limit")
+    codex_docs_url = (
+        f"{settings.shop_api_base_url.rstrip('/').removesuffix('/v1')}/codex-api"
+    )
 
     @asynccontextmanager
     async def lifespan(_app: FastAPI):
@@ -451,6 +454,7 @@ def create_api(
                     reply_markup=main_menu(
                         result.language,
                         sms_enabled=(rentsim_client is not None or autosms_client is not None),
+                        codex_enabled=haji_client is not None,
                     ),
                 )
             except Exception:
@@ -477,6 +481,11 @@ def create_api(
                         primary_order_id=min(order_ids),
                         secrets=secret_values,
                         language=result.language,
+                        guide_url=(
+                            codex_docs_url
+                            if (result.supplier_product_id or "").startswith("apicodex_")
+                            else None
+                        ),
                     ),
                 )
                 await send_purchase_tutorials(
@@ -516,6 +525,7 @@ def create_api(
                     reply_markup=main_menu(
                         result.language,
                         sms_enabled=(rentsim_client is not None or autosms_client is not None),
+                        codex_enabled=haji_client is not None,
                     ),
                 )
             except Exception:
@@ -563,6 +573,7 @@ def create_api(
                     reply_markup=main_menu(
                         result.language,
                         sms_enabled=(rentsim_client is not None or autosms_client is not None),
+                        codex_enabled=haji_client is not None,
                     ),
                 )
             except Exception:
