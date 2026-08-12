@@ -299,8 +299,11 @@ def test_codex_guide_and_zip_download_are_public_but_raw_exe_is_not(tmp_path) ->
         assert guide.status_code == 200
         assert "https://api.maxdonchal.bond/" in guide.text
         assert "http://localhost:20128/dashboard/cli-tools/codex" in guide.text
+        assert "https://api.maxdonchal.bond/v1" in guide.text
         assert "Kích hoạt key" in guide.text
         assert "Custom Codex" in guide.text
+        assert "Lưu cài đặt" in guide.text
+        assert 'class="copy-button"' in guide.text
         assert "30.000đ" not in guide.text
         assert "CDK" not in guide.text
         assert 'href="/codex-api/download"' in guide.text
