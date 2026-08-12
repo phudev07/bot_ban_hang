@@ -25,6 +25,7 @@ from app.models import (
 )
 from app.price_alerts import ADMIN_PRICE_ALERT_PROVIDER
 from app.stock_alerts import (
+    ADMIN_MANUAL_STOCK_ALERT_PROVIDER,
     INVENTORY_STOCK_ALERT_PROVIDER,
     STOCK_ALERT_COOLDOWN,
     stock_alert_enabled,
@@ -1044,23 +1045,30 @@ async def _claim_stock_alert(
         )
         for alert, product in rows:
             inventory_alert = alert.provider == INVENTORY_STOCK_ALERT_PROVIDER
+            manual_alert = alert.provider == ADMIN_MANUAL_STOCK_ALERT_PROVIDER
             if (
                 not product.active
                 or product.archived_at is not None
-                or getattr(product, "stock_notifications_enabled", True) is False
+                or (
+                    not manual_alert
+                    and getattr(product, "stock_notifications_enabled", True) is False
+                )
                 or (
                     not inventory_alert
+                    and not manual_alert
                     and (
                         not product_supplier_api_enabled(product, alert.provider)
                         or not stock_alert_enabled(product)
                     )
                 )
-                or product.force_out_of_stock
+                or (product.force_out_of_stock and not manual_alert)
             ):
                 alert.status = "superseded"
                 continue
 
-            if inventory_alert:
+            if manual_alert:
+                current_stock = max(0, int(alert.stock_after))
+            elif inventory_alert:
                 local_stock = int(
                     await session.scalar(
                         select(func.count(InventoryItem.id)).where(
@@ -1081,14 +1089,22 @@ async def _claim_stock_alert(
                 0,
                 int(alert.preorder_fulfilled_quantity),
             )
-            if current_stock <= 0 and preorder_fulfilled_quantity <= 0:
+            if (
+                not manual_alert
+                and current_stock <= 0
+                and preorder_fulfilled_quantity <= 0
+            ):
                 alert.status = "superseded"
                 continue
             notification_stock = (
                 current_stock if current_stock > 0 else preorder_fulfilled_quantity
             )
 
-            if not inventory_alert and product.notify_stock_without_balance_topup:
+            if (
+                not inventory_alert
+                and not manual_alert
+                and product.notify_stock_without_balance_topup
+            ):
                 previous_alert = await session.scalar(
                     select(ProductStockAlert)
                     .where(

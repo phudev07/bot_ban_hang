@@ -86,7 +86,12 @@ from app.sms_rentals import (
     sms_country_name,
     sms_source_key,
 )
-from app.stock_alerts import queue_inventory_stock_alert, stock_alert_mode
+from app.stock_alerts import (
+    ADMIN_MANUAL_STOCK_ALERT_PROVIDER,
+    queue_inventory_stock_alert,
+    queue_manual_stock_alert,
+    stock_alert_mode,
+)
 from app.supplier_audit import PROVIDER, reconcile_supplier_balance, record_supplier_purchase
 from app.suppliers import (
     EXTERNAL_FULFILLMENT_SOURCES,
@@ -1929,6 +1934,8 @@ def create_dashboard_router(
                     update(ProductStockAlert)
                     .where(
                         ProductStockAlert.product_id == product.id,
+                        ProductStockAlert.provider
+                        != ADMIN_MANUAL_STOCK_ALERT_PROVIDER,
                         ProductStockAlert.status.in_(("pending", "sending")),
                     )
                     .values(status="superseded")
@@ -2045,6 +2052,8 @@ def create_dashboard_router(
                     update(ProductStockAlert)
                     .where(
                         ProductStockAlert.product_id == product.id,
+                        ProductStockAlert.provider
+                        != ADMIN_MANUAL_STOCK_ALERT_PROVIDER,
                         ProductStockAlert.status.in_(("pending", "sending")),
                     )
                     .values(status="superseded")
@@ -4810,6 +4819,7 @@ def create_dashboard_router(
                 page_parameter="stock_page",
             )
             stock_records = []
+            stock_product_rows = []
             if selected_tab == "stock":
                 stock_records = (
                     await session.execute(
@@ -4820,6 +4830,27 @@ def create_dashboard_router(
                         .limit(ADMIN_PAGE_SIZE)
                     )
                 ).all()
+                stock_products = list(
+                    await session.scalars(
+                        select(Product)
+                        .where(
+                            Product.active.is_(True),
+                            Product.archived_at.is_(None),
+                        )
+                        .order_by(Product.id)
+                    )
+                )
+                stock_product_rows = [
+                    {
+                        "product": product,
+                        "stock": (
+                            0
+                            if product.force_out_of_stock
+                            else max(0, int(product.external_stock))
+                        ),
+                    }
+                    for product in stock_products
+                ]
             alert_failures: dict[tuple[str, int], list[dict[str, object]]] = {}
             sale_ids = [alert.id for alert, _product in sale_records]
             stock_ids = [alert.id for alert, _product in stock_records]
@@ -4929,10 +4960,59 @@ def create_dashboard_router(
                 sale_pager=sale_pager,
                 stock_alert_count=stock_alert_count,
                 stock_alerts=stock_alerts,
+                stock_product_rows=stock_product_rows,
                 stock_pager=stock_pager,
                 auto_refresh=active_broadcasts > 0 or active_product_alerts > 0,
             ),
         )
+
+    @router.post("/admin/broadcasts/stock/manual")
+    async def queue_manual_stock_broadcast(
+        request: Request,
+        csrf: str = Form(...),
+        product_id: int = Form(...),
+    ) -> RedirectResponse:
+        destination = "/admin/broadcasts?tab=stock"
+        if not is_admin(request):
+            return redirect_to_login()
+        if not valid_csrf(request, csrf):
+            flash(request, "Phiên biểu mẫu không hợp lệ.", "error")
+            return RedirectResponse(destination, status_code=303)
+
+        async with session_factory() as session:
+            async with session.begin():
+                product = await session.get(Product, product_id)
+                if (
+                    product is None
+                    or not product.active
+                    or product.archived_at is not None
+                ):
+                    flash(request, "Sản phẩm không tồn tại hoặc đang bị ẩn.", "error")
+                    return RedirectResponse(destination, status_code=303)
+                current_stock = (
+                    0
+                    if product.force_out_of_stock
+                    else max(0, int(product.external_stock))
+                )
+                queued = await queue_manual_stock_alert(
+                    session,
+                    product,
+                    current_stock=current_stock,
+                )
+                product_name = product.name_vi
+
+        if not queued:
+            flash(
+                request,
+                "Sản phẩm này đang có một thông báo hàng về thủ công chờ gửi.",
+                "error",
+            )
+        else:
+            flash(
+                request,
+                f"Đã xếp thông báo hàng về của {product_name} vào hàng đợi gửi.",
+            )
+        return RedirectResponse(destination, status_code=303)
 
     @router.post("/admin/users/{user_id}/balance")
     async def adjust_balance(

@@ -17,8 +17,10 @@ from app.models import (
     User,
 )
 from app.stock_alerts import (
+    ADMIN_MANUAL_STOCK_ALERT_PROVIDER,
     apply_supplier_stock,
     queue_inventory_stock_alert,
+    queue_manual_stock_alert,
     stock_alert_enabled,
 )
 
@@ -778,6 +780,74 @@ def test_inventory_import_alert_is_delivered_even_for_local_product() -> None:
             assert alert is not None
             assert alert.provider == "inventory"
             assert alert.status == "sent"
+        await engine.dispose()
+
+    asyncio.run(scenario())
+
+
+def test_admin_manual_stock_alert_uses_existing_template_at_zero_stock() -> None:
+    async def scenario() -> None:
+        engine, sessions = await make_database()
+        async with sessions() as session:
+            category = Category(name_vi="ChatGPT", name_en="ChatGPT")
+            session.add(category)
+            await session.flush()
+            product = Product(
+                category_id=category.id,
+                name_vi="GPT Plus thủ công",
+                name_en="Manual GPT Plus",
+                price=40_000,
+                fulfillment_source="sumistore",
+                supplier_product_id="SP-GEF55PBV",
+                external_stock=0,
+                force_out_of_stock=True,
+                stock_notifications_enabled=False,
+                sumistore_api_enabled=False,
+                lehai_api_enabled=False,
+            )
+            session.add(product)
+            await session.flush()
+            session.add(User(telegram_id=1, full_name="Buyer", has_started=True))
+
+            assert await queue_manual_stock_alert(
+                session,
+                product,
+                current_stock=0,
+            ) is True
+            assert await queue_manual_stock_alert(
+                session,
+                product,
+                current_stock=0,
+            ) is False
+            # Supplier synchronization must not rewrite or cancel a manual send.
+            product.force_out_of_stock = False
+            product.stock_notifications_enabled = True
+            product.sumistore_api_enabled = True
+            assert await apply_supplier_stock(session, product, 8) is False
+            product.force_out_of_stock = True
+            product.stock_notifications_enabled = False
+            await session.commit()
+
+        bot = FakeStockBot()
+        assert await deliver_pending_stock_alerts(
+            sessions,
+            bot,  # type: ignore[arg-type]
+            throttle_seconds=0,
+        ) == 1
+        assert len(bot.calls) == 1
+        message = bot.calls[0][1]
+        keyboard = bot.calls[0][2]
+        assert "HÀNG MỚI VỀ" in message
+        assert "Giá hiện tại: <b>40.000đ</b>" in message
+        assert "Kho vừa có: <b>0</b>" in message
+        assert keyboard.inline_keyboard[0][0].callback_data == f"prod:{product.id}"
+
+        async with sessions() as session:
+            alerts = list(await session.scalars(select(ProductStockAlert)))
+            assert len(alerts) == 1
+            assert alerts[0].provider == ADMIN_MANUAL_STOCK_ALERT_PROVIDER
+            assert alerts[0].status == "sent"
+            assert alerts[0].message_vi == message
         await engine.dispose()
 
     asyncio.run(scenario())

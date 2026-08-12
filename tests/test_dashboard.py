@@ -1353,14 +1353,17 @@ def test_dashboard_login_catalog_inventory_and_balance(tmp_path) -> None:
         sale_broadcasts_page = client.get("/admin/broadcasts?tab=sale")
         assert sale_broadcasts_page.status_code == 200
         assert "Thông báo mặt hàng giảm giá" in sale_broadcasts_page.text
-        assert "Hàng mới về tự động" not in sale_broadcasts_page.text
+        assert "Lịch sử thông báo hàng mới về" not in sale_broadcasts_page.text
         assert sale_broadcasts_page.text.count("<th>Tiến độ</th>") == 1
         assert sale_broadcasts_page.text.count("<th>Tốc độ</th>") == 1
         assert sale_broadcasts_page.text.count("<th>Thời lượng</th>") == 1
 
         stock_broadcasts_page = client.get("/admin/broadcasts?tab=stock")
         assert stock_broadcasts_page.status_code == 200
-        assert "Hàng mới về tự động" in stock_broadcasts_page.text
+        assert "Lịch sử thông báo hàng mới về" in stock_broadcasts_page.text
+        assert 'action="/admin/broadcasts/stock/manual"' in stock_broadcasts_page.text
+        assert 'name="product_id"' in stock_broadcasts_page.text
+        assert "Gửi thông báo hàng về" in stock_broadcasts_page.text
         assert "Sale API tự động" not in stock_broadcasts_page.text
         assert stock_broadcasts_page.text.count("<th>Tiến độ</th>") == 1
         assert stock_broadcasts_page.text.count("<th>Tốc độ</th>") == 1
@@ -1997,6 +2000,95 @@ def test_dashboard_shows_sale_alert_history(tmp_path) -> None:
         assert "Xem nội dung" in stock_broadcasts.text
         assert "HÀNG MỚI VỀ" in stock_broadcasts.text
 
+    asyncio.run(engine.dispose())
+
+
+def test_admin_can_queue_existing_stock_notification_template(tmp_path) -> None:
+    async def setup_database():
+        database_path = (tmp_path / "manual-stock-alert.db").as_posix()
+        engine = create_async_engine(f"sqlite+aiosqlite:///{database_path}")
+        async with engine.begin() as connection:
+            await connection.run_sync(Base.metadata.create_all)
+        sessions = async_sessionmaker(engine, expire_on_commit=False)
+        async with sessions() as session:
+            category = Category(name_vi="ChatGPT", name_en="ChatGPT")
+            session.add(category)
+            await session.flush()
+            product = Product(
+                category_id=category.id,
+                name_vi="GPT Plus gửi tay",
+                name_en="Manual GPT Plus",
+                price=40_000,
+                fulfillment_source="sumistore",
+                supplier_product_id="SP-GEF55PBV",
+                external_stock=12,
+            )
+            session.add(product)
+            await session.commit()
+        return engine, sessions, product.id
+
+    engine, sessions, product_id = asyncio.run(setup_database())
+    encryption_key = Fernet.generate_key().decode()
+    settings = Settings(
+        _env_file=None,
+        bot_token="123456:ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghi",
+        inventory_encryption_key=encryption_key,
+        dashboard_enabled=True,
+        dashboard_username="admin",
+        dashboard_password_hash=hash_dashboard_password("dashboard-password"),
+        dashboard_session_secret="session-secret-long-enough-for-tests",
+    )
+    app = create_api(
+        settings,
+        sessions,
+        FakeBot(),  # type: ignore[arg-type]
+        SecretCipher(encryption_key),
+    )
+
+    with TestClient(app, base_url="https://testserver") as client:
+        client.post(
+            "/admin/login",
+            data={"username": "admin", "password": "dashboard-password"},
+        )
+        page = client.get("/admin/broadcasts?tab=stock")
+        csrf = re.search(r'name="csrf" value="([^"]+)"', page.text).group(1)
+        assert f'value="{product_id}"' in page.text
+        assert "GPT Plus gửi tay" in page.text
+
+        rejected = client.post(
+            "/admin/broadcasts/stock/manual",
+            data={"csrf": "invalid", "product_id": product_id},
+            follow_redirects=False,
+        )
+        assert rejected.status_code == 303
+
+        queued = client.post(
+            "/admin/broadcasts/stock/manual",
+            data={"csrf": csrf, "product_id": product_id},
+            follow_redirects=False,
+        )
+        assert queued.status_code == 303
+        assert queued.headers["location"] == "/admin/broadcasts?tab=stock"
+
+        duplicate = client.post(
+            "/admin/broadcasts/stock/manual",
+            data={"csrf": csrf, "product_id": product_id},
+            follow_redirects=False,
+        )
+        assert duplicate.status_code == 303
+
+        history = client.get("/admin/broadcasts?tab=stock")
+        assert "Admin gửi thủ công" in history.text
+
+    async def verify_database() -> None:
+        async with sessions() as session:
+            alerts = list(await session.scalars(select(ProductStockAlert)))
+            assert len(alerts) == 1
+            assert alerts[0].provider == "admin_manual"
+            assert alerts[0].stock_after == 12
+            assert alerts[0].sale_price == 40_000
+
+    asyncio.run(verify_database())
     asyncio.run(engine.dispose())
 
 

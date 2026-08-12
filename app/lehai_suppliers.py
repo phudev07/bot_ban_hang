@@ -21,7 +21,7 @@ from app.models import (
     SupplierPurchaseAttempt,
 )
 from app.price_alerts import apply_supplier_price, release_price_lock_if_inventory_empty
-from app.stock_alerts import apply_supplier_stock
+from app.stock_alerts import ADMIN_MANUAL_STOCK_ALERT_PROVIDER, apply_supplier_stock
 from app.suppliers import (
     DEFINITIVE_PRODUCT_UNAVAILABLE_CODES,
     ExternalSupplierClient,
@@ -953,6 +953,7 @@ async def refresh_lehai_product(
                 update(ProductStockAlert)
                 .where(
                     ProductStockAlert.product_id == product.id,
+                    ProductStockAlert.provider != ADMIN_MANUAL_STOCK_ALERT_PROVIDER,
                     ProductStockAlert.status == "pending",
                 )
                 .values(status="superseded")
@@ -1074,6 +1075,7 @@ async def refresh_lehai_product(
             update(ProductStockAlert)
             .where(
                 ProductStockAlert.product_id == product.id,
+                ProductStockAlert.provider != ADMIN_MANUAL_STOCK_ALERT_PROVIDER,
                 ProductStockAlert.status == "pending",
             )
             .values(status="superseded")

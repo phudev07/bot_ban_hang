@@ -51,7 +51,7 @@ from app.models import (
     WalletTransaction,
 )
 from app.price_alerts import apply_supplier_price, release_price_lock_if_inventory_empty
-from app.stock_alerts import apply_supplier_stock
+from app.stock_alerts import ADMIN_MANUAL_STOCK_ALERT_PROVIDER, apply_supplier_stock
 from app.partner_services import award_referral_commission, ensure_referral_code
 from app.supplier_audit import record_supplier_purchase
 from app.supplier_recovery import queue_supplier_recovery
@@ -128,6 +128,7 @@ async def record_preorder_stock_fulfillment(
         select(ProductStockAlert)
         .where(
             ProductStockAlert.product_id == product_id,
+            ProductStockAlert.provider != ADMIN_MANUAL_STOCK_ALERT_PROVIDER,
             ProductStockAlert.status == "pending",
         )
         .order_by(ProductStockAlert.id.desc())

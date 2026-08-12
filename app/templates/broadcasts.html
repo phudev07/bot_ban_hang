@@ -95,15 +95,31 @@
 {% endif %}
 
 {% if selected_tab == 'stock' %}
+<section class="panel form-panel">
+  <div class="panel-head"><div><span>MANUAL BACK IN STOCK</span><h2>Gửi thông báo hàng về ngay</h2></div><small>Không cần nhập kho hoặc chờ API thay đổi</small></div>
+  <form method="post" action="/admin/broadcasts/stock/manual" class="form-grid cols-2" onsubmit="return confirm('Gửi thông báo hàng về của sản phẩm này tới toàn bộ khách hàng?')">
+    <input type="hidden" name="csrf" value="{{ csrf_token }}">
+    <label>Sản phẩm
+      <select name="product_id" required>
+        {% for row in stock_product_rows %}<option value="{{ row.product.id }}">#{{ row.product.id }} · {{ row.product.name_vi }} · tồn {{ row.stock }}</option>{% endfor %}
+      </select>
+      <small>Bot tự dùng đúng mẫu hàng về hiện tại, lấy giá và tồn đang hiển thị rồi gắn nút Mua ngay.</small>
+    </label>
+    <label>Thao tác
+      <button class="button primary" type="submit" {{ 'disabled' if not stock_product_rows else '' }}>Gửi thông báo hàng về</button>
+      <small>Thông báo đi qua hàng đợi chung và có đầy đủ tiến độ, tốc độ, thời lượng ở bảng dưới.</small>
+    </label>
+  </form>
+</section>
 <section class="panel">
-  <div class="panel-head"><div><span>BACK IN STOCK HISTORY</span><h2>Hàng mới về tự động</h2></div><strong>{{ stock_alert_count }} lần phát hiện</strong></div>
+  <div class="panel-head"><div><span>BACK IN STOCK HISTORY</span><h2>Lịch sử thông báo hàng mới về</h2></div><strong>{{ stock_alert_count }} lần gửi</strong></div>
   <div class="table-wrap">
     <table class="stock-alert-table">
       <thead><tr><th>Lần nhập</th><th>Sản phẩm</th><th>Tồn mới</th><th>Giá shop</th><th>Trạng thái</th><th>Tiến độ</th><th>Tốc độ</th><th>Thời lượng</th><th>Nội dung gửi</th><th>Thời gian</th></tr></thead>
       <tbody>
         {% for row in stock_alerts %}
         <tr>
-          <td><code>#{{ row.alert.id }}</code><small>{{ 'Sumi' if row.alert.provider == 'sumistore' else ('Kho nhập' if row.alert.provider == 'inventory' else ('Canboso' if row.alert.provider == 'canboso' else ('Kho cũ' if row.alert.provider == 'nce' else ('Haji' if row.alert.provider == 'haji' else 'Lê Hải')))) }}</small></td>
+          <td><code>#{{ row.alert.id }}</code><small>{{ 'Admin gửi thủ công' if row.alert.provider == 'admin_manual' else ('Sumi' if row.alert.provider == 'sumistore' else ('Kho nhập' if row.alert.provider == 'inventory' else ('Canboso' if row.alert.provider == 'canboso' else ('Kho cũ' if row.alert.provider == 'nce' else ('Haji' if row.alert.provider == 'haji' else 'Lê Hải'))))) }}</small></td>
           <td><strong>{{ row.product.name_vi }}</strong><small><code>{{ row.product.supplier_product_id }}</code></small></td>
           <td><strong>{{ row.alert.stock_after }}</strong><small>trước đó {{ row.alert.stock_before }}</small></td>
           <td>{{ row.alert.sale_price|vnd }}</td>
