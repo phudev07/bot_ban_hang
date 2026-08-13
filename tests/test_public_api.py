@@ -312,6 +312,7 @@ def test_codex_guide_and_zip_download_are_public_but_raw_exe_is_not(tmp_path) ->
         assert 'href="/codex-api/download"' in guide.text
         assert 'href="/codex-api/download/ubuntu-x64"' in guide.text
         assert "chmod +x Custom-Codex-Ubuntu-x86_64.AppImage" in guide.text
+        assert "APPIMAGE_EXTRACT_AND_RUN=1" in guide.text
         assert "Ubuntu 22.04/24.04 x64" in guide.text
         assert 'class="sidebar"' in guide.text
 
