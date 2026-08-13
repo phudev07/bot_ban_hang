@@ -213,6 +213,21 @@ def create_public_api_docs_router(settings: Settings) -> APIRouter:
             },
         )
 
+    @router.get("/codex-api/download/ubuntu-x64", response_class=FileResponse)
+    async def download_codex_ubuntu() -> FileResponse:
+        appimage = Path(settings.codex_ubuntu_appimage_path)
+        if not appimage.is_file():
+            raise HTTPException(status_code=404, detail="Ubuntu app is temporarily unavailable")
+        return FileResponse(
+            appimage,
+            media_type="application/vnd.appimage",
+            filename="Custom-Codex-Ubuntu-x86_64.AppImage",
+            headers={
+                "Cache-Control": "public, max-age=300",
+                "X-Content-Type-Options": "nosniff",
+            },
+        )
+
     @router.get("/docs", response_class=HTMLResponse)
     @router.get("/docs/", response_class=HTMLResponse, include_in_schema=False)
     async def api_docs(request: Request) -> HTMLResponse:

@@ -276,6 +276,8 @@ def test_warehouse_api_origin_is_cloudflare_only_and_body_is_bounded() -> None:
 def test_codex_guide_and_zip_download_are_public_but_raw_exe_is_not(tmp_path) -> None:
     zip_path = tmp_path / "Custom-Codex-Portable.zip"
     zip_path.write_bytes(b"PK\x03\x04test-archive")
+    appimage_path = tmp_path / "Custom-Codex-Ubuntu-x86_64.AppImage"
+    appimage_path.write_bytes(b"\x7fELFtest-appimage")
     settings = Settings(
         _env_file=None,
         bot_token="123456:ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghi",
@@ -283,6 +285,7 @@ def test_codex_guide_and_zip_download_are_public_but_raw_exe_is_not(tmp_path) ->
         sepay_enabled=False,
         shop_api_enabled=True,
         codex_portable_zip_path=str(zip_path),
+        codex_ubuntu_appimage_path=str(appimage_path),
     )
     engine = create_async_engine("sqlite+aiosqlite:///:memory:")
     sessions = async_sessionmaker(engine, expire_on_commit=False)
@@ -307,12 +310,19 @@ def test_codex_guide_and_zip_download_are_public_but_raw_exe_is_not(tmp_path) ->
         assert "30.000đ" not in guide.text
         assert "CDK" not in guide.text
         assert 'href="/codex-api/download"' in guide.text
+        assert 'href="/codex-api/download/ubuntu-x64"' in guide.text
+        assert "chmod +x Custom-Codex-Ubuntu-x86_64.AppImage" in guide.text
+        assert "Ubuntu 22.04/24.04 x64" in guide.text
         assert 'class="sidebar"' in guide.text
 
         download = client.get("/codex-api/download")
         assert download.status_code == 200
         assert download.headers["content-type"].startswith("application/zip")
         assert "Custom-Codex-Portable.zip" in download.headers["content-disposition"]
+        ubuntu = client.get("/codex-api/download/ubuntu-x64")
+        assert ubuntu.status_code == 200
+        assert ubuntu.headers["content-type"].startswith("application/vnd.appimage")
+        assert "Custom-Codex-Ubuntu-x86_64.AppImage" in ubuntu.headers["content-disposition"]
         assert client.get("/codex-api/custom-codex.exe").status_code == 404
 
     asyncio.run(engine.dispose())

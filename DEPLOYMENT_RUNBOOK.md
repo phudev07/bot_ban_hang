@@ -109,6 +109,10 @@ and binds port 8080 only to localhost. Caddy is the public reverse proxy.
 - The portable Windows app is not stored in Git. Production serves the ZIP from
   `/opt/telegram-sepay-shop/downloads/Custom-Codex-Portable.zip`, mounted read-only
   into the app container at `/app/downloads/Custom-Codex-Portable.zip`.
+- The Ubuntu x64 app is served from
+  `/opt/telegram-sepay-shop/downloads/Custom-Codex-Ubuntu-x86_64.AppImage` at
+  `/codex-api/download/ubuntu-x64`. It bundles the Linux Codex engine and does not
+  require Node.js or a separate Codex CLI install.
 - Warehouse API partners receive shop product IDs and shop selling prices, never supplier
   keys, supplier URLs, supplier product IDs, supplier order IDs, or supplier cost.
 - Warehouse API only sells active account products. SMS rental is excluded.

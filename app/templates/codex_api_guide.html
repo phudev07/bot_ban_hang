@@ -191,6 +191,20 @@
     }
     .button:hover { filter: brightness(1.12); transform: translateY(-1px); }
     .button.alt { border-color: var(--acid); background: var(--acid); }
+    .downloads { display: flex; flex-wrap: wrap; gap: 9px; margin-top: 16px; }
+    .downloads .button { margin-top: 0; }
+    .platform-guide { margin-top: 18px; }
+    .platform-guide h3 { margin: 0 0 10px; color: var(--cyan); font-size: 14px; }
+    .command-box {
+      display: grid;
+      gap: 5px;
+      margin-top: 10px;
+      padding: 11px 13px;
+      border: 1px solid var(--line);
+      border-radius: 11px;
+      background: #020707;
+    }
+    .command-box code { color: var(--acid); font-size: 12px; overflow-wrap: anywhere; }
     .key-box {
       display: grid;
       grid-template-columns: auto 1fr;
@@ -322,6 +336,7 @@
       .key-box { grid-template-columns: 1fr; gap: 4px; }
       .steps { grid-template-columns: 1fr; }
       .button { width: 100%; }
+      .downloads { display: grid; }
       .endpoint-box { align-items: stretch; flex-direction: column; }
       .copy-button { width: 100%; }
     }
@@ -369,12 +384,24 @@
       <section class="section" id="portable">
         <span class="kicker">Phần 03</span>
         <h2><em>Custom Codex</em> chạy ngay</h2>
-        <p class="lead">Không cần cài đặt. Tải file ZIP, giải nén rồi mở file EXE để sử dụng.</p>
-        <a class="button alt" href="/codex-api/download">Tải Custom Codex (.zip)</a>
+        <p class="lead">Chọn đúng hệ điều hành. Bản Windows và Ubuntu đều mang sẵn engine, không cần cài Node.js hoặc Codex CLI.</p>
+        <div class="downloads">
+          <a class="button alt" href="/codex-api/download">Windows x64 (.zip)</a>
+          <a class="button" href="/codex-api/download/ubuntu-x64">Ubuntu x64 (.AppImage)</a>
+        </div>
         <div class="steps">
-          <article class="step"><b>01</b><strong>Tải và giải nén</strong><p>Tải ZIP rồi giải nén ra một thư mục riêng.</p></article>
-          <article class="step"><b>02</b><strong>Mở Custom Codex</strong><p>Chạy file <code>custom-codex.exe</code>.</p></article>
+          <article class="step"><b>01</b><strong>Tải đúng bản</strong><p>Windows dùng ZIP; Ubuntu 22.04/24.04 x64 dùng AppImage.</p></article>
+          <article class="step"><b>02</b><strong>Mở Custom Codex</strong><p>Windows chạy <code>custom-codex.exe</code>. Ubuntu cấp quyền rồi chạy AppImage.</p></article>
           <article class="step"><b>03</b><strong>Cài đặt API</strong><p>Vào Cài đặt, dán key <code>sk-</code>, chọn model cần chạy rồi bấm <b>Lưu cài đặt</b>.</p></article>
+        </div>
+        <div class="platform-guide">
+          <h3>Chạy trên Ubuntu</h3>
+          <p class="lead">Mở Terminal tại thư mục vừa tải file, chạy lần lượt hai lệnh:</p>
+          <div class="command-box">
+            <code>chmod +x Custom-Codex-Ubuntu-x86_64.AppImage</code>
+            <code>./Custom-Codex-Ubuntu-x86_64.AppImage</code>
+          </div>
+          <p class="note">App tiếp tục dùng lịch sử trong <code>~/.codex</code> nhưng không ghi đè <code>config.toml</code> hoặc <code>auth.json</code> của Codex chính.</p>
         </div>
       </section>
     </main>
