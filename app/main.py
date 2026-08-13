@@ -1174,7 +1174,7 @@ async def haji_sync_worker(
             await sync_haji_products(session_factory, client, markup=markup)
         except Exception:
             logging.getLogger(__name__).exception(
-                "Could not synchronize Netflix and GPT supplier products"
+                "Could not synchronize Haji supplier products"
             )
         await asyncio.sleep(max(15, interval_seconds))
 

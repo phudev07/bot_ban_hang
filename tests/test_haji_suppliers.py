@@ -3,19 +3,24 @@ import json
 
 import httpx
 from cryptography.fernet import Fernet
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from app.database import Base
 from app.haji_suppliers import HajiClient, ensure_haji_products, haji_product_kind
 from app.models import (
     Category,
+    Deposit,
+    Order,
+    PaymentTransaction,
+    Preorder,
     Product,
     SupplierBalanceTransaction,
     SupplierPurchaseAttempt,
     User,
 )
-from app.services import buy_supplier_product, purchase_product
+from app.preorders import _claim_next_preorder, _process_claimed_preorder, create_preorder
+from app.services import buy_supplier_product, process_sepay_payment, purchase_product
 from app.suppliers import SupplierPurchase, SupplierSnapshot
 from app.utils import SecretCipher
 
@@ -491,6 +496,281 @@ def test_haji_wallet_purchase_records_actual_cost_provider_and_one_batch() -> No
             )
             assert audit is not None and audit.amount == -40_000
             assert audit.quantity == 2
+        await engine.dispose()
+
+    asyncio.run(scenario())
+
+
+class CodexHajiSupplier:
+    provider = "haji"
+
+    def __init__(self, *, unit_price: int, stock: int, balance: int) -> None:
+        self.unit_price = unit_price
+        self.stock = stock
+        self.balance = balance
+        self.balance_lock = asyncio.Lock()
+        self.idempotency_keys: list[str | None] = []
+        self.buy_count = 0
+        self.in_flight = 0
+        self.max_in_flight = 0
+
+    async def fetch_snapshot(self, product_id: str) -> SupplierSnapshot:
+        return SupplierSnapshot(
+            product_id=product_id,
+            name="API Codex 50M Token 1 ngay",
+            description="24 gio sau kich hoat",
+            unit_price=self.unit_price,
+            source_stock=self.stock,
+            owner_balance=self.balance,
+        )
+
+    async def fetch_balance(self) -> int:
+        return self.balance
+
+    async def buy(
+        self,
+        product_id: str,
+        quantity: int,
+        *,
+        idempotency_key: str | None = None,
+    ) -> SupplierPurchase:
+        self.idempotency_keys.append(idempotency_key)
+        self.in_flight += 1
+        self.max_in_flight = max(self.max_in_flight, self.in_flight)
+        try:
+            await asyncio.sleep(0.01)
+            if quantity > self.stock:
+                raise RuntimeError("test attempted to oversell Codex stock")
+            self.stock -= quantity
+            self.balance -= self.unit_price * quantity
+            self.buy_count += 1
+            return SupplierPurchase(
+                order_code=f"HAJI-CODEX-{self.buy_count}",
+                unit_price=self.unit_price,
+                accounts=tuple(
+                    f"sk-codex-test-{self.buy_count}-{index}"
+                    for index in range(quantity)
+                ),
+                product_id=product_id,
+                provider=self.provider,
+            )
+        finally:
+            self.in_flight -= 1
+
+
+async def seed_codex_product(
+    sessions: async_sessionmaker,
+    *,
+    supplier_product_id: str = "apicodex_50m_1day",
+    sale_price: int = 50_000,
+    supplier_price: int = 35_000,
+    stock: int = 1,
+    users: tuple[tuple[int, int], ...] = (),
+) -> int:
+    async with sessions() as session:
+        category = Category(name_vi="API CODEX", name_en="CODEX API")
+        session.add(category)
+        await session.flush()
+        product = Product(
+            category_id=category.id,
+            name_vi="API Codex 50M Token · 24 giờ",
+            name_en="Codex API 50M Tokens · 24 hours",
+            price=sale_price,
+            allow_quantity=False,
+            max_quantity=1,
+            fulfillment_source="haji",
+            supplier_product_id=supplier_product_id,
+            supplier_markup=sale_price - supplier_price,
+            supplier_price=supplier_price,
+            external_stock=stock,
+        )
+        session.add(product)
+        session.add_all(
+            User(telegram_id=user_id, full_name=f"Buyer {user_id}", balance=balance)
+            for user_id, balance in users
+        )
+        await session.commit()
+        return product.id
+
+
+def test_codex_direct_qr_purchase_delivers_key_and_records_financial_trace() -> None:
+    async def scenario() -> None:
+        engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+        async with engine.begin() as connection:
+            await connection.run_sync(Base.metadata.create_all)
+        sessions = async_sessionmaker(engine, expire_on_commit=False)
+        cipher = SecretCipher(Fernet.generate_key().decode())
+        supplier = CodexHajiSupplier(unit_price=35_000, stock=1, balance=335_000)
+        product_id = await seed_codex_product(
+            sessions,
+            users=((50_001, 0),),
+        )
+        async with sessions() as session:
+            session.add(
+                Deposit(
+                    user_id=50_001,
+                    code="NAP50001C001",
+                    requested_amount=50_000,
+                    payment_kind="direct_purchase",
+                    product_id=product_id,
+                    quantity=1,
+                )
+            )
+            await session.commit()
+
+        result = await process_sepay_payment(
+            sessions,
+            {
+                "id": "SEPAY-CODEX-001",
+                "transferType": "in",
+                "transferAmount": 50_000,
+                "content": "NAP50001C001",
+            },
+            cipher=cipher,
+            haji_client=supplier,  # type: ignore[arg-type]
+        )
+
+        assert result.status == "direct_purchase_completed"
+        assert result.supplier_product_id == "apicodex_50m_1day"
+        assert supplier.idempotency_keys == ["qr-NAP50001C001"]
+        assert [cipher.decrypt(value) for value in result.encrypted_secrets] == [
+            "sk-codex-test-1-0"
+        ]
+        async with sessions() as session:
+            order = await session.scalar(select(Order))
+            attempt = await session.scalar(select(SupplierPurchaseAttempt))
+            audit = await session.scalar(select(SupplierBalanceTransaction))
+            payment = await session.scalar(select(PaymentTransaction))
+            user = await session.get(User, 50_001)
+            assert order is not None
+            assert order.amount == 50_000 and order.cost_amount == 35_000
+            assert order.supplier_provider == "haji"
+            assert order.supplier_order_code == "HAJI-CODEX-1"
+            assert attempt is not None and attempt.status == "succeeded"
+            assert attempt.request_key == "qr-NAP50001C001"
+            assert attempt.supplier_order_code == "HAJI-CODEX-1"
+            assert audit is not None and audit.amount == -35_000
+            assert payment is not None and payment.credit_status == "credited"
+            assert user is not None and user.balance == 0
+        await engine.dispose()
+
+    asyncio.run(scenario())
+
+
+def test_simultaneous_codex_wallet_purchases_do_not_oversell_one_key() -> None:
+    async def scenario() -> None:
+        engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+        async with engine.begin() as connection:
+            await connection.run_sync(Base.metadata.create_all)
+        sessions = async_sessionmaker(engine, expire_on_commit=False)
+        cipher = SecretCipher(Fernet.generate_key().decode())
+        supplier = CodexHajiSupplier(unit_price=35_000, stock=1, balance=35_000)
+        product_id = await seed_codex_product(
+            sessions,
+            users=((60_001, 50_000), (60_002, 50_000)),
+        )
+
+        results = await asyncio.gather(
+            purchase_product(
+                sessions,
+                60_001,
+                product_id,
+                cipher,
+                haji_client=supplier,  # type: ignore[arg-type]
+                supplier_idempotency_key="codex-concurrent-1",
+            ),
+            purchase_product(
+                sessions,
+                60_002,
+                product_id,
+                cipher,
+                haji_client=supplier,  # type: ignore[arg-type]
+                supplier_idempotency_key="codex-concurrent-2",
+            ),
+        )
+
+        assert [result.ok for result in results].count(True) == 1
+        assert [result.message for result in results].count("out_of_stock") == 1
+        assert supplier.buy_count == 1
+        assert supplier.max_in_flight == 1
+        assert supplier.balance == 0 and supplier.stock == 0
+        assert len(supplier.idempotency_keys) == 1
+        async with sessions() as session:
+            assert int(await session.scalar(select(func.count(Order.id))) or 0) == 1
+            assert int(
+                await session.scalar(select(func.count(SupplierPurchaseAttempt.id))) or 0
+            ) == 1
+            balances = list(await session.scalars(select(User.balance).order_by(User.telegram_id)))
+            assert balances == [0, 50_000]
+        await engine.dispose()
+
+    asyncio.run(scenario())
+
+
+def test_codex_preorder_charges_five_percent_and_fulfills_with_stable_key() -> None:
+    async def scenario() -> None:
+        engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+        async with engine.begin() as connection:
+            await connection.run_sync(Base.metadata.create_all)
+        sessions = async_sessionmaker(engine, expire_on_commit=False)
+        cipher = SecretCipher(Fernet.generate_key().decode())
+        supplier = CodexHajiSupplier(unit_price=25_000, stock=0, balance=100_000)
+        product_id = await seed_codex_product(
+            sessions,
+            supplier_product_id="apicodex_10m_1day",
+            sale_price=30_000,
+            supplier_price=25_000,
+            stock=0,
+            users=((70_001, 50_000),),
+        )
+        async with sessions() as session:
+            preorder = await create_preorder(
+                session,
+                70_001,
+                product_id,
+                1,
+                expected_base_unit_price=30_000,
+                max_active_per_user=5,
+            )
+            await session.commit()
+            preorder_id = preorder.id
+            assert preorder.total_amount == 31_500
+
+        supplier.stock = 1
+        async with sessions() as session:
+            product = await session.get(Product, product_id)
+            assert product is not None
+            product.external_stock = 1
+            await session.commit()
+
+        claimed = await _claim_next_preorder(sessions)
+        assert claimed is not None and claimed.id == preorder_id
+        await _process_claimed_preorder(
+            sessions,
+            claimed,
+            cipher,
+            None,
+            None,
+            None,
+            None,
+            supplier,  # type: ignore[arg-type]
+            0,
+        )
+
+        async with sessions() as session:
+            preorder = await session.get(Preorder, preorder_id)
+            order = await session.scalar(select(Order).where(Order.preorder_id == preorder_id))
+            attempt = await session.scalar(select(SupplierPurchaseAttempt))
+            user = await session.get(User, 70_001)
+            assert preorder is not None and preorder.status == "completed"
+            assert preorder.completed_order_code == order.shop_order_code
+            assert order is not None
+            assert order.amount == 31_500 and order.cost_amount == 25_000
+            assert order.sales_channel == "preorder"
+            assert order.supplier_provider == "haji"
+            assert attempt is not None and attempt.request_key == f"preorder-{preorder_id}"
+            assert user is not None and user.balance == 18_500
+        assert supplier.idempotency_keys == [f"preorder-{preorder_id}"]
         await engine.dispose()
 
     asyncio.run(scenario())
