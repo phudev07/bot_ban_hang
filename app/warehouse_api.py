@@ -19,7 +19,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.config import Settings
 from app.inventory_import import InventoryImportError, import_inventory
-from app.models import WarehouseImportRequest
+from app.models import Product, WarehouseImportRequest
 from app.partner_services import api_signature
 from app.public_api import client_ip
 from app.rate_limit import FixedWindowRateLimiter, RateLimitDecision, RateLimitRule
@@ -211,6 +211,11 @@ def create_warehouse_api_router(
         request_json = json.dumps(body.model_dump(), sort_keys=True, separators=(",", ":"), ensure_ascii=False)
         request_hash = hashlib.sha256(request_json.encode("utf-8")).hexdigest()
         async with session_factory() as session:
+            product_exists = await session.scalar(
+                select(Product.id).where(Product.id == body.product_id)
+            )
+            if product_exists is None:
+                raise warehouse_error(404, "PRODUCT_NOT_FOUND", "Product does not exist")
             existing = await session.scalar(
                 select(WarehouseImportRequest)
                 .where(WarehouseImportRequest.idempotency_key == normalized_key)
