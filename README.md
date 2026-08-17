@@ -68,6 +68,9 @@ GET  /orders/{order_code}
 Nap tien duoc thuc hien truc tiep trong bot Telegram nhu nguoi dung binh thuong;
 API dau kho chi doc san pham, ton kho va dat don bang so du vi hien co.
 
+> API nhap kho tu dong cho tool quan tri la endpoint rieng, dung mot HMAC key rieng
+> va khong tra ve noi dung tai khoan: xem [`deploy/WAREHOUSE_IMPORT_API.md`](deploy/WAREHOUSE_IMPORT_API.md).
+
 Moi request co xac thuc phai gui cac header:
 
 ```text

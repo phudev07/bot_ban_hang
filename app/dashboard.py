@@ -27,7 +27,11 @@ from app.canboso_suppliers import CanbosoClient
 from app.config import Settings
 from app.custom_emoji import product_brand_emoji
 from app.haji_suppliers import HajiClient
-from app.inventory_dedup import filter_duplicate_inventory
+from app.inventory_import import (
+    MAX_INVENTORY_IMPORT_NOTE_LENGTH,
+    InventoryImportError,
+    import_inventory,
+)
 from app.lehai_suppliers import LeHaiPremiumClient
 from app.maintenance import (
     set_sms_rental_maintenance,
@@ -88,7 +92,6 @@ from app.sms_rentals import (
 )
 from app.stock_alerts import (
     ADMIN_MANUAL_STOCK_ALERT_PROVIDER,
-    queue_inventory_stock_alert,
     queue_manual_stock_alert,
     stock_alert_mode,
 )
@@ -123,7 +126,6 @@ LOCAL_TIMEZONE = ZoneInfo("Asia/Bangkok")
 ADMIN_PAGE_SIZE = 100
 MAX_FLASH_SALE_IMAGE_BYTES = 8 * 1024 * 1024
 MAX_INVENTORY_WITHDRAWAL_QUANTITY = 1000
-MAX_INVENTORY_IMPORT_NOTE_LENGTH = 255
 logger = logging.getLogger(__name__)
 SUPPLIER_PROVIDER_LABELS = {
     "sumistore": "Sumi",
@@ -3763,11 +3765,6 @@ def create_dashboard_router(
             return redirect_to_login()
         if not valid_csrf(request, csrf):
             return RedirectResponse("/admin/inventory", status_code=303)
-        parsed_items = split_inventory_items(items)
-        parsed_cost = parse_vnd(cost_amount)
-        if parsed_cost is None or parsed_cost < 0:
-            flash(request, "Giá vốn mỗi tài khoản không hợp lệ.", "error")
-            return RedirectResponse("/admin/inventory", status_code=303)
         normalized_new_note = " ".join(new_import_note.split())
         if len(normalized_new_note) > MAX_INVENTORY_IMPORT_NOTE_LENGTH:
             flash(
@@ -3777,153 +3774,51 @@ def create_dashboard_router(
             )
             return RedirectResponse("/admin/inventory", status_code=303)
         selected_note_id = int(import_note_id) if import_note_id.isdigit() else None
-        lock_applied = False
-        duplicate_count = 0
-        accepted_items: list[str] = []
+        parsed_items = split_inventory_items(items)
         async with session_factory() as session:
-            product = await session.scalar(
-                select(Product).where(Product.id == product_id).with_for_update()
-            )
-            if (
-                product is None
-                or product.archived_at is not None
-                or product.fulfillment_source not in SELLABLE_FULFILLMENT_SOURCES
-                or product.product_type != "account"
-                or not parsed_items
-            ):
-                flash(request, "Sản phẩm hoặc dữ liệu kho không hợp lệ.", "error")
-                return RedirectResponse("/admin/inventory", status_code=303)
-            if not product.active:
-                flash(
-                    request,
-                    "Sản phẩm đang ẩn. Hãy bật hiển thị sản phẩm trước khi nhập kho.",
-                    "error",
-                )
-                return RedirectResponse("/admin/inventory", status_code=303)
-            duplicate_check = await filter_duplicate_inventory(
-                session,
-                cipher,
-                product_id=product.id,
-                raw_items=parsed_items,
-            )
-            duplicate_count = duplicate_check.duplicate_count
-            accepted_items = [candidate.raw_item for candidate in duplicate_check.accepted]
-            if not accepted_items:
-                await session.commit()
-                flash(
-                    request,
-                    f"Không có tài khoản sạch để nhập; đã bỏ qua {duplicate_count} "
-                    "tài khoản nghi ngờ/trùng. Xem bảng cảnh báo bên dưới.",
-                    "error",
-                )
-                return RedirectResponse("/admin/inventory", status_code=303)
-            import_note = normalized_new_note
-            note_record = None
-            if import_note:
-                note_record = await session.scalar(
-                    select(InventoryImportNote)
-                    .where(func.lower(InventoryImportNote.note) == import_note.lower())
-                    .with_for_update()
-                )
-                if note_record is None:
-                    note_record = InventoryImportNote(note=import_note)
-                    session.add(note_record)
-                    await session.flush()
-                else:
-                    import_note = note_record.note
-            elif selected_note_id is not None:
-                note_record = await session.get(InventoryImportNote, selected_note_id)
-                if note_record is None:
-                    flash(request, "Ghi chú nguồn nhập đã chọn không còn tồn tại.", "error")
-                    return RedirectResponse("/admin/inventory", status_code=303)
-                import_note = note_record.note
-            if note_record is not None:
-                note_record.last_used_at = datetime.now(UTC)
-            local_stock_before = int(
-                await session.scalar(
-                    select(func.count(InventoryItem.id)).where(
-                        InventoryItem.product_id == product.id,
-                        InventoryItem.status == "available",
-                    )
-                )
-                or 0
-            )
-            supplier_stock = (
-                max(0, int(product.supplier_available_stock))
-                if product.fulfillment_source in EXTERNAL_FULFILLMENT_SOURCES
-                else 0
-            )
-            total_stock_before = local_stock_before + supplier_stock
-            session.add_all(
-                [
-                    InventoryItem(
-                        product_id=product.id,
-                        encrypted_secret=cipher.encrypt(candidate.raw_item),
-                        account_fingerprint=candidate.account_fingerprint,
-                        cost_amount=parsed_cost,
-                        import_note=import_note or None,
-                    )
-                    for candidate in duplicate_check.accepted
-                ]
-            )
-            await session.flush()
-            if (
-                lock_sale_price is not None
-                and product.fulfillment_source in EXTERNAL_FULFILLMENT_SOURCES
-            ):
-                product.price_lock_enabled = True
-                lock_applied = True
-                await session.execute(
-                    update(ProductPriceAlert)
-                    .where(
-                        ProductPriceAlert.product_id == product.id,
-                        ProductPriceAlert.status == "pending",
-                    )
-                    .values(status="superseded")
-                )
-            local_stock = int(
-                await session.scalar(
-                    select(func.count(InventoryItem.id)).where(
-                        InventoryItem.product_id == product.id,
-                        InventoryItem.status == "available",
-                    )
-                )
-                or 0
-            )
-            total_stock_after = local_stock + supplier_stock
-            if product.fulfillment_source in EXTERNAL_FULFILLMENT_SOURCES:
-                product.external_stock = local_stock + max(0, int(product.supplier_available_stock))
-            notification_queued = False
-            notification_note = ""
-            if notify_stock_arrival is not None:
-                notification_queued = await queue_inventory_stock_alert(
+            try:
+                result = await import_inventory(
                     session,
-                    product,
-                    stock_before=total_stock_before,
-                    stock_after=total_stock_after,
+                    cipher,
+                    product_id=product_id,
+                    raw_items=parsed_items,
+                    cost_amount=cost_amount,
+                    import_note_id=selected_note_id,
+                    new_import_note=normalized_new_note,
+                    lock_sale_price=lock_sale_price is not None,
+                    notify_stock_arrival=notify_stock_arrival is not None,
                 )
-                if notification_queued:
-                    notification_note = " và đã xếp thông báo hàng về"
-                elif getattr(product, "stock_notifications_enabled", True) is False:
-                    notification_note = "; công tắc thông báo hàng về đang tắt"
-                elif not product.active or product.force_out_of_stock:
-                    notification_note = (
-                        "; sản phẩm đang ẩn hoặc đang bị đưa về 0 hàng nên không gửi thông báo"
-                    )
+            except InventoryImportError as exc:
+                messages = {
+                    "COST_INVALID": "Giá vốn mỗi tài khoản không hợp lệ.",
+                    "ITEMS_EMPTY": "Chưa có dữ liệu tài khoản để nhập.",
+                    "PRODUCT_INVALID": "Sản phẩm hoặc dữ liệu kho không hợp lệ.",
+                    "PRODUCT_HIDDEN": "Sản phẩm đang ẩn. Hãy bật hiển thị sản phẩm trước khi nhập kho.",
+                    "IMPORT_NOTE_NOT_FOUND": "Ghi chú nguồn nhập đã chọn không còn tồn tại.",
+                }
+                flash(request, messages.get(str(exc), "Dữ liệu nhập kho không hợp lệ."), "error")
+                return RedirectResponse("/admin/inventory", status_code=303)
             await session.commit()
-        lock_note = " và đã khóa giá bán" if lock_applied else ""
+
+        if result.accepted_count == 0:
+            flash(
+                request,
+                f"Không có tài khoản sạch để nhập; đã bỏ qua {result.duplicate_count} "
+                "tài khoản nghi ngờ/trùng. Xem bảng cảnh báo bên dưới.",
+                "error",
+            )
+            return RedirectResponse("/admin/inventory", status_code=303)
+        lock_note = " và đã khóa giá bán" if result.lock_applied else ""
+        notification_note = " và đã xếp thông báo hàng về" if result.notification_queued else ""
         flash(
             request,
-            f"Đã thêm {len(accepted_items)} sản phẩm vào kho với giá vốn "
-            f"{format_vnd(parsed_cost)}/tài khoản"
-            f"{' · ghi chú: ' + import_note if import_note else ''}"
+            f"Đã thêm {result.accepted_count} sản phẩm vào kho với giá vốn "
+            f"{format_vnd(result.cost_amount)}/tài khoản"
+            f"{' · ghi chú: ' + result.import_note if result.import_note else ''}"
             f"{lock_note}{notification_note}"
-            f"; bỏ qua {duplicate_count} tài khoản nghi ngờ/trùng."
-            if duplicate_count
-            else f"Đã thêm {len(accepted_items)} sản phẩm vào kho với giá vốn "
-            f"{format_vnd(parsed_cost)}/tài khoản"
-            f"{' · ghi chú: ' + import_note if import_note else ''}"
-            f"{lock_note}{notification_note}.",
+            f"; bỏ qua {result.duplicate_count} tài khoản nghi ngờ/trùng."
+            if result.duplicate_count
+            else ".",
         )
         return RedirectResponse("/admin/inventory", status_code=303)
 

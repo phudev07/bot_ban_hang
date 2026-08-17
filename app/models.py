@@ -455,6 +455,34 @@ class InventoryImportNote(Base):
     )
 
 
+class WarehouseImportRequest(Base):
+    """Durable idempotency record for automated warehouse imports."""
+
+    __tablename__ = "warehouse_import_requests"
+    __table_args__ = (
+        UniqueConstraint("idempotency_key", name="uq_warehouse_import_idempotency"),
+        Index("ix_warehouse_import_requests_status_created", "status", "created_at"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    idempotency_key: Mapped[str] = mapped_column(String(128))
+    request_hash: Mapped[str] = mapped_column(String(64))
+    status: Mapped[str] = mapped_column(String(20), default="processing", index=True)
+    product_id: Mapped[int | None] = mapped_column(
+        ForeignKey("products.id", ondelete="SET NULL"), nullable=True, index=True
+    )
+    accepted_count: Mapped[int] = mapped_column(default=0)
+    duplicate_count: Mapped[int] = mapped_column(default=0)
+    response_json: Mapped[str | None] = mapped_column(Text, nullable=True)
+    error_code: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), index=True
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
+
+
 class InventoryDuplicateAlert(Base):
     __tablename__ = "inventory_duplicate_alerts"
 

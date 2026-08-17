@@ -31,6 +31,7 @@ from app.rentsim import RentSimClient
 from app.services import process_sepay_payment
 from app.suppliers import ExternalSupplierClient, SumistoreClient
 from app.utils import SecretCipher, format_vnd, verify_sepay_hmac
+from app.warehouse_api import create_warehouse_api_router
 
 
 logger = logging.getLogger(__name__)
@@ -276,6 +277,16 @@ def create_api(
                 nce_client=nce_client,
                 haji_client=haji_client,
                 autosms_client=autosms_client,
+            )
+        )
+
+    if settings.warehouse_api_enabled:
+        app.include_router(
+            create_warehouse_api_router(
+                settings,
+                session_factory,
+                cipher,
+                api_redis_client,
             )
         )
 

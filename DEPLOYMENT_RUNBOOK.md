@@ -117,6 +117,9 @@ and binds port 8080 only to localhost. Caddy is the public reverse proxy.
   keys, supplier URLs, supplier product IDs, supplier order IDs, or supplier cost.
 - Warehouse API only sells active account products. SMS rental is excluded.
 - Public API orders require HMAC, nonce, timestamp, idempotency key, and `max_unit_price`.
+- Automated warehouse imports use a separate HMAC key and endpoint documented in
+  `deploy/WAREHOUSE_IMPORT_API.md`; this key must never be reused for partner shop API
+  clients or exposed in frontend code.
 - Le Hai Jio 18M may resolve to the temporary sale ID `sale_link18mgemini`.
 - Jio 18M can also use Canboso. USD cost is normalized to VND before routing;
   the cheaper source wins and equal prices prefer Canboso over Le Hai.

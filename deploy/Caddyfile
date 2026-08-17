@@ -11,7 +11,7 @@
 	}
 
 	request_body {
-		max_size 1MB
+		max_size 64KB
 	}
 }
 

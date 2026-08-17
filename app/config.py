@@ -130,6 +130,15 @@ class Settings(BaseSettings):
     shop_api_rate_limit_per_minute: int = 60
     shop_api_signature_tolerance_seconds: int = 300
     shop_api_audit_retention_days: int = 30
+    warehouse_api_enabled: bool = False
+    warehouse_api_key: SecretStr = SecretStr("")
+    warehouse_api_signature_tolerance_seconds: int = 300
+    warehouse_api_rate_limit_per_minute: int = 60
+    warehouse_api_global_rate_limit_per_minute: int = 600
+    warehouse_api_allowed_ips_text: str = Field(
+        default="", validation_alias="WAREHOUSE_API_ALLOWED_IPS"
+    )
+    warehouse_api_max_items_per_request: int = 5_000
     codex_portable_zip_path: str = "/app/downloads/Custom-Codex-Portable.zip"
     codex_ubuntu_appimage_path: str = "/app/downloads/Custom-Codex-Ubuntu-x86_64.AppImage"
     referral_commission_percent: int = 2
@@ -259,6 +268,16 @@ class Settings(BaseSettings):
             raise ValueError("Shop API signature tolerance is too small")
         if not 1 <= self.shop_api_audit_retention_days <= 365:
             raise ValueError("Shop API audit retention must be between 1 and 365 days")
+        if self.warehouse_api_enabled and not self.warehouse_api_key.get_secret_value():
+            raise ValueError("Warehouse API is enabled but its signing key is missing")
+        if self.warehouse_api_signature_tolerance_seconds < 30:
+            raise ValueError("Warehouse API signature tolerance is too small")
+        if self.warehouse_api_rate_limit_per_minute < 1:
+            raise ValueError("Warehouse API rate limit must be positive")
+        if self.warehouse_api_global_rate_limit_per_minute < self.warehouse_api_rate_limit_per_minute:
+            raise ValueError("Global warehouse API limit must cover the per-IP limit")
+        if not 1 <= self.warehouse_api_max_items_per_request <= 5_000:
+            raise ValueError("Warehouse API item limit must be between 1 and 5000")
         if not 60 <= self.payment_expiry_seconds <= 3600:
             raise ValueError("Payment expiry must be between 60 and 3600 seconds")
         if not 1 <= self.payment_expiry_sweep_seconds <= 60:
