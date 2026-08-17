@@ -64,10 +64,13 @@ docker exec "${REDIS_CONTAINER}" redis-cli --rdb "${redis_tmp}" >/dev/null
 docker cp "${REDIS_CONTAINER}:${redis_tmp}" "${work_dir}/redis.rdb" >/dev/null
 docker exec "${REDIS_CONTAINER}" rm -f -- "${redis_tmp}"
 
+# Distributable binaries are large and reproducible; keep them out of the
+# frequent data backup so a single release cannot fill the VPS disk.
 tar \
   --exclude='./.git' \
   --exclude='./.pytest_cache' \
   --exclude='./.ruff_cache' \
+  --exclude='./downloads' \
   --exclude='*.tar.gz' \
   --exclude='*.tar.gz.enc' \
   -czf "${work_dir}/application.tar.gz" \
