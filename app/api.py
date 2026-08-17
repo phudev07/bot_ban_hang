@@ -84,6 +84,9 @@ def create_api(
         title="Telegram SePay Shop",
         docs_url=None,
         redoc_url=None,
+        # The seller guide is a hand-written page. Do not expose FastAPI's
+        # generated schema, which would reveal internal warehouse routes.
+        openapi_url=None,
         lifespan=lifespan,
     )
 

@@ -499,6 +499,9 @@ def test_warehouse_api_purchases_from_shared_wallet_and_is_idempotent(tmp_path) 
         assert "Tạo QR nạp ví" not in docs.text
         assert "flash_sale_id" in docs.text
         assert "max_unit_price" in docs.text
+        assert client.get("/openapi.json").status_code == 404
+        assert client.get("/redoc").status_code == 404
+        assert "/v1/warehouse/inventory/import" not in docs.text
 
         assert client.get("/codex-claude").status_code == 404
         assert client.get("/codex-setup.zip").status_code == 404
