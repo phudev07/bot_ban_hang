@@ -114,10 +114,31 @@ def test_warehouse_import_is_authenticated_idempotent_and_deduplicated(tmp_path:
     body = json.dumps(payload, separators=(",", ":"), ensure_ascii=False).encode()
 
     with TestClient(app, base_url="https://testserver") as client:
+        stock_path = f"/v1/warehouse/inventory/stock?product_id={product_id}"
+        stock_body = b""
+        stock = client.get(
+            stock_path,
+            headers=signed_headers(secret, "GET", stock_path, stock_body),
+        )
+        assert stock.status_code == 200
+        assert stock.json()["local_stock"] == 0
+        assert stock.json()["source_stock"] == 0
+        assert stock.json()["total_stock"] == 0
+        assert stock.json()["has_stock"] is False
+
         response = client.post(path, content=body, headers=signed_headers(secret, "POST", path, body))
         assert response.status_code == 200
         assert response.json()["accepted_count"] == 2
         assert response.json()["duplicate_count"] == 1
+
+        stock_after = client.get(
+            stock_path,
+            headers=signed_headers(secret, "GET", stock_path, stock_body),
+        )
+        assert stock_after.status_code == 200
+        assert stock_after.json()["local_stock"] == 2
+        assert stock_after.json()["total_stock"] == 2
+        assert stock_after.json()["has_stock"] is True
 
         replay_body = body
         replay = client.post(

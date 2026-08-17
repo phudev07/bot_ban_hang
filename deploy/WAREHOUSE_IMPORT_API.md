@@ -36,6 +36,35 @@ timestamp|nonce|METHOD|PATH_WITH_QUERY|sha256(raw_body)
 The signature is HMAC-SHA256 using `WAREHOUSE_API_KEY` as the secret. The
 timestamp window is five minutes by default. A nonce can only be used once.
 
+## Check stock before importing
+
+The automation tool can query the current safe stock count before uploading a
+new batch:
+
+```text
+GET https://token.vietshare.site/v1/warehouse/inventory/stock?product_id=7
+```
+
+Sign the path including the query string. The request body is empty, so its
+body hash is the SHA-256 hash of an empty byte string. This endpoint uses the
+same HMAC headers and nonce protection as the import endpoint.
+
+```json
+{
+  "success": true,
+  "product_id": 7,
+  "product": "GPT Plus",
+  "local_stock": 12,
+  "source_stock": 0,
+  "total_stock": 12,
+  "has_stock": true,
+  "can_import": true
+}
+```
+
+Only counts and safe product metadata are returned. Account contents,
+supplier names and supplier credentials are never returned.
+
 ```python
 import hashlib
 import hmac

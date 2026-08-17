@@ -9,20 +9,21 @@ import re
 import time
 from datetime import UTC, datetime, timedelta
 
-from fastapi import APIRouter, Depends, Header, HTTPException, Request
+from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 from redis.asyncio import Redis
 from redis.exceptions import RedisError
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.config import Settings
 from app.inventory_import import InventoryImportError, import_inventory
-from app.models import Product, WarehouseImportRequest
+from app.models import InventoryItem, Product, WarehouseImportRequest
 from app.partner_services import api_signature
 from app.public_api import client_ip
 from app.rate_limit import FixedWindowRateLimiter, RateLimitDecision, RateLimitRule
+from app.suppliers import EXTERNAL_FULFILLMENT_SOURCES, SELLABLE_FULFILLMENT_SOURCES
 from app.utils import SecretCipher
 
 
@@ -195,6 +196,49 @@ def create_warehouse_api_router(
     @router.get("/health")
     async def warehouse_health() -> dict[str, object]:
         return {"success": True, "enabled": settings.warehouse_api_enabled}
+
+    @router.get("/inventory/stock")
+    async def inventory_stock_endpoint(
+        product_id: int = Query(ge=1),
+        _auth: None = Depends(authenticate),
+    ) -> dict[str, object]:
+        """Return safe stock counts for the automation tool before importing."""
+        async with session_factory() as session:
+            product = await session.scalar(select(Product).where(Product.id == product_id))
+            if (
+                product is None
+                or product.archived_at is not None
+                or product.product_type != "account"
+                or product.fulfillment_source not in SELLABLE_FULFILLMENT_SOURCES
+            ):
+                raise warehouse_error(404, "PRODUCT_NOT_FOUND", "Product is not available")
+            if not product.active:
+                raise warehouse_error(409, "PRODUCT_HIDDEN", "Product is hidden")
+            local_stock = int(
+                await session.scalar(
+                    select(func.count(InventoryItem.id)).where(
+                        InventoryItem.product_id == product.id,
+                        InventoryItem.status == "available",
+                    )
+                )
+                or 0
+            )
+            source_stock = (
+                max(0, int(product.supplier_available_stock))
+                if product.fulfillment_source in EXTERNAL_FULFILLMENT_SOURCES
+                else 0
+            )
+            total_stock = local_stock + source_stock
+            return {
+                "success": True,
+                "product_id": product.id,
+                "product": product.name_vi,
+                "local_stock": local_stock,
+                "source_stock": source_stock,
+                "total_stock": total_stock,
+                "has_stock": total_stock > 0,
+                "can_import": True,
+            }
 
     @router.post("/inventory/import")
     async def import_inventory_endpoint(
