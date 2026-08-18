@@ -1768,6 +1768,113 @@ def test_admin_can_approve_pending_wallet_deposit_once(tmp_path) -> None:
     asyncio.run(verify_database())
 
 
+def test_admin_can_approve_direct_qr_and_deliver_stock(tmp_path) -> None:
+    async def setup_database():
+        database_path = (tmp_path / "dashboard-direct-deposit.db").as_posix()
+        engine = create_async_engine(f"sqlite+aiosqlite:///{database_path}")
+        async with engine.begin() as connection:
+            await connection.run_sync(Base.metadata.create_all)
+        sessions = async_sessionmaker(engine, expire_on_commit=False)
+        encryption_key = Fernet.generate_key().decode()
+        cipher = SecretCipher(encryption_key)
+        async with sessions() as session:
+            category = Category(name_vi="QR", name_en="QR")
+            user = User(
+                telegram_id=88990013,
+                full_name="Direct QR user",
+                username="directqr",
+            )
+            session.add_all([category, user])
+            await session.flush()
+            product = Product(
+                category_id=category.id,
+                name_vi="QR account",
+                name_en="QR account",
+                price=20_000,
+            )
+            session.add(product)
+            await session.flush()
+            session.add_all(
+                [
+                    InventoryItem(
+                        product_id=product.id,
+                        encrypted_secret=cipher.encrypt("direct-account|password"),
+                    ),
+                    Deposit(
+                        user_id=user.telegram_id,
+                        code="NAP88990013DIRE",
+                        requested_amount=20_000,
+                        payment_kind="direct_purchase",
+                        product_id=product.id,
+                        quantity=1,
+                        status="failed",
+                        failure_reason="expired",
+                        failed_at=datetime.now(UTC),
+                        expires_at=datetime.now(UTC) - timedelta(minutes=1),
+                    ),
+                ]
+            )
+            await session.commit()
+            deposit = await session.scalar(select(Deposit))
+            assert deposit is not None
+            return engine, sessions, cipher, encryption_key, deposit.id
+
+    engine, sessions, cipher, encryption_key, deposit_id = asyncio.run(setup_database())
+    settings = Settings(
+        _env_file=None,
+        bot_token="123456:ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghi",
+        inventory_encryption_key=encryption_key,
+        dashboard_enabled=True,
+        dashboard_username="admin",
+        dashboard_password_hash=hash_dashboard_password("dashboard-password"),
+        dashboard_session_secret="session-secret-long-enough-for-tests",
+    )
+    bot = FakeBot()
+    app = create_api(
+        settings,
+        sessions,
+        bot,  # type: ignore[arg-type]
+        cipher,
+    )
+
+    with TestClient(app, base_url="https://testserver") as client:
+        client.post(
+            "/admin/login",
+            data={"username": "admin", "password": "dashboard-password"},
+        )
+        payments_page = client.get("/admin/payments")
+        csrf_match = re.search(r'name="csrf" value="([^"]+)"', payments_page.text)
+        assert csrf_match is not None
+        csrf = csrf_match.group(1)
+        assert f'action="/admin/payments/deposits/{deposit_id}/approve"' in payments_page.text
+        assert "Duyệt & giao" in payments_page.text
+        assert f'action="/admin/payments/deposits/{deposit_id}/cancel"' in payments_page.text
+
+        approved = client.post(
+            f"/admin/payments/deposits/{deposit_id}/approve",
+            data={"csrf": csrf},
+            headers={"X-Requested-With": "XMLHttpRequest", "Accept": "application/json"},
+            follow_redirects=False,
+        )
+        assert approved.status_code == 200
+        assert approved.json()["status"] == "direct_purchase_completed"
+        assert approved.json()["delivered"] is True
+        assert len(bot.messages) == 1
+        assert "Thanh toán và giao hàng thành công" in str(bot.messages[0][0][1])
+
+    async def verify_database() -> None:
+        async with sessions() as session:
+            deposit = await session.get(Deposit, deposit_id)
+            item = await session.scalar(select(InventoryItem))
+            assert deposit is not None and deposit.status == "paid"
+            assert item is not None and item.status == "sold"
+            assert await session.scalar(select(func.count(Order.id))) == 1
+            assert await session.scalar(select(func.count(WalletTransaction.id))) == 0
+        await engine.dispose()
+
+    asyncio.run(verify_database())
+
+
 def test_admin_can_cancel_pending_wallet_deposit_once(tmp_path) -> None:
     async def setup_database():
         database_path = (tmp_path / "dashboard-cancel-deposit.db").as_posix()

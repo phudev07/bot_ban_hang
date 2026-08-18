@@ -3139,6 +3139,124 @@ async def cancel_wallet_deposit(
             )
 
 
+async def approve_direct_purchase_deposit(
+    session_factory: async_sessionmaker[AsyncSession],
+    deposit_id: int,
+    *,
+    payment_prefix: str = "NAP",
+    cipher: SecretCipher | None = None,
+    supplier_client: SumistoreClient | None = None,
+    referral_commission_percent: int = 2,
+    lehai_client: LeHaiPremiumClient | None = None,
+    canboso_client: ExternalSupplierClient | None = None,
+    nce_client: ExternalSupplierClient | None = None,
+    haji_client: HajiClient | None = None,
+) -> PaymentResult:
+    """Manually settle a direct-QR order after confirming the bank transfer."""
+    async with session_factory() as session:
+        async with session.begin():
+            deposit = await session.scalar(
+                select(Deposit).where(Deposit.id == deposit_id).with_for_update()
+            )
+            if deposit is None:
+                return PaymentResult("manual_not_found")
+            if deposit.payment_kind != "direct_purchase":
+                return PaymentResult("manual_invalid_kind", deposit_code=deposit.code)
+            if deposit.status == "paid":
+                return PaymentResult("already_paid_payment", deposit_code=deposit.code)
+            if deposit.status not in {"pending", "failed"}:
+                return PaymentResult("manual_invalid_status", deposit_code=deposit.code)
+            if deposit.status == "failed" and deposit.failure_reason != "expired":
+                return PaymentResult("manual_invalid_status", deposit_code=deposit.code)
+            existing_credit = await session.scalar(
+                select(PaymentTransaction.id).where(
+                    PaymentTransaction.deposit_id == deposit.id,
+                    PaymentTransaction.credit_status == "credited",
+                )
+            )
+            if existing_credit is not None:
+                return PaymentResult("already_paid_payment", deposit_code=deposit.code)
+            if deposit.status == "failed":
+                deposit.status = "pending"
+                deposit.failed_at = None
+                deposit.failure_reason = None
+            deposit_code = deposit.code
+            amount = int(deposit.requested_amount)
+
+    return await process_sepay_payment(
+        session_factory,
+        {
+            "id": f"ADMIN-DIRECT-DEPOSIT-{deposit_id}",
+            "transferType": "in",
+            "transferAmount": amount,
+            "content": deposit_code,
+        },
+        payment_prefix,
+        cipher,
+        supplier_client,
+        referral_commission_percent,
+        None,
+        lehai_client,
+        canboso_client,
+        nce_client,
+        haji_client,
+        manual_deposit_id=deposit_id,
+    )
+
+
+async def cancel_direct_purchase_deposit(
+    session_factory: async_sessionmaker[AsyncSession],
+    deposit_id: int,
+) -> ManualDepositCancellationResult:
+    """Cancel a direct-QR request without crediting or delivering it."""
+    async with session_factory() as session:
+        async with session.begin():
+            deposit = await session.scalar(
+                select(Deposit).where(Deposit.id == deposit_id).with_for_update()
+            )
+            if deposit is None:
+                return ManualDepositCancellationResult("not_found")
+            if deposit.payment_kind != "direct_purchase":
+                return ManualDepositCancellationResult(
+                    "invalid_kind", deposit_code=deposit.code
+                )
+            if deposit.status == "paid":
+                return ManualDepositCancellationResult(
+                    "already_paid", deposit_code=deposit.code
+                )
+            if deposit.status == "failed" and deposit.failure_reason == "admin_cancelled":
+                return ManualDepositCancellationResult(
+                    "already_cancelled", deposit_code=deposit.code
+                )
+            if deposit.status not in {"pending", "failed"} or (
+                deposit.status == "failed" and deposit.failure_reason != "expired"
+            ):
+                return ManualDepositCancellationResult(
+                    "invalid_status", deposit_code=deposit.code
+                )
+            await release_deposit_flash_sale(session, deposit)
+            user = await session.scalar(
+                select(User).where(User.telegram_id == deposit.user_id).with_for_update()
+            )
+            if user is None:
+                return ManualDepositCancellationResult(
+                    "user_not_found", deposit_code=deposit.code
+                )
+            cancelled_at = datetime.now(UTC)
+            deposit.status = "failed"
+            deposit.failed_at = cancelled_at
+            deposit.failure_reason = "admin_cancelled"
+            return ManualDepositCancellationResult(
+                "cancelled",
+                user_id=user.telegram_id,
+                amount=int(deposit.requested_amount),
+                balance=int(user.balance),
+                deposit_code=deposit.code,
+                username=user.username,
+                language=user.language,
+            )
+
+
 async def process_sepay_payment(
     session_factory: async_sessionmaker[AsyncSession],
     payload: dict[str, object],
@@ -3151,6 +3269,7 @@ async def process_sepay_payment(
     canboso_client: ExternalSupplierClient | None = None,
     nce_client: ExternalSupplierClient | None = None,
     haji_client: HajiClient | None = None,
+    manual_deposit_id: int | None = None,
 ) -> PaymentResult:
     if (
         supplier_client is not None
@@ -3204,6 +3323,7 @@ async def process_sepay_payment(
                         canboso_client,
                         nce_client,
                         haji_client,
+                        manual_deposit_id,
                     )
     return await _process_sepay_payment(
         session_factory,
@@ -3217,6 +3337,7 @@ async def process_sepay_payment(
         canboso_client,
         nce_client,
         haji_client,
+        manual_deposit_id,
     )
 
 
@@ -3232,6 +3353,7 @@ async def _process_sepay_payment(
     canboso_client: ExternalSupplierClient | None,
     nce_client: ExternalSupplierClient | None,
     haji_client: HajiClient | None,
+    manual_deposit_id: int | None = None,
 ) -> PaymentResult:
     transfer_type = str(payload.get("transferType") or payload.get("transfer_type") or "").lower()
     if transfer_type and transfer_type not in {"in", "credit", "incoming"}:
@@ -3265,6 +3387,11 @@ async def _process_sepay_payment(
             )
             if deposit is None:
                 return PaymentResult("deposit_not_found")
+            manual_override = manual_deposit_id is not None and manual_deposit_id == deposit.id
+            if manual_deposit_id is not None and not manual_override:
+                return PaymentResult("manual_invalid_request")
+            if manual_override and deposit.payment_kind != "direct_purchase":
+                return PaymentResult("manual_invalid_kind", deposit_code=deposit.code)
             existing = await session.scalar(
                 select(PaymentTransaction).where(
                     PaymentTransaction.provider_tx_id == provider_tx_id
@@ -3298,14 +3425,18 @@ async def _process_sepay_payment(
             if manual_credit_exists is not None:
                 rejected_status = "manual_approval_matched"
                 credit_status = "manual_matched"
-            elif now >= expires_at:
+            elif not manual_override and now >= expires_at:
                 if deposit.status == "pending":
                     deposit.status = "failed"
                     deposit.failed_at = now
                     deposit.failure_reason = "expired"
                 rejected_status = "expired_payment"
                 credit_status = "expired"
-            elif deposit.status != "pending":
+            elif deposit.status != "pending" and not (
+                manual_override
+                and deposit.status == "failed"
+                and deposit.failure_reason == "expired"
+            ):
                 rejected_status = (
                     "already_paid_payment"
                     if deposit.status == "paid"
@@ -4084,6 +4215,8 @@ async def _process_sepay_payment(
                     deposit.status = "paid"
                     deposit.paid_amount = amount
                     deposit.paid_at = now
+                    deposit.failed_at = None
+                    deposit.failure_reason = None
                     session.add(
                         PaymentTransaction(
                             deposit_id=deposit.id,
@@ -4131,6 +4264,8 @@ async def _process_sepay_payment(
             deposit.status = "paid"
             deposit.paid_amount = amount
             deposit.paid_at = now
+            deposit.failed_at = None
+            deposit.failure_reason = None
             session.add(
                 PaymentTransaction(
                     deposit_id=deposit.id,

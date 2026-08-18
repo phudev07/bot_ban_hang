@@ -23,9 +23,11 @@ from app.models import (
     WalletTransaction,
 )
 from app.services import (
+    approve_direct_purchase_deposit,
     approve_wallet_deposit,
     active_products,
     available_stock,
+    cancel_direct_purchase_deposit,
     cancel_wallet_deposit,
     CouponValidationError,
     create_deposit,
@@ -1474,6 +1476,146 @@ def test_manual_deposit_cancellation_allows_expired_requests() -> None:
             assert deposit.failure_reason == "admin_cancelled"
             assert await session.scalar(select(PaymentTransaction.id)) is None
             assert await session.scalar(select(WalletTransaction.id)) is None
+        await engine.dispose()
+
+    asyncio.run(scenario())
+
+
+def test_manual_direct_purchase_approves_delivery_or_wallet_fallback() -> None:
+    async def scenario() -> None:
+        engine, sessions = await make_database()
+        cipher = SecretCipher(Fernet.generate_key().decode())
+        async with sessions() as session:
+            category = Category(name_vi="QR", name_en="QR")
+            user = User(telegram_id=321657, full_name="QR buyer", balance=1_000)
+            session.add_all([category, user])
+            await session.flush()
+            product = Product(
+                category_id=category.id,
+                name_vi="QR account",
+                name_en="QR account",
+                price=20_000,
+            )
+            session.add(product)
+            await session.flush()
+            item = InventoryItem(
+                product_id=product.id,
+                encrypted_secret=cipher.encrypt("qr-account|password"),
+            )
+            delivered = Deposit(
+                user_id=user.telegram_id,
+                code="NAP321657DELI",
+                requested_amount=20_000,
+                payment_kind="direct_purchase",
+                product_id=product.id,
+                quantity=1,
+                status="failed",
+                failure_reason="expired",
+                failed_at=datetime.now(UTC),
+                expires_at=datetime.now(UTC) - timedelta(minutes=1),
+            )
+            fallback = Deposit(
+                user_id=user.telegram_id,
+                code="NAP321657FALL",
+                requested_amount=30_000,
+                payment_kind="direct_purchase",
+                product_id=product.id,
+                quantity=2,
+            )
+            session.add_all([item, delivered, fallback])
+            await session.commit()
+            delivered_id = delivered.id
+            fallback_id = fallback.id
+
+        delivered_result = await approve_direct_purchase_deposit(
+            sessions,
+            delivered_id,
+            cipher=cipher,
+        )
+        assert delivered_result.status == "direct_purchase_completed"
+        assert delivered_result.order_ids
+        assert [cipher.decrypt(value) for value in delivered_result.encrypted_secrets] == [
+            "qr-account|password"
+        ]
+        duplicate = await approve_direct_purchase_deposit(
+            sessions,
+            delivered_id,
+            cipher=cipher,
+        )
+        assert duplicate.status == "already_paid_payment"
+
+        fallback_result = await approve_direct_purchase_deposit(
+            sessions,
+            fallback_id,
+            cipher=cipher,
+        )
+        assert fallback_result.status == "direct_purchase_fallback"
+        assert fallback_result.balance == 31_000
+
+        async with sessions() as session:
+            delivered = await session.get(Deposit, delivered_id)
+            fallback = await session.get(Deposit, fallback_id)
+            user = await session.get(User, 321657)
+            assert delivered is not None and delivered.status == "paid"
+            assert fallback is not None and fallback.status == "paid"
+            assert user is not None and user.balance == 31_000
+            wallet_transaction = await session.scalar(
+                select(WalletTransaction).where(
+                    WalletTransaction.event_key == f"deposit:{fallback_id}"
+                )
+            )
+            assert wallet_transaction is not None
+            assert wallet_transaction.kind == "direct_purchase_fallback"
+        await engine.dispose()
+
+    asyncio.run(scenario())
+
+
+def test_manual_direct_purchase_cancellation_blocks_late_webhook() -> None:
+    async def scenario() -> None:
+        engine, sessions = await make_database()
+        async with sessions() as session:
+            category = Category(name_vi="QR", name_en="QR")
+            user = User(telegram_id=321658, full_name="QR cancel buyer")
+            session.add_all([category, user])
+            await session.flush()
+            product = Product(
+                category_id=category.id,
+                name_vi="QR account",
+                name_en="QR account",
+                price=20_000,
+            )
+            session.add(product)
+            await session.flush()
+            deposit = Deposit(
+                user_id=user.telegram_id,
+                code="NAP321658CANC",
+                requested_amount=20_000,
+                payment_kind="direct_purchase",
+                product_id=product.id,
+                quantity=1,
+            )
+            session.add(deposit)
+            await session.commit()
+            deposit_id = deposit.id
+
+        cancelled = await cancel_direct_purchase_deposit(sessions, deposit_id)
+        assert cancelled.status == "cancelled"
+        late = await process_sepay_payment(
+            sessions,
+            {
+                "id": "BANK-LATE-DIRECT-CANCEL",
+                "transferType": "in",
+                "transferAmount": 20_000,
+                "content": "NAP321658CANC",
+            },
+        )
+        assert late.status == "failed_request_payment"
+        async with sessions() as session:
+            user = await session.get(User, 321658)
+            deposit = await session.get(Deposit, deposit_id)
+            assert user is not None and user.balance == 0
+            assert deposit is not None and deposit.failure_reason == "admin_cancelled"
         await engine.dispose()
 
     asyncio.run(scenario())

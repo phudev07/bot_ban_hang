@@ -26,6 +26,7 @@ from app.autosms import AutoSmsClient
 from app.canboso_suppliers import CanbosoClient
 from app.config import Settings
 from app.custom_emoji import product_brand_emoji
+from app.delivery import delivery_keyboard, delivery_text
 from app.haji_suppliers import HajiClient
 from app.inventory_import import (
     MAX_INVENTORY_IMPORT_NOTE_LENGTH,
@@ -33,6 +34,7 @@ from app.inventory_import import (
     import_inventory,
 )
 from app.lehai_suppliers import LeHaiPremiumClient
+from app.product_tutorials import send_purchase_tutorials
 from app.maintenance import (
     set_sms_rental_maintenance,
     sms_maintenance_operation,
@@ -74,8 +76,10 @@ from app.partner_services import normalize_allowed_ips
 from app.preorders import PreorderError, admin_cancel_preorder
 from app.rentsim import RentSimClient
 from app.services import (
+    approve_direct_purchase_deposit,
     approve_wallet_deposit,
     buy_supplier_product,
+    cancel_direct_purchase_deposit,
     cancel_wallet_deposit,
     preserve_supplier_purchase_parts,
     refresh_product_from_supplier,
@@ -83,6 +87,7 @@ from app.services import (
     supplier_balance_clients_for_product,
     supplier_client_for_product,
 )
+from app.keyboards import main_menu
 from app.price_alerts import queue_admin_price_drop, release_price_lock_if_inventory_empty
 from app.sms_rentals import (
     SmsAvailability,
@@ -5915,21 +5920,52 @@ def create_dashboard_router(
             flash(request, "Phiên duyệt nạp không hợp lệ.", "error")
             return RedirectResponse("/admin/payments", status_code=303)
 
-        result = await approve_wallet_deposit(
-            session_factory,
-            deposit_id,
-            admin_username=str(request.session["dashboard_admin"]),
-        )
-        if result.status != "approved":
+        async with session_factory() as session:
+            payment_kind = await session.scalar(
+                select(Deposit.payment_kind).where(Deposit.id == deposit_id)
+            )
+        is_direct_purchase = payment_kind == "direct_purchase"
+        if is_direct_purchase:
+            result = await approve_direct_purchase_deposit(
+                session_factory,
+                deposit_id,
+                payment_prefix=settings.payment_prefix,
+                cipher=cipher,
+                supplier_client=supplier_client,
+                referral_commission_percent=settings.referral_commission_percent,
+                lehai_client=lehai_client,
+                canboso_client=canboso_client,
+                nce_client=nce_client,
+                haji_client=haji_client,
+            )
+        else:
+            result = await approve_wallet_deposit(
+                session_factory,
+                deposit_id,
+                admin_username=str(request.session["dashboard_admin"]),
+            )
+        successful_direct = is_direct_purchase and result.status in {
+            "direct_purchase_completed",
+            "direct_purchase_fallback",
+        }
+        successful_wallet = not is_direct_purchase and result.status == "approved"
+        if not successful_direct and not successful_wallet:
             messages = {
                 "not_found": "Không tìm thấy yêu cầu nạp.",
                 "invalid_kind": "Chỉ có thể duyệt thủ công yêu cầu nạp vào ví.",
                 "already_paid": "Yêu cầu này đã được thanh toán trước đó.",
+                "already_paid_payment": "Yêu cầu này đã được xử lý trước đó.",
                 "already_credited": "Tiền của yêu cầu này đã được cộng trước đó.",
                 "invalid_status": "Trạng thái yêu cầu không thể duyệt.",
+                "manual_not_found": "Không tìm thấy yêu cầu mua trực tiếp.",
+                "manual_invalid_kind": "Yêu cầu này không phải mua trực tiếp bằng QR.",
+                "manual_invalid_status": "Trạng thái yêu cầu mua trực tiếp không thể duyệt.",
                 "user_not_found": "Không tìm thấy khách hàng của yêu cầu nạp.",
             }
-            message = messages.get(result.status, "Không thể duyệt tiền vào ví.")
+            message = messages.get(
+                result.status,
+                "Không thể duyệt yêu cầu thanh toán.",
+            )
             if wants_json:
                 return JSONResponse(
                     {"ok": False, "status": result.status, "message": message},
@@ -5938,13 +5974,24 @@ def create_dashboard_router(
             flash(request, message, "error")
             return RedirectResponse("/admin/payments", status_code=303)
 
-        message = (
-            f"Đã duyệt {format_vnd(result.amount)} vào ví mã {result.deposit_code}. "
-            f"Số dư mới {format_vnd(result.balance)}."
-        )
+        if result.status == "direct_purchase_completed":
+            message = (
+                f"Đã duyệt và giao đơn QR {result.deposit_code} "
+                f"({result.quantity} sản phẩm)."
+            )
+        elif result.status == "direct_purchase_fallback":
+            message = (
+                f"Đã duyệt QR {result.deposit_code}; không đủ hàng nên đã hoàn "
+                f"{format_vnd(result.amount)} vào ví. Số dư mới {format_vnd(result.balance or 0)}."
+            )
+        else:
+            message = (
+                f"Đã duyệt {format_vnd(result.amount)} vào ví mã {result.deposit_code}. "
+                f"Số dư mới {format_vnd(result.balance)}."
+            )
         if not wants_json:
             flash(request, message)
-        if bot is not None and result.user_id is not None:
+        if bot is not None and result.user_id is not None and result.status == "approved":
             try:
                 await bot.send_message(
                     result.user_id,
@@ -5959,14 +6006,76 @@ def create_dashboard_router(
                     "Could not notify user %s about manual deposit approval",
                     result.user_id,
                 )
+        if bot is not None and result.user_id is not None and result.status == "direct_purchase_completed":
+            try:
+                product_name = (
+                    result.product_name_en
+                    if result.language == "en"
+                    else result.product_name_vi
+                ) or "Digital product"
+                secret_values = [cipher.decrypt(value) for value in result.encrypted_secrets]
+                await bot.send_message(
+                    result.user_id,
+                    delivery_text(
+                        shop_order_code=result.shop_order_code or f"O{min(result.order_ids)}",
+                        product_name=product_name,
+                        secrets=secret_values,
+                        total_amount=result.amount,
+                        language=result.language,
+                        paid_by_qr=True,
+                    ),
+                    reply_markup=delivery_keyboard(
+                        primary_order_id=min(result.order_ids),
+                        secrets=secret_values,
+                        language=result.language,
+                        guide_url=(
+                            f"{settings.shop_api_base_url.rstrip('/').removesuffix('/v1')}/codex-api"
+                            if (result.supplier_product_id or "").startswith("apicodex_")
+                            else None
+                        ),
+                    ),
+                )
+                await send_purchase_tutorials(
+                    bot,
+                    result.user_id,
+                    result.supplier_product_id,
+                    result.language,
+                    session_factory,
+                )
+            except Exception:
+                logger.exception(
+                    "Could not deliver manually approved direct purchase to user %s",
+                    result.user_id,
+                )
+        if bot is not None and result.user_id is not None and result.status == "direct_purchase_fallback":
+            try:
+                await bot.send_message(
+                    result.user_id,
+                    "⚠️ <b>Thanh toán QR đã được duyệt</b>\n\n"
+                    f"• Mã đơn: <code>{escape(result.deposit_code or '—')}</code>\n"
+                    f"• Hàng không đủ nên đã hoàn ví: <b>{format_vnd(result.amount)}</b>\n"
+                    f"• Số dư hiện tại: <b>{format_vnd(result.balance or 0)}</b>",
+                    reply_markup=main_menu(
+                        result.language,
+                        sms_enabled=(rentsim_client is not None or autosms_client is not None),
+                        codex_enabled=haji_client is not None,
+                    ),
+                )
+            except Exception:
+                logger.exception(
+                    "Could not notify user %s about direct purchase fallback",
+                    result.user_id,
+                )
         if wants_json:
             return JSONResponse(
                 {
                     "ok": True,
-                    "status": "approved",
+                    "status": result.status,
                     "deposit_id": deposit_id,
                     "message": message,
                     "balance": result.balance,
+                    "delivered": result.status == "direct_purchase_completed",
+                    "refunded_to_wallet": result.status == "direct_purchase_fallback",
                 }
             )
         return RedirectResponse("/admin/payments", status_code=303)
@@ -5993,11 +6102,19 @@ def create_dashboard_router(
             flash(request, "Phiên hủy yêu cầu nạp không hợp lệ.", "error")
             return RedirectResponse("/admin/payments", status_code=303)
 
-        result = await cancel_wallet_deposit(session_factory, deposit_id)
+        async with session_factory() as session:
+            payment_kind = await session.scalar(
+                select(Deposit.payment_kind).where(Deposit.id == deposit_id)
+            )
+        result = (
+            await cancel_direct_purchase_deposit(session_factory, deposit_id)
+            if payment_kind == "direct_purchase"
+            else await cancel_wallet_deposit(session_factory, deposit_id)
+        )
         if result.status != "cancelled":
             messages = {
                 "not_found": "Không tìm thấy yêu cầu nạp.",
-                "invalid_kind": "Chỉ có thể hủy yêu cầu nạp vào ví.",
+                "invalid_kind": "Loại yêu cầu thanh toán không hợp lệ.",
                 "already_paid": "Yêu cầu này đã được thanh toán nên không thể hủy.",
                 "already_credited": "Tiền của yêu cầu này đã được cộng nên không thể hủy.",
                 "already_cancelled": "Yêu cầu nạp này đã được hủy trước đó.",
