@@ -1,4 +1,5 @@
 from functools import lru_cache
+from datetime import datetime
 from typing import Literal
 
 from pydantic import Field, SecretStr, field_validator, model_validator
@@ -37,6 +38,12 @@ class Settings(BaseSettings):
     payment_expiry_seconds: int = 300
     payment_expiry_sweep_seconds: int = 2
     max_pending_deposits_per_user: int = 3
+    # Optional rollout boundary for the Admin payment settlement controls.
+    # Existing requests before this instant remain view-only.
+    manual_payment_controls_since: datetime | None = Field(
+        default=None,
+        validation_alias="MANUAL_PAYMENT_CONTROLS_SINCE",
+    )
 
     bot_spam_protection_enabled: bool = True
     bot_global_rate_limit_per_minute: int = 45

@@ -1,3 +1,5 @@
+from datetime import UTC, datetime
+
 import pytest
 from cryptography.fernet import Fernet
 from pydantic import ValidationError
@@ -66,6 +68,12 @@ def test_payment_expiry_configuration_is_bounded() -> None:
         base_settings(payment_expiry_seconds=59)
     with pytest.raises(ValidationError):
         base_settings(payment_expiry_sweep_seconds=0)
+
+
+def test_manual_payment_controls_since_can_be_configured() -> None:
+    cutoff = datetime(2026, 8, 18, 6, 0, tzinfo=UTC)
+    settings = base_settings(MANUAL_PAYMENT_CONTROLS_SINCE=cutoff)
+    assert settings.manual_payment_controls_since == cutoff
 
 
 def test_spam_protection_configuration_is_bounded() -> None:

@@ -218,6 +218,23 @@ def local_datetime(value: datetime | None) -> str:
 templates.env.filters["localtime"] = local_datetime
 
 
+def manual_payment_controls_enabled(
+    created_at: datetime | None,
+    settings: Settings,
+) -> bool:
+    """Return whether a payment request belongs to the current control rollout."""
+    cutoff = settings.manual_payment_controls_since
+    if cutoff is None:
+        return True
+    if created_at is None:
+        return False
+    if created_at.tzinfo is None:
+        created_at = created_at.replace(tzinfo=UTC)
+    if cutoff.tzinfo is None:
+        cutoff = cutoff.replace(tzinfo=UTC)
+    return created_at >= cutoff
+
+
 def dashboard_periods() -> dict[str, datetime]:
     now = datetime.now(LOCAL_TIMEZONE)
     return {
@@ -5797,7 +5814,14 @@ def create_dashboard_router(
             if deposit_conditions:
                 deposit_statement = deposit_statement.where(*deposit_conditions)
             deposits = [
-                {"deposit": deposit, "user": user}
+                {
+                    "deposit": deposit,
+                    "user": user,
+                    "manual_controls_enabled": manual_payment_controls_enabled(
+                        deposit.created_at,
+                        settings,
+                    ),
+                }
                 for deposit, user in await session.execute(deposit_statement)
             ]
             transactions = [
@@ -5921,9 +5945,21 @@ def create_dashboard_router(
             return RedirectResponse("/admin/payments", status_code=303)
 
         async with session_factory() as session:
-            payment_kind = await session.scalar(
-                select(Deposit.payment_kind).where(Deposit.id == deposit_id)
+            deposit_meta = await session.execute(
+                select(Deposit.payment_kind, Deposit.created_at).where(
+                    Deposit.id == deposit_id
+                )
             )
+            payment_kind, created_at = deposit_meta.one_or_none() or (None, None)
+        if not manual_payment_controls_enabled(created_at, settings):
+            message = "Yêu cầu thanh toán này được tạo trước khi bật duyệt thủ công."
+            if wants_json:
+                return JSONResponse(
+                    {"ok": False, "status": "legacy_manual_disabled", "message": message},
+                    status_code=409,
+                )
+            flash(request, message, "error")
+            return RedirectResponse("/admin/payments", status_code=303)
         is_direct_purchase = payment_kind == "direct_purchase"
         if is_direct_purchase:
             result = await approve_direct_purchase_deposit(
@@ -6103,9 +6139,21 @@ def create_dashboard_router(
             return RedirectResponse("/admin/payments", status_code=303)
 
         async with session_factory() as session:
-            payment_kind = await session.scalar(
-                select(Deposit.payment_kind).where(Deposit.id == deposit_id)
+            deposit_meta = await session.execute(
+                select(Deposit.payment_kind, Deposit.created_at).where(
+                    Deposit.id == deposit_id
+                )
             )
+            payment_kind, created_at = deposit_meta.one_or_none() or (None, None)
+        if not manual_payment_controls_enabled(created_at, settings):
+            message = "Yêu cầu thanh toán này được tạo trước khi bật hủy thủ công."
+            if wants_json:
+                return JSONResponse(
+                    {"ok": False, "status": "legacy_manual_disabled", "message": message},
+                    status_code=409,
+                )
+            flash(request, message, "error")
+            return RedirectResponse("/admin/payments", status_code=303)
         result = (
             await cancel_direct_purchase_deposit(session_factory, deposit_id)
             if payment_kind == "direct_purchase"
