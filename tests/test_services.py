@@ -1509,10 +1509,8 @@ def test_manual_direct_purchase_approves_delivery_or_wallet_fallback() -> None:
                 payment_kind="direct_purchase",
                 product_id=product.id,
                 quantity=1,
-                status="failed",
-                failure_reason="expired",
-                failed_at=datetime.now(UTC),
-                expires_at=datetime.now(UTC) - timedelta(minutes=1),
+                status="pending",
+                expires_at=datetime.now(UTC) + timedelta(minutes=5),
             )
             fallback = Deposit(
                 user_id=user.telegram_id,
@@ -1537,6 +1535,17 @@ def test_manual_direct_purchase_approves_delivery_or_wallet_fallback() -> None:
         assert [cipher.decrypt(value) for value in delivered_result.encrypted_secrets] == [
             "qr-account|password"
         ]
+        late_webhook = await process_sepay_payment(
+            sessions,
+            {
+                "id": "BANK-AFTER-MANUAL-DIRECT",
+                "transferType": "in",
+                "transferAmount": 20_000,
+                "content": "NAP321657DELI",
+            },
+            cipher=cipher,
+        )
+        assert late_webhook.status == "manual_approval_matched"
         duplicate = await approve_direct_purchase_deposit(
             sessions,
             delivered_id,
@@ -1594,6 +1603,10 @@ def test_manual_direct_purchase_cancellation_blocks_late_webhook() -> None:
                 payment_kind="direct_purchase",
                 product_id=product.id,
                 quantity=1,
+                status="failed",
+                failure_reason="expired",
+                failed_at=datetime.now(UTC),
+                expires_at=datetime.now(UTC) - timedelta(minutes=1),
             )
             session.add(deposit)
             await session.commit()
@@ -1616,6 +1629,48 @@ def test_manual_direct_purchase_cancellation_blocks_late_webhook() -> None:
             deposit = await session.get(Deposit, deposit_id)
             assert user is not None and user.balance == 0
             assert deposit is not None and deposit.failure_reason == "admin_cancelled"
+        await engine.dispose()
+
+    asyncio.run(scenario())
+
+
+def test_manual_direct_purchase_cancellation_rejects_pending_request() -> None:
+    async def scenario() -> None:
+        engine, sessions = await make_database()
+        async with sessions() as session:
+            category = Category(name_vi="QR", name_en="QR")
+            user = User(telegram_id=321659, full_name="QR pending buyer")
+            session.add_all([category, user])
+            await session.flush()
+            product = Product(
+                category_id=category.id,
+                name_vi="QR account",
+                name_en="QR account",
+                price=20_000,
+            )
+            session.add(product)
+            await session.flush()
+            deposit = Deposit(
+                user_id=user.telegram_id,
+                code="NAP321659PEND",
+                requested_amount=20_000,
+                payment_kind="direct_purchase",
+                product_id=product.id,
+                quantity=1,
+                status="pending",
+                expires_at=datetime.now(UTC) + timedelta(minutes=5),
+            )
+            session.add(deposit)
+            await session.commit()
+            deposit_id = deposit.id
+
+        result = await cancel_direct_purchase_deposit(sessions, deposit_id)
+        assert result.status == "invalid_status"
+        async with sessions() as session:
+            deposit = await session.get(Deposit, deposit_id)
+            assert deposit is not None
+            assert deposit.status == "pending"
+            assert deposit.failure_reason is None
         await engine.dispose()
 
     asyncio.run(scenario())

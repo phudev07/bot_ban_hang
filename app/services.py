@@ -3228,9 +3228,9 @@ async def cancel_direct_purchase_deposit(
                 return ManualDepositCancellationResult(
                     "already_cancelled", deposit_code=deposit.code
                 )
-            if deposit.status not in {"pending", "failed"} or (
-                deposit.status == "failed" and deposit.failure_reason != "expired"
-            ):
+            # A direct QR request can only be cancelled after its five-minute
+            # payment window has expired. Pending requests remain approvable.
+            if deposit.status != "failed" or deposit.failure_reason != "expired":
                 return ManualDepositCancellationResult(
                     "invalid_status", deposit_code=deposit.code
                 )
@@ -3418,13 +3418,27 @@ async def _process_sepay_payment(
                 manual_credit_exists = await session.scalar(
                     select(PaymentTransaction.id).where(
                         PaymentTransaction.deposit_id == deposit.id,
-                        PaymentTransaction.provider_tx_id == f"ADMIN-DEPOSIT-{deposit.id}",
+                        PaymentTransaction.provider_tx_id.in_(
+                            (
+                                f"ADMIN-DEPOSIT-{deposit.id}",
+                                f"ADMIN-DIRECT-DEPOSIT-{deposit.id}",
+                            )
+                        ),
                         PaymentTransaction.credit_status == "credited",
                     )
                 )
             if manual_credit_exists is not None:
                 rejected_status = "manual_approval_matched"
                 credit_status = "manual_matched"
+            elif deposit.status == "paid":
+                # A manual approval and a webhook may arrive together. The row
+                # lock plus this terminal-state check keeps the second signal
+                # from crediting or delivering the request again.
+                rejected_status = "already_paid_payment"
+                credit_status = "already_paid"
+            elif deposit.status == "failed" and deposit.failure_reason == "admin_cancelled":
+                rejected_status = "failed_request_payment"
+                credit_status = "failed_request"
             elif not manual_override and now >= expires_at:
                 if deposit.status == "pending":
                     deposit.status = "failed"
