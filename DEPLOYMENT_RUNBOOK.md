@@ -60,6 +60,7 @@ ssh -i "$HOME\.ssh\codex_vps" root@160.191.243.91
 | Service | URL | Notes |
 |---|---|---|
 | Admin and Telegram webhook host | `https://160-191-243-91.sslip.io` | Admin is under `/admin` |
+| Admin fallback host | `https://token.vietshare.site/admin` | Cloudflare-backed fallback for networks that block `sslip.io` |
 | Warehouse API | `https://token.vietshare.site/v1` | Cloudflare-proxied API domain |
 | Warehouse API guide | `https://token.vietshare.site/docs` | Public integration documentation |
 | Internal health check | `http://127.0.0.1:8080/health` | Only call from the VPS |
