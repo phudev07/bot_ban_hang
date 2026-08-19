@@ -78,6 +78,7 @@ from app.rentsim import RentSimClient
 from app.services import (
     approve_direct_purchase_deposit,
     approve_wallet_deposit,
+    available_stock,
     buy_supplier_product,
     cancel_direct_purchase_deposit,
     cancel_wallet_deposit,
@@ -4757,6 +4758,30 @@ def create_dashboard_router(
                         .order_by(Product.id)
                     )
                 )
+                local_stock_query = (
+                    select(
+                        InventoryItem.product_id,
+                        func.count(InventoryItem.id).label("stock"),
+                    )
+                    .where(InventoryItem.status == "available")
+                    .group_by(InventoryItem.product_id)
+                    .subquery()
+                )
+                local_stock_rows = await session.execute(
+                    select(
+                        Product.id,
+                        func.coalesce(local_stock_query.c.stock, 0),
+                    )
+                    .outerjoin(
+                        local_stock_query,
+                        local_stock_query.c.product_id == Product.id,
+                    )
+                    .where(Product.id.in_([product.id for product in stock_products]))
+                )
+                local_stock_by_product = {
+                    int(product_id): int(stock)
+                    for product_id, stock in local_stock_rows
+                }
                 stock_product_rows = [
                     {
                         "product": product,
@@ -4768,6 +4793,10 @@ def create_dashboard_router(
                     }
                     for product in stock_products
                 ]
+                for row in stock_product_rows:
+                    product = row["product"]
+                    if product.fulfillment_source == "local" and not product.force_out_of_stock:
+                        row["stock"] = local_stock_by_product.get(int(product.id), 0)
             alert_failures: dict[tuple[str, int], list[dict[str, object]]] = {}
             sale_ids = [alert.id for alert, _product in sale_records]
             stock_ids = [alert.id for alert, _product in stock_records]
@@ -4906,11 +4935,7 @@ def create_dashboard_router(
                 ):
                     flash(request, "Sản phẩm không tồn tại hoặc đang bị ẩn.", "error")
                     return RedirectResponse(destination, status_code=303)
-                current_stock = (
-                    0
-                    if product.force_out_of_stock
-                    else max(0, int(product.external_stock))
-                )
+                current_stock = await available_stock(session, product.id)
                 queued = await queue_manual_stock_alert(
                     session,
                     product,

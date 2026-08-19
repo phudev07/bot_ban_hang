@@ -2199,6 +2199,80 @@ def test_admin_can_queue_existing_stock_notification_template(tmp_path) -> None:
     asyncio.run(engine.dispose())
 
 
+def test_manual_stock_notification_uses_local_inventory_stock(tmp_path) -> None:
+    async def setup_database():
+        database_path = (tmp_path / "manual-local-stock-alert.db").as_posix()
+        engine = create_async_engine(f"sqlite+aiosqlite:///{database_path}")
+        async with engine.begin() as connection:
+            await connection.run_sync(Base.metadata.create_all)
+        sessions = async_sessionmaker(engine, expire_on_commit=False)
+        async with sessions() as session:
+            category = Category(name_vi="Kho", name_en="Local")
+            session.add(category)
+            await session.flush()
+            product = Product(
+                category_id=category.id,
+                name_vi="Sản phẩm kho nội bộ",
+                name_en="Local stock product",
+                price=40_000,
+                fulfillment_source="local",
+                external_stock=0,
+            )
+            session.add(product)
+            await session.flush()
+            session.add_all(
+                [
+                    InventoryItem(product_id=product.id, encrypted_secret="secret-1"),
+                    InventoryItem(product_id=product.id, encrypted_secret="secret-2"),
+                ]
+            )
+            await session.commit()
+            return engine, sessions, product.id
+
+    engine, sessions, product_id = asyncio.run(setup_database())
+    encryption_key = Fernet.generate_key().decode()
+    settings = Settings(
+        _env_file=None,
+        bot_token="123456:ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghi",
+        inventory_encryption_key=encryption_key,
+        dashboard_enabled=True,
+        dashboard_username="admin",
+        dashboard_password_hash=hash_dashboard_password("dashboard-password"),
+        dashboard_session_secret="session-secret-long-enough-for-tests",
+    )
+    app = create_api(
+        settings,
+        sessions,
+        FakeBot(),  # type: ignore[arg-type]
+        SecretCipher(encryption_key),
+    )
+
+    with TestClient(app, base_url="https://testserver") as client:
+        client.post(
+            "/admin/login",
+            data={"username": "admin", "password": "dashboard-password"},
+        )
+        page = client.get("/admin/broadcasts?tab=stock")
+        assert f'value="{product_id}"' in page.text
+        assert "Sản phẩm kho nội bộ · tồn 2" in page.text
+        csrf = re.search(r'name="csrf" value="([^"]+)"', page.text).group(1)
+        queued = client.post(
+            "/admin/broadcasts/stock/manual",
+            data={"csrf": csrf, "product_id": product_id},
+            follow_redirects=False,
+        )
+        assert queued.status_code == 303
+
+    async def verify_database() -> None:
+        async with sessions() as session:
+            alert = await session.scalar(select(ProductStockAlert))
+            assert alert is not None
+            assert alert.stock_after == 2
+
+    asyncio.run(verify_database())
+    asyncio.run(engine.dispose())
+
+
 def test_admin_can_enable_stock_notifications_without_balance_topup(tmp_path) -> None:
     async def setup_database():
         database_path = (tmp_path / "stock-notification-switch.db").as_posix()
