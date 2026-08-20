@@ -31,8 +31,8 @@ def delivery_text(
     paid_by_qr: bool = False,
 ) -> str:
     product_name = sanitize_customer_text(product_name)
-    is_codex_key = "codex" in product_name.casefold()
     is_gpt_free = "gpt free" in product_name.casefold()
+    is_codex_key = "codex" in product_name.casefold() and not is_gpt_free
     brand_emoji = product_brand_emoji(product_name)
     display_secrets = (
         [_gpt_free_account_line(secret) for secret in secrets] if is_gpt_free else secrets
