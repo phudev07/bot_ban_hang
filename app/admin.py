@@ -1,3 +1,4 @@
+import asyncio
 from html import escape
 import logging
 
@@ -54,6 +55,8 @@ class AdminCustomEmojiFilter(BaseFilter):
 
 def create_admin_router(settings: Settings, cipher: SecretCipher) -> Router:
     router = Router(name="admin")
+    media_group_buffers: dict[tuple[int, str], list[Message]] = {}
+    media_group_tasks: dict[tuple[int, str], asyncio.Task[None]] = {}
 
     def is_admin_id(user_id: int | None) -> bool:
         return bool(user_id is not None and user_id in settings.admin_ids)
@@ -445,14 +448,20 @@ def create_admin_router(settings: Settings, cipher: SecretCipher) -> Router:
         bot: Bot,
         session: AsyncSession,
         state: FSMContext,
+        source_messages: list[Message] | None = None,
     ) -> None:
-        source_parts = [
-            getattr(source, "text", None),
-            getattr(source, "caption", None),
-        ]
-        for media_field in ("document", "audio", "video", "animation"):
-            media = getattr(source, media_field, None)
-            source_parts.append(getattr(media, "file_name", None))
+        source_messages = source_messages or [source]
+        source_parts: list[str | None] = []
+        for source_item in source_messages:
+            source_parts.extend(
+                [
+                    getattr(source_item, "text", None),
+                    getattr(source_item, "caption", None),
+                ]
+            )
+            for media_field in ("document", "audio", "video", "animation"):
+                media = getattr(source_item, media_field, None)
+                source_parts.append(getattr(media, "file_name", None))
         source_text = "\n".join(part for part in source_parts if part)
         if contains_supplier_identity(source_text):
             await state.clear()
@@ -472,19 +481,41 @@ def create_admin_router(settings: Settings, cipher: SecretCipher) -> Router:
             await admin_message.answer("Chưa có người dùng nào đã /start để nhận thông báo.")
             return
         await state.set_state(BroadcastStates.waiting_for_confirmation)
+        state_values: dict[str, object] = {
+            "source_chat_id": source.chat.id,
+            "source_message_id": source.message_id,
+            "recipient_count": recipient_count,
+        }
+        message_ids = tuple(
+            dict.fromkeys(source_item.message_id for source_item in source_messages)
+        )
+        if len(message_ids) > 1:
+            state_values["source_message_ids"] = list(message_ids)
         await state.update_data(
-            source_chat_id=source.chat.id,
-            source_message_id=source.message_id,
-            recipient_count=recipient_count,
+            **state_values,
         )
         keyboard = broadcast_confirmation_keyboard(recipient_count)
         try:
-            await bot.copy_message(
-                chat_id=admin_message.chat.id,
-                from_chat_id=source.chat.id,
-                message_id=source.message_id,
-                reply_markup=keyboard,
-            )
+            if len(message_ids) > 1 and hasattr(bot, "copy_messages"):
+                await bot.copy_messages(
+                    chat_id=admin_message.chat.id,
+                    from_chat_id=source.chat.id,
+                    message_ids=list(message_ids),
+                )
+                await admin_message.answer(
+                    "📣 <b>Xác nhận gửi album thông báo</b>\n\n"
+                    f"• Người nhận dự kiến: <b>{recipient_count}</b>\n"
+                    "• Các ảnh sẽ được gửi cùng một album.\n"
+                    "• Chọn gửi kèm nút 🛒 Mua ngay hoặc chỉ gửi nội dung.",
+                    reply_markup=keyboard,
+                )
+            else:
+                await bot.copy_message(
+                    chat_id=admin_message.chat.id,
+                    from_chat_id=source.chat.id,
+                    message_id=source.message_id,
+                    reply_markup=keyboard,
+                )
         except TelegramBadRequest:
             await admin_message.answer(
                 "📣 <b>Xác nhận gửi thông báo</b>\n\n"
@@ -520,11 +551,53 @@ def create_admin_router(settings: Settings, cipher: SecretCipher) -> Router:
         bot: Bot,
         session: AsyncSession,
         state: FSMContext,
+        session_factory: async_sessionmaker[AsyncSession] | None = None,
     ) -> None:
         if await reject_if_not_admin(message):
             await state.clear()
             return
-        await stage_broadcast(message, message, bot, session, state)
+        media_group_id = getattr(message, "media_group_id", None)
+        if not media_group_id:
+            await stage_broadcast(message, message, bot, session, state)
+            return
+
+        key = (message.chat.id, str(media_group_id))
+        buffer = media_group_buffers.setdefault(key, [])
+        if all(item.message_id != message.message_id for item in buffer):
+            buffer.append(message)
+        if key in media_group_tasks:
+            return
+
+        async def flush_media_group() -> None:
+            try:
+                await asyncio.sleep(0.4)
+                messages = media_group_buffers.pop(key, [])
+                if not messages:
+                    return
+                messages.sort(key=lambda item: item.message_id)
+                if session_factory is None:
+                    await stage_broadcast(
+                        messages[0],
+                        messages[0],
+                        bot,
+                        session,
+                        state,
+                        source_messages=messages,
+                    )
+                else:
+                    async with session_factory() as group_session:
+                        await stage_broadcast(
+                            messages[0],
+                            messages[0],
+                            bot,
+                            group_session,
+                            state,
+                            source_messages=messages,
+                        )
+            finally:
+                media_group_tasks.pop(key, None)
+
+        media_group_tasks[key] = asyncio.create_task(flush_media_group())
 
     @router.callback_query(
         BroadcastStates.waiting_for_confirmation,
@@ -559,6 +632,9 @@ def create_admin_router(settings: Settings, cipher: SecretCipher) -> Router:
         data = await state.get_data()
         source_chat_id = int(data.get("source_chat_id", 0))
         source_message_id = int(data.get("source_message_id", 0))
+        source_message_ids = tuple(
+            int(message_id) for message_id in data.get("source_message_ids", [])
+        )
         if not source_chat_id or not source_message_id:
             await state.clear()
             await callback.answer("Nội dung thông báo đã hết hạn.", show_alert=True)
@@ -577,6 +653,7 @@ def create_admin_router(settings: Settings, cipher: SecretCipher) -> Router:
             source_chat_id=source_chat_id,
             source_message_id=source_message_id,
             include_purchase_button=include_purchase_button,
+            source_message_ids=source_message_ids or None,
         )
         await callback.answer("Đã đưa vào hàng chờ.")
         if callback.message:

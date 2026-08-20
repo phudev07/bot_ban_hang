@@ -1054,6 +1054,7 @@ class BroadcastLog(Base):
     admin_id: Mapped[int] = mapped_column(BigInteger, index=True)
     source_chat_id: Mapped[int] = mapped_column(BigInteger)
     source_message_id: Mapped[int]
+    source_message_ids: Mapped[str | None] = mapped_column(Text, nullable=True)
     total_recipients: Mapped[int] = mapped_column(default=0)
     delivered_count: Mapped[int] = mapped_column(default=0)
     failed_count: Mapped[int] = mapped_column(default=0)

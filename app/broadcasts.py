@@ -1,6 +1,7 @@
 import asyncio
+import json
 import logging
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
 
@@ -64,6 +65,7 @@ class BroadcastPayload:
     broadcast_id: int
     source_chat_id: int
     source_message_id: int
+    source_message_ids: tuple[int, ...]
     include_purchase_button: bool
 
 
@@ -234,6 +236,42 @@ def is_unreachable_error(exc: Exception) -> bool:
     )
 
 
+async def _copy_broadcast_messages(
+    bot: Bot,
+    *,
+    chat_id: int,
+    from_chat_id: int,
+    message_ids: Sequence[int],
+    reply_markup: InlineKeyboardMarkup | None,
+) -> object:
+    """Copy an album as one Telegram media group and attach the button to its last item."""
+    normalized_ids = tuple(dict.fromkeys(int(message_id) for message_id in message_ids))
+    if len(normalized_ids) <= 1:
+        return await bot.copy_message(
+            chat_id=chat_id,
+            from_chat_id=from_chat_id,
+            message_id=normalized_ids[0],
+            reply_markup=reply_markup,
+        )
+
+    copied = await bot.copy_messages(
+        chat_id=chat_id,
+        from_chat_id=from_chat_id,
+        message_ids=list(normalized_ids),
+    )
+    if reply_markup and copied:
+        try:
+            await bot.edit_message_reply_markup(
+                chat_id=chat_id,
+                message_id=copied[-1].message_id,
+                reply_markup=reply_markup,
+            )
+        except TelegramBadRequest:
+            # The album is already delivered; a button failure must not resend it.
+            logger.warning("Could not attach purchase button to broadcast album")
+    return copied
+
+
 async def deliver_broadcast(
     session: AsyncSession,
     bot: Bot,
@@ -243,6 +281,7 @@ async def deliver_broadcast(
     source_message_id: int,
     throttle_seconds: float = 0.05,
     include_purchase_button: bool = True,
+    source_message_ids: Sequence[int] | None = None,
 ) -> BroadcastResult:
     started_at = datetime.now(UTC)
     recipient_ids = list(
@@ -256,22 +295,25 @@ async def deliver_broadcast(
     failed = 0
     inactive_ids: list[int] = []
     purchase_keyboard = broadcast_purchase_keyboard() if include_purchase_button else None
+    message_ids = tuple(source_message_ids or (source_message_id,))
 
     for user_id in recipient_ids:
         try:
-            await bot.copy_message(
+            await _copy_broadcast_messages(
+                bot,
                 chat_id=user_id,
                 from_chat_id=source_chat_id,
-                message_id=source_message_id,
+                message_ids=message_ids,
                 reply_markup=purchase_keyboard,
             )
         except TelegramRetryAfter as exc:
             await asyncio.sleep(float(exc.retry_after) + 0.2)
             try:
-                await bot.copy_message(
+                await _copy_broadcast_messages(
+                    bot,
                     chat_id=user_id,
                     from_chat_id=source_chat_id,
-                    message_id=source_message_id,
+                    message_ids=message_ids,
                     reply_markup=purchase_keyboard,
                 )
             except (TelegramBadRequest, TelegramForbiddenError, TelegramRetryAfter) as retry_exc:
@@ -331,6 +373,7 @@ async def queue_broadcast(
     source_chat_id: int,
     source_message_id: int,
     include_purchase_button: bool = True,
+    source_message_ids: Sequence[int] | None = None,
 ) -> QueuedBroadcast:
     async with session_factory() as session:
         async with session.begin():
@@ -345,6 +388,11 @@ async def queue_broadcast(
                 admin_id=admin_id,
                 source_chat_id=source_chat_id,
                 source_message_id=source_message_id,
+                source_message_ids=(
+                    json.dumps(list(dict.fromkeys(source_message_ids)), separators=(",", ":"))
+                    if source_message_ids
+                    else None
+                ),
                 total_recipients=len(recipient_ids),
                 include_purchase_button=include_purchase_button,
                 status="queued",
@@ -400,6 +448,11 @@ async def _claim_broadcast(
                 broadcast_id=campaign.id,
                 source_chat_id=campaign.source_chat_id,
                 source_message_id=campaign.source_message_id,
+                source_message_ids=tuple(
+                    json.loads(campaign.source_message_ids)
+                    if campaign.source_message_ids
+                    else [campaign.source_message_id]
+                ),
                 include_purchase_button=campaign.include_purchase_button,
             )
 
@@ -471,10 +524,11 @@ async def _send_queued_delivery(
     )
 
     async def operation() -> object:
-        return await bot.copy_message(
+        return await _copy_broadcast_messages(
+            bot,
             chat_id=delivery.user_id,
             from_chat_id=payload.source_chat_id,
-            message_id=payload.source_message_id,
+            message_ids=payload.source_message_ids,
             reply_markup=keyboard,
         )
 

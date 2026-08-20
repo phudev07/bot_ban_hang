@@ -38,6 +38,7 @@ class FakeBot:
         self.copy_calls: list[int] = []
         self.copy_kwargs: list[dict[str, object]] = []
         self.copy_markups = []
+        self.copy_group_calls: list[list[int]] = []
 
     async def copy_message(self, *, chat_id: int, **kwargs) -> None:
         self.copy_calls.append(chat_id)
@@ -48,6 +49,13 @@ class FakeBot:
                 method=object(),  # type: ignore[arg-type]
                 message="Forbidden: bot was blocked by the user",
             )
+
+    async def copy_messages(self, *, chat_id: int, from_chat_id: int, message_ids: list[int]):
+        self.copy_group_calls.append(message_ids)
+        return [SimpleNamespace(message_id=message_id) for message_id in message_ids]
+
+    async def edit_message_reply_markup(self, **_kwargs) -> None:
+        return None
 
 
 class ConcurrentFakeBot(FakeBot):
@@ -265,6 +273,49 @@ def test_broadcast_photo_gets_confirmation_button_on_preview() -> None:
             assert markup.inline_keyboard[1][0].callback_data == "broadcast:confirm:info"
             assert "Gửi có Mua ngay" in markup.inline_keyboard[0][0].text
             assert "Chỉ gửi thông tin" in markup.inline_keyboard[1][0].text
+        await engine.dispose()
+
+    asyncio.run(scenario())
+
+
+def test_broadcast_media_group_is_staged_as_one_album() -> None:
+    async def scenario() -> None:
+        engine, sessions = await make_database()
+        async with sessions() as session:
+            session.add(User(telegram_id=1, full_name="Started", has_started=True))
+            await session.commit()
+            settings = Settings(
+                _env_file=None,
+                bot_token="123456:ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghi",
+                inventory_encryption_key=Fernet.generate_key().decode(),
+                sepay_enabled=False,
+                ADMIN_IDS="42",
+            )
+            router = create_admin_router(
+                settings,
+                SecretCipher(settings.inventory_encryption_key.get_secret_value()),
+            )
+            receive = next(
+                handler.callback
+                for handler in router.message.handlers
+                if handler.callback.__name__ == "receive_broadcast_content"
+            )
+            first = FakeMessage(message_id=41)
+            second = FakeMessage(message_id=42)
+            first.media_group_id = second.media_group_id = "album-1"
+            first.photo = [SimpleNamespace(file_id="photo-1")]
+            second.photo = [SimpleNamespace(file_id="photo-2")]
+            state = FakeState()
+            bot = FakeBot()
+
+            await receive(first, bot, session, state, sessions)
+            await receive(second, bot, session, state, sessions)
+            await asyncio.sleep(0.5)
+
+            assert state.current == BroadcastStates.waiting_for_confirmation
+            assert state.data["source_message_ids"] == [41, 42]
+            assert bot.copy_group_calls == [[41, 42]]
+            assert first.answers
         await engine.dispose()
 
     asyncio.run(scenario())
