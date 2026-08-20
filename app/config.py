@@ -150,6 +150,7 @@ class Settings(BaseSettings):
     codex_ubuntu_appimage_path: str = "/app/downloads/Custom-Codex-Ubuntu-x86_64.AppImage"
     gpt_import_9router_windows_path: str = "/app/downloads/import_to_9router.exe"
     gpt_import_9router_linux_path: str = "/app/downloads/import_to_9router.py"
+    gpt_import_9router_zip_path: str = "/app/downloads/import_to_9router.zip"
     referral_commission_percent: int = 2
 
     inventory_encryption_key: SecretStr

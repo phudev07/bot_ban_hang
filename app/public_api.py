@@ -239,12 +239,23 @@ def create_public_api_docs_router(settings: Settings) -> APIRouter:
             request,
             "gpt_import_9router.html",
             {
-                "windows_url": "/codex-api/download/import-gpt-9router/windows",
-                "linux_url": "/codex-api/download/import-gpt-9router/linux",
+                "download_url": "/codex-api/download/import-gpt-9router",
             },
         )
         response.headers["Cache-Control"] = "public, max-age=300"
         return response
+
+    @router.get("/codex-api/download/import-gpt-9router", response_class=FileResponse)
+    async def download_gpt_import_bundle() -> FileResponse:
+        bundle = Path(settings.gpt_import_9router_zip_path)
+        if not bundle.is_file():
+            raise HTTPException(status_code=404, detail="Import tool bundle is temporarily unavailable")
+        return FileResponse(
+            bundle,
+            media_type="application/zip",
+            filename="import_to_9router.zip",
+            headers={"Cache-Control": "public, max-age=300", "X-Content-Type-Options": "nosniff"},
+        )
 
     @router.get("/codex-api/download/import-gpt-9router/windows", response_class=FileResponse)
     async def download_gpt_import_windows() -> FileResponse:
