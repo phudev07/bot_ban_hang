@@ -62,6 +62,21 @@ def test_long_delivery_uses_txt_without_creating_many_copy_buttons() -> None:
     assert keyboard.inline_keyboard[0][0].callback_data == "ordertxt:12"
 
 
+def test_automatic_gpt_free_delivery_can_hide_download_button() -> None:
+    keyboard = delivery_keyboard(
+        primary_order_id=28,
+        secrets=["account|password|2fa|{}"],
+        language="vi",
+        include_file_button=False,
+    )
+
+    assert not any(
+        button.callback_data == "ordertxt:28"
+        for row in keyboard.inline_keyboard
+        for button in row
+    )
+
+
 def test_delivery_file_contains_all_accounts() -> None:
     document = delivery_file(
         shop_order_code="BFILE456",

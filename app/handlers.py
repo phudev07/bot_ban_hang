@@ -1774,6 +1774,7 @@ def create_router(
                     primary_order_id=min(order_ids),
                     secrets=result.secrets,
                     language=user.language,
+                    include_file_button=result.orders[0].product_id != 28,
                     guide_url=(
                         codex_docs_url
                         if (result.orders[0].product.supplier_product_id or "").startswith(

@@ -495,6 +495,7 @@ def create_api(
                         primary_order_id=min(order_ids),
                         secrets=secret_values,
                         language=result.language,
+                        include_file_button=result.product_id != 28,
                         guide_url=(
                             codex_docs_url
                             if (result.supplier_product_id or "").startswith("apicodex_")

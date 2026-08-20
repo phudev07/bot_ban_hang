@@ -810,6 +810,7 @@ async def _send_preorder_notification(
                     primary_order_id=min(order_ids),
                     secrets=secrets,
                     language=user.language,
+                    include_file_button=orders[0].product_id != 28,
                     guide_url=(
                         codex_docs_url
                         if (

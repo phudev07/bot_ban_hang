@@ -6089,6 +6089,7 @@ def create_dashboard_router(
                         primary_order_id=min(result.order_ids),
                         secrets=secret_values,
                         language=result.language,
+                        include_file_button=result.product_id != 28,
                         guide_url=(
                             f"{settings.shop_api_base_url.rstrip('/').removesuffix('/v1')}/codex-api"
                             if (result.supplier_product_id or "").startswith("apicodex_")

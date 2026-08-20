@@ -88,6 +88,7 @@ def delivery_keyboard(
     secrets: list[str],
     language: str,
     guide_url: str | None = None,
+    include_file_button: bool = True,
 ) -> InlineKeyboardMarkup:
     rows: list[list[InlineKeyboardButton]] = []
     combined = "\n".join(secrets)
@@ -101,16 +102,17 @@ def delivery_keyboard(
             ]
         )
 
-    rows.append(
-        [
-            InlineKeyboardButton(
-                text="⬇️ Tải file tài khoản .txt"
-                if language == "vi"
-                else "⬇️ Download accounts .txt",
-                callback_data=f"ordertxt:{primary_order_id}",
-            )
-        ]
-    )
+    if include_file_button:
+        rows.append(
+            [
+                InlineKeyboardButton(
+                    text="⬇️ Tải file tài khoản .txt"
+                    if language == "vi"
+                    else "⬇️ Download accounts .txt",
+                    callback_data=f"ordertxt:{primary_order_id}",
+                )
+            ]
+        )
     if guide_url:
         rows.append(
             [
