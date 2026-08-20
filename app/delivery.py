@@ -11,6 +11,7 @@ from app.utils import format_vnd, safe_html, sanitize_customer_text
 
 MAX_MESSAGE_PREVIEW = 10
 MAX_COPY_TEXT_LENGTH = 256
+MAX_DELIVERY_TEXT_LENGTH = 3_500
 GPT_FREE_PRODUCT_ID = 28
 
 
@@ -31,11 +32,23 @@ def delivery_text(
 ) -> str:
     product_name = sanitize_customer_text(product_name)
     is_codex_key = "codex" in product_name.casefold()
+    is_gpt_free = "gpt free" in product_name.casefold()
     brand_emoji = product_brand_emoji(product_name)
-    preview = secrets[:MAX_MESSAGE_PREVIEW]
-    items = "\n".join(safe_html(secret) for secret in preview)
+    display_secrets = (
+        [_gpt_free_account_line(secret) for secret in secrets] if is_gpt_free else secrets
+    )
+    preview: list[str] = []
+    preview_length = 0
+    for secret in display_secrets[:MAX_MESSAGE_PREVIEW]:
+        rendered = safe_html(secret)
+        extra_length = len(rendered) + (1 if preview else 0)
+        if preview_length + extra_length > MAX_DELIVERY_TEXT_LENGTH:
+            break
+        preview.append(rendered)
+        preview_length += extra_length
+    items = "\n".join(preview)
     account_block = f"<pre>{items}</pre>"
-    remaining = len(secrets) - len(preview)
+    remaining = len(display_secrets) - len(preview)
     if remaining > 0:
         account_block += (
             f"\n… còn {remaining} tài khoản trong file TXT."

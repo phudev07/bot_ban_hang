@@ -104,6 +104,24 @@ def test_gpt_free_delivery_creates_account_txt_and_full_json() -> None:
     assert secrets[1] in full_content
 
 
+def test_gpt_free_delivery_message_does_not_include_large_token_payload() -> None:
+    secret = (
+        "email@example.com|password|2FASECRET|"
+        + '{"accessToken":"token-"' + ("x" * 3_000) + "}"
+    )
+    text = delivery_text(
+        shop_order_code="BGPTFREE2",
+        product_name="GPT FREE",
+        secrets=[secret, secret],
+        total_amount=10_000,
+        language="vi",
+    )
+
+    assert len(text) < 4_096
+    assert "accessToken" not in text
+    assert "email@example.com|password|2FASECRET" in text
+
+
 def test_codex_delivery_can_open_setup_guide() -> None:
     text = delivery_text(
         shop_order_code="BCODEX13",
