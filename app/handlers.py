@@ -17,7 +17,7 @@ from app.config import Settings
 from app.custom_emoji import product_brand_emoji
 from app.database import release_session_connection
 from app.delivery import (
-    delivery_file,
+    delivery_files,
     delivery_keyboard,
     delivery_text,
 )
@@ -1783,6 +1783,16 @@ def create_router(
                     ),
                 ),
             )
+            if result.orders[0].product_id == 28:
+                for document in delivery_files(
+                    shop_order_code=result.orders[0].shop_order_code,
+                    product_name=product_name,
+                    secrets=result.secrets,
+                    total_amount=result.total_amount,
+                    language=user.language,
+                    product_id=result.orders[0].product_id,
+                ):
+                    await target.answer_document(document)
             await send_purchase_tutorials(
                 target.bot,
                 user.telegram_id,
@@ -2826,21 +2836,25 @@ def create_router(
             orders, user
         )
         if callback.message:
-            await callback.message.answer_document(
-                delivery_file(
-                    shop_order_code=shop_order_code,
-                    product_name=product_name,
-                    secrets=secrets,
-                    total_amount=total_amount,
-                    language=user.language,
-                ),
-                caption=(
-                    f"📄 File tài khoản của đơn <code>{escape(shop_order_code)}</code>"
-                    if user.language == "vi"
-                    else f"📄 Account file for order <code>{escape(shop_order_code)}</code>"
-                ),
-            )
-        await callback.answer("Đã tạo file TXT" if user.language == "vi" else "TXT file ready")
+            for document in delivery_files(
+                shop_order_code=shop_order_code,
+                product_name=product_name,
+                secrets=secrets,
+                total_amount=total_amount,
+                language=user.language,
+                product_id=orders[0].product_id,
+            ):
+                await callback.message.answer_document(
+                    document,
+                    caption=(
+                        f"📄 File tài khoản của đơn <code>{escape(shop_order_code)}</code>"
+                        if user.language == "vi"
+                        else f"📄 Account file for order <code>{escape(shop_order_code)}</code>"
+                    ),
+                )
+        await callback.answer(
+            "Đã tạo file giao hàng" if user.language == "vi" else "Delivery file(s) ready"
+        )
 
     @router.callback_query(F.data == "menu:profile")
     async def show_profile(callback: CallbackQuery, session: AsyncSession) -> None:

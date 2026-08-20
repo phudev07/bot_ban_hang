@@ -148,6 +148,8 @@ class Settings(BaseSettings):
     warehouse_api_max_items_per_request: int = 5_000
     codex_portable_zip_path: str = "/app/downloads/Custom-Codex-Portable.zip"
     codex_ubuntu_appimage_path: str = "/app/downloads/Custom-Codex-Ubuntu-x86_64.AppImage"
+    gpt_import_9router_windows_path: str = "/app/downloads/import_to_9router.exe"
+    gpt_import_9router_linux_path: str = "/app/downloads/import_to_9router.py"
     referral_commission_percent: int = 2
 
     inventory_encryption_key: SecretStr

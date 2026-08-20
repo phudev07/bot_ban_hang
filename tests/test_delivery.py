@@ -1,5 +1,6 @@
 from app.delivery import (
     delivery_file,
+    delivery_files,
     delivery_keyboard,
     delivery_text,
 )
@@ -76,6 +77,31 @@ def test_delivery_file_contains_all_accounts() -> None:
     assert "first:secret\nsecond:secret" in content
     assert "1. first:secret" not in content
     assert "2. second:secret" not in content
+
+
+def test_gpt_free_delivery_creates_account_txt_and_full_json() -> None:
+    secrets = [
+        'email1@gmail.com|Matkhau1|2FASECRET1|{"accessToken":"token-1","refreshToken":"refresh-1","email":"email1@gmail.com"}',
+        'email2@gmail.com|Matkhau2|2FASECRET2|{"accessToken":"token-2","refreshToken":"refresh-2","email":"email2@gmail.com"}',
+    ]
+    documents = delivery_files(
+        shop_order_code="BGPTFREE1",
+        product_name="GPT FREE",
+        secrets=secrets,
+        total_amount=40_000,
+        language="vi",
+        product_id=28,
+    )
+
+    assert [document.filename for document in documents] == [
+        "don-hang-BGPTFREE1-acc.txt",
+        "don-hang-BGPTFREE1-full.json",
+    ]
+    account_content = documents[0].data.decode("utf-8-sig")
+    full_content = documents[1].data.decode("utf-8-sig")
+    assert "email1@gmail.com|Matkhau1|2FASECRET1" in account_content
+    assert "email1@gmail.com|Matkhau1|2FASECRET1|{" not in account_content
+    assert secrets[1] in full_content
 
 
 def test_codex_delivery_can_open_setup_guide() -> None:

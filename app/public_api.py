@@ -228,6 +228,48 @@ def create_public_api_docs_router(settings: Settings) -> APIRouter:
             },
         )
 
+    @router.get("/codex-api/import-gpt-9router", response_class=HTMLResponse)
+    @router.get(
+        "/codex-api/import-gpt-9router/",
+        response_class=HTMLResponse,
+        include_in_schema=False,
+    )
+    async def gpt_import_9router_page(request: Request) -> HTMLResponse:
+        response = templates.TemplateResponse(
+            request,
+            "gpt_import_9router.html",
+            {
+                "windows_url": "/codex-api/download/import-gpt-9router/windows",
+                "linux_url": "/codex-api/download/import-gpt-9router/linux",
+            },
+        )
+        response.headers["Cache-Control"] = "public, max-age=300"
+        return response
+
+    @router.get("/codex-api/download/import-gpt-9router/windows", response_class=FileResponse)
+    async def download_gpt_import_windows() -> FileResponse:
+        tool = Path(settings.gpt_import_9router_windows_path)
+        if not tool.is_file():
+            raise HTTPException(status_code=404, detail="Windows import tool is temporarily unavailable")
+        return FileResponse(
+            tool,
+            media_type="application/vnd.microsoft.portable-executable",
+            filename="import_to_9router.exe",
+            headers={"Cache-Control": "public, max-age=300", "X-Content-Type-Options": "nosniff"},
+        )
+
+    @router.get("/codex-api/download/import-gpt-9router/linux", response_class=FileResponse)
+    async def download_gpt_import_linux() -> FileResponse:
+        tool = Path(settings.gpt_import_9router_linux_path)
+        if not tool.is_file():
+            raise HTTPException(status_code=404, detail="Linux import tool is temporarily unavailable")
+        return FileResponse(
+            tool,
+            media_type="text/x-python",
+            filename="import_to_9router.py",
+            headers={"Cache-Control": "public, max-age=300", "X-Content-Type-Options": "nosniff"},
+        )
+
     @router.get("/docs", response_class=HTMLResponse)
     @router.get("/docs/", response_class=HTMLResponse, include_in_schema=False)
     async def api_docs(request: Request) -> HTMLResponse:

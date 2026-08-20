@@ -11,6 +11,13 @@ from app.utils import format_vnd, safe_html, sanitize_customer_text
 
 MAX_MESSAGE_PREVIEW = 10
 MAX_COPY_TEXT_LENGTH = 256
+GPT_FREE_PRODUCT_ID = 28
+
+
+def _gpt_free_account_line(secret: str) -> str:
+    """Return the login/2FA portion while preserving the complete raw payload separately."""
+    parts = secret.split("|", 3)
+    return "|".join(parts[:3]) if len(parts) >= 4 else secret
 
 
 def delivery_text(
@@ -126,6 +133,8 @@ def delivery_file(
     secrets: list[str],
     total_amount: int,
     language: str,
+    product_id: int | None = None,
+    file_extension: str = "txt",
 ) -> BufferedInputFile:
     product_name = sanitize_customer_text(product_name)
     is_codex_key = "codex" in product_name.casefold()
@@ -154,7 +163,51 @@ def delivery_file(
     safe_code = "".join(
         character for character in shop_order_code if character.isalnum() or character in "-_"
     )[:64] or "shop"
+    extension = "".join(character for character in file_extension if character.isalnum()) or "txt"
     return BufferedInputFile(
         content.encode("utf-8-sig"),
-        filename=f"don-hang-{safe_code}.txt",
+        filename=f"don-hang-{safe_code}.{extension}",
     )
+
+
+def delivery_files(
+    *,
+    shop_order_code: str,
+    product_name: str,
+    secrets: list[str],
+    total_amount: int,
+    language: str,
+    product_id: int | None = None,
+) -> list[BufferedInputFile]:
+    """Build the customer files, including the two-file GPT Free delivery."""
+    if product_id != GPT_FREE_PRODUCT_ID:
+        return [
+            delivery_file(
+                shop_order_code=shop_order_code,
+                product_name=product_name,
+                secrets=secrets,
+                total_amount=total_amount,
+                language=language,
+                product_id=product_id,
+            )
+        ]
+
+    accounts = [_gpt_free_account_line(secret) for secret in secrets]
+    account_file = delivery_file(
+        shop_order_code=f"{shop_order_code}-acc",
+        product_name=("GPT Free accounts" if language == "en" else "Tài khoản GPT Free"),
+        secrets=accounts,
+        total_amount=total_amount,
+        language=language,
+        product_id=product_id,
+    )
+    full_file = delivery_file(
+        shop_order_code=f"{shop_order_code}-full",
+        product_name=("GPT Free full data" if language == "en" else "GPT Free đầy đủ dữ liệu"),
+        secrets=secrets,
+        total_amount=total_amount,
+        language=language,
+        product_id=product_id,
+        file_extension="json",
+    )
+    return [account_file, full_file]

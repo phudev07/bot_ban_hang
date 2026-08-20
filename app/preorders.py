@@ -10,7 +10,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from sqlalchemy.orm import aliased, selectinload
 
-from app.delivery import delivery_keyboard, delivery_text
+from app.delivery import delivery_files, delivery_keyboard, delivery_text
 from app.haji_suppliers import HajiClient
 from app.lehai_suppliers import LeHaiPremiumClient
 from app.models import InventoryItem, Order, Preorder, Product, User, WalletTransaction
@@ -822,6 +822,16 @@ async def _send_preorder_notification(
                     ),
                 ),
             )
+            if orders[0].product_id == 28:
+                for document in delivery_files(
+                    shop_order_code=orders[0].shop_order_code,
+                    product_name=product_name,
+                    secrets=secrets,
+                    total_amount=sum(int(order.amount) for order in orders),
+                    language=user.language,
+                    product_id=orders[0].product_id,
+                ):
+                    await bot.send_document(user.telegram_id, document)
             await send_purchase_tutorials(
                 bot,
                 user.telegram_id,

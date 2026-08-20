@@ -278,6 +278,10 @@ def test_codex_guide_and_zip_download_are_public_but_raw_exe_is_not(tmp_path) ->
     zip_path.write_bytes(b"PK\x03\x04test-archive")
     appimage_path = tmp_path / "Custom-Codex-Ubuntu-x86_64.AppImage"
     appimage_path.write_bytes(b"\x7fELFtest-appimage")
+    import_windows_path = tmp_path / "import_to_9router.exe"
+    import_windows_path.write_bytes(b"MZtest-importer")
+    import_linux_path = tmp_path / "import_to_9router.py"
+    import_linux_path.write_text("print('importer')", encoding="utf-8")
     settings = Settings(
         _env_file=None,
         bot_token="123456:ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghi",
@@ -286,6 +290,8 @@ def test_codex_guide_and_zip_download_are_public_but_raw_exe_is_not(tmp_path) ->
         shop_api_enabled=True,
         codex_portable_zip_path=str(zip_path),
         codex_ubuntu_appimage_path=str(appimage_path),
+        gpt_import_9router_windows_path=str(import_windows_path),
+        gpt_import_9router_linux_path=str(import_linux_path),
     )
     engine = create_async_engine("sqlite+aiosqlite:///:memory:")
     sessions = async_sessionmaker(engine, expire_on_commit=False)
@@ -311,6 +317,7 @@ def test_codex_guide_and_zip_download_are_public_but_raw_exe_is_not(tmp_path) ->
         assert "CDK" not in guide.text
         assert 'href="/codex-api/download"' in guide.text
         assert 'href="/codex-api/download/ubuntu-x64"' in guide.text
+        assert 'href="/codex-api/import-gpt-9router"' in guide.text
         assert "chmod +x Custom-Codex-Ubuntu-x86_64.AppImage" in guide.text
         assert "APPIMAGE_EXTRACT_AND_RUN=1" in guide.text
         assert "Ubuntu 22.04/24.04 x64" in guide.text
@@ -324,6 +331,15 @@ def test_codex_guide_and_zip_download_are_public_but_raw_exe_is_not(tmp_path) ->
         assert ubuntu.status_code == 200
         assert ubuntu.headers["content-type"].startswith("application/vnd.appimage")
         assert "Custom-Codex-Ubuntu-x86_64.AppImage" in ubuntu.headers["content-disposition"]
+        import_page = client.get("/codex-api/import-gpt-9router")
+        assert import_page.status_code == 200
+        assert "Import GPT vào" in import_page.text
+        windows_tool = client.get("/codex-api/download/import-gpt-9router/windows")
+        assert windows_tool.status_code == 200
+        assert "import_to_9router.exe" in windows_tool.headers["content-disposition"]
+        linux_tool = client.get("/codex-api/download/import-gpt-9router/linux")
+        assert linux_tool.status_code == 200
+        assert "import_to_9router.py" in linux_tool.headers["content-disposition"]
         assert client.get("/codex-api/custom-codex.exe").status_code == 404
 
     asyncio.run(engine.dispose())

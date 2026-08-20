@@ -1,0 +1,49 @@
+<!doctype html>
+<html lang="vi">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Tool import GPT → 9Router · PHP TOOL Shop</title>
+  <style>
+    :root { color-scheme: dark; --bg:#050b0d; --panel:#0b191c; --line:#224448; --cyan:#3cffda; --acid:#d8ff4f; --muted:#9bb4b0; }
+    * { box-sizing:border-box; }
+    body { margin:0; min-height:100vh; color:#eafffa; font:15px/1.6 "Segoe UI",sans-serif; background:radial-gradient(circle at 80% 0,#123d3d,transparent 36rem),var(--bg); }
+    main { width:min(820px,calc(100% - 28px)); margin:0 auto; padding:42px 0 60px; }
+    .panel { padding:clamp(22px,5vw,42px); border:1px solid var(--line); border-radius:20px; background:linear-gradient(145deg,#0c2023,#071013); box-shadow:0 24px 70px #0008; }
+    .kicker { color:var(--cyan); font:800 11px/1 monospace; letter-spacing:.16em; text-transform:uppercase; }
+    h1 { margin:12px 0 8px; font-size:clamp(28px,5vw,48px); line-height:1.05; letter-spacing:-.05em; }
+    h1 em { color:var(--acid); font-style:normal; }
+    .lead { color:#c2d9d4; max-width:650px; }
+    .downloads { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:12px; margin:25px 0; }
+    a { color:inherit; text-decoration:none; }
+    .button { display:flex; align-items:center; justify-content:center; min-height:52px; padding:10px 14px; border:1px solid var(--cyan); border-radius:12px; color:#00110e; background:var(--cyan); font-weight:850; }
+    .button.alt { border-color:var(--acid); background:var(--acid); }
+    .note { margin-top:22px; padding:14px 16px; border-left:3px solid var(--acid); color:var(--muted); background:#0005; }
+    code { color:var(--acid); font-family:Consolas,monospace; }
+    ol { padding-left:22px; }
+    li { margin:8px 0; }
+    @media(max-width:620px){ .downloads{grid-template-columns:1fr;} }
+  </style>
+</head>
+<body>
+  <main>
+    <section class="panel">
+      <span class="kicker">PHP TOOL SHOP · UTILITY</span>
+      <h1>Import GPT vào <em>9Router</em></h1>
+      <p class="lead">Công cụ giúp nhập dữ liệu GPT Free vào 9Router nhanh hơn. Chọn đúng bản theo hệ điều hành, sau đó chạy tool và làm theo hướng dẫn hiển thị.</p>
+      <div class="downloads">
+        <a class="button alt" href="{{ windows_url }}">⬇ Windows · import_to_9router.exe</a>
+        <a class="button" href="{{ linux_url }}">⬇ Linux · import_to_9router.py</a>
+      </div>
+      <ol>
+        <li>Windows: tải file <code>.exe</code> và mở trực tiếp.</li>
+        <li>Linux: mở Terminal tại thư mục tải về, chạy <code>python3 import_to_9router.py</code>.</li>
+        <li>Chọn file dữ liệu đầy đủ <code>.json</code> mà bot gửi sau khi mua GPT Free.</li>
+        <li>Kiểm tra lại thư mục/URL 9Router trước khi bấm Import.</li>
+      </ol>
+      <div class="note">Tool chỉ chạy trên máy của bạn và không cần gửi key/API của shop lên website. Không chia sẻ file đầy đủ vì file này chứa refresh token.</div>
+      <p><a href="/codex-api">← Quay lại hướng dẫn API Codex</a></p>
+    </section>
+  </main>
+</body>
+</html>

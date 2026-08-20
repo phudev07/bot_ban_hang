@@ -26,7 +26,7 @@ from app.autosms import AutoSmsClient
 from app.canboso_suppliers import CanbosoClient
 from app.config import Settings
 from app.custom_emoji import product_brand_emoji
-from app.delivery import delivery_keyboard, delivery_text
+from app.delivery import delivery_files, delivery_keyboard, delivery_text
 from app.haji_suppliers import HajiClient
 from app.inventory_import import (
     MAX_INVENTORY_IMPORT_NOTE_LENGTH,
@@ -6096,6 +6096,16 @@ def create_dashboard_router(
                         ),
                     ),
                 )
+                if result.product_id == 28:
+                    for document in delivery_files(
+                        shop_order_code=result.shop_order_code or f"O{min(result.order_ids)}",
+                        product_name=product_name,
+                        secrets=secret_values,
+                        total_amount=result.amount,
+                        language=result.language,
+                        product_id=result.product_id,
+                    ):
+                        await bot.send_document(result.user_id, document)
                 await send_purchase_tutorials(
                     bot,
                     result.user_id,
