@@ -11,7 +11,7 @@
 	}
 
 	request_body {
-		max_size 64KB
+		max_size 8MB
 	}
 }
 
@@ -35,7 +35,7 @@ token.vietshare.site {
 	import shop_security
 
 	request_body {
-		max_size 64KB
+		max_size 8MB
 	}
 
 	route {

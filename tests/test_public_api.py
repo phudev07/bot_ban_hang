@@ -269,7 +269,7 @@ def test_warehouse_api_origin_is_cloudflare_only_and_body_is_bounded() -> None:
     token_site = caddyfile.split("token.vietshare.site", 1)[1]
     assert "@direct_origin not remote_ip" in token_site
     assert "respond @direct_origin 403" in token_site
-    assert "max_size 64KB" in token_site
+    assert "max_size 8MB" in token_site
     assert "@codex_docs path /codex-api /codex-api/ /codex-api/*" in token_site
 
 
