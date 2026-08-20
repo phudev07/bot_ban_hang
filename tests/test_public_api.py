@@ -282,8 +282,10 @@ def test_codex_guide_and_zip_download_are_public_but_raw_exe_is_not(tmp_path) ->
     import_windows_path.write_bytes(b"MZtest-importer")
     import_linux_path = tmp_path / "import_to_9router.py"
     import_linux_path.write_text("print('importer')", encoding="utf-8")
-    import_zip_path = tmp_path / "import_to_9router.zip"
-    import_zip_path.write_bytes(b"PK\x03\x04test-bundle")
+    import_windows_zip_path = tmp_path / "import_to_9router_windows.zip"
+    import_windows_zip_path.write_bytes(b"PK\x03\x04test-windows-bundle")
+    import_linux_zip_path = tmp_path / "import_to_9router_linux.zip"
+    import_linux_zip_path.write_bytes(b"PK\x03\x04test-linux-bundle")
     settings = Settings(
         _env_file=None,
         bot_token="123456:ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghi",
@@ -294,7 +296,8 @@ def test_codex_guide_and_zip_download_are_public_but_raw_exe_is_not(tmp_path) ->
         codex_ubuntu_appimage_path=str(appimage_path),
         gpt_import_9router_windows_path=str(import_windows_path),
         gpt_import_9router_linux_path=str(import_linux_path),
-        gpt_import_9router_zip_path=str(import_zip_path),
+        gpt_import_9router_windows_zip_path=str(import_windows_zip_path),
+        gpt_import_9router_linux_zip_path=str(import_linux_zip_path),
     )
     engine = create_async_engine("sqlite+aiosqlite:///:memory:")
     sessions = async_sessionmaker(engine, expire_on_commit=False)
@@ -337,18 +340,14 @@ def test_codex_guide_and_zip_download_are_public_but_raw_exe_is_not(tmp_path) ->
         import_page = client.get("/codex-api/import-gpt-9router")
         assert import_page.status_code == 200
         assert "Import GPT vào" in import_page.text
-        assert 'href="/codex-api/download/import-gpt-9router"' in import_page.text
-        assert "Tải bộ công cụ import 9Router" in import_page.text
-        bundle = client.get("/codex-api/download/import-gpt-9router")
-        assert bundle.status_code == 200
-        assert bundle.headers["content-type"].startswith("application/zip")
-        assert "import_to_9router.zip" in bundle.headers["content-disposition"]
         windows_tool = client.get("/codex-api/download/import-gpt-9router/windows")
         assert windows_tool.status_code == 200
-        assert "import_to_9router.exe" in windows_tool.headers["content-disposition"]
+        assert windows_tool.headers["content-type"].startswith("application/zip")
+        assert "import_to_9router_windows.zip" in windows_tool.headers["content-disposition"]
         linux_tool = client.get("/codex-api/download/import-gpt-9router/linux")
         assert linux_tool.status_code == 200
-        assert "import_to_9router.py" in linux_tool.headers["content-disposition"]
+        assert linux_tool.headers["content-type"].startswith("application/zip")
+        assert "import_to_9router_linux.zip" in linux_tool.headers["content-disposition"]
         assert client.get("/codex-api/custom-codex.exe").status_code == 404
 
     asyncio.run(engine.dispose())

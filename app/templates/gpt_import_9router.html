@@ -14,7 +14,7 @@
     h1 { margin:12px 0 8px; font-size:clamp(28px,5vw,48px); line-height:1.05; letter-spacing:-.05em; }
     h1 em { color:var(--acid); font-style:normal; }
     .lead { color:#c2d9d4; max-width:650px; }
-    .downloads { display:grid; gap:12px; margin:25px 0; }
+    .downloads { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:12px; margin:25px 0; }
     a { color:inherit; text-decoration:none; }
     .button { display:flex; align-items:center; justify-content:center; min-height:52px; padding:10px 14px; border:1px solid var(--cyan); border-radius:12px; color:#00110e; background:var(--cyan); font-weight:850; }
     .button.alt { border-color:var(--acid); background:var(--acid); }
@@ -30,12 +30,14 @@
     <section class="panel">
       <span class="kicker">PHP TOOL SHOP · UTILITY</span>
       <h1>Import GPT vào <em>9Router</em></h1>
-      <p class="lead">Tải một gói ZIP duy nhất, giải nén rồi chọn công cụ phù hợp với hệ điều hành của bạn.</p>
+      <p class="lead">Chọn đúng gói ZIP theo hệ điều hành, giải nén rồi chạy công cụ bên trong.</p>
       <div class="downloads">
-        <a class="button alt" href="{{ download_url }}">⬇ Tải bộ công cụ import 9Router (.zip)</a>
+        <a class="button alt" href="{{ windows_url }}">⬇ Windows · import_to_9router.zip</a>
+        <a class="button" href="{{ linux_url }}">⬇ Linux · import_to_9router.zip</a>
       </div>
       <ol>
-        <li>Giải nén file ZIP. Windows mở <code>import_to_9router.exe</code>; Linux chạy <code>python3 import_to_9router.py</code>.</li>
+        <li>Windows: giải nén ZIP rồi mở <code>import_to_9router.exe</code>.</li>
+        <li>Linux: giải nén ZIP rồi chạy <code>python3 import_to_9router.py</code>.</li>
         <li>Chọn file dữ liệu đầy đủ <code>.json</code> mà bot gửi sau khi mua GPT Free.</li>
         <li>Kiểm tra lại thư mục/URL 9Router trước khi bấm Import.</li>
       </ol>

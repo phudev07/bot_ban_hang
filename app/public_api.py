@@ -239,45 +239,34 @@ def create_public_api_docs_router(settings: Settings) -> APIRouter:
             request,
             "gpt_import_9router.html",
             {
-                "download_url": "/codex-api/download/import-gpt-9router",
+                "windows_url": "/codex-api/download/import-gpt-9router/windows",
+                "linux_url": "/codex-api/download/import-gpt-9router/linux",
             },
         )
         response.headers["Cache-Control"] = "public, max-age=300"
         return response
 
-    @router.get("/codex-api/download/import-gpt-9router", response_class=FileResponse)
-    async def download_gpt_import_bundle() -> FileResponse:
-        bundle = Path(settings.gpt_import_9router_zip_path)
+    @router.get("/codex-api/download/import-gpt-9router/windows", response_class=FileResponse)
+    async def download_gpt_import_windows() -> FileResponse:
+        bundle = Path(settings.gpt_import_9router_windows_zip_path)
         if not bundle.is_file():
-            raise HTTPException(status_code=404, detail="Import tool bundle is temporarily unavailable")
+            raise HTTPException(status_code=404, detail="Windows import tool ZIP is temporarily unavailable")
         return FileResponse(
             bundle,
             media_type="application/zip",
-            filename="import_to_9router.zip",
-            headers={"Cache-Control": "public, max-age=300", "X-Content-Type-Options": "nosniff"},
-        )
-
-    @router.get("/codex-api/download/import-gpt-9router/windows", response_class=FileResponse)
-    async def download_gpt_import_windows() -> FileResponse:
-        tool = Path(settings.gpt_import_9router_windows_path)
-        if not tool.is_file():
-            raise HTTPException(status_code=404, detail="Windows import tool is temporarily unavailable")
-        return FileResponse(
-            tool,
-            media_type="application/vnd.microsoft.portable-executable",
-            filename="import_to_9router.exe",
+            filename="import_to_9router_windows.zip",
             headers={"Cache-Control": "public, max-age=300", "X-Content-Type-Options": "nosniff"},
         )
 
     @router.get("/codex-api/download/import-gpt-9router/linux", response_class=FileResponse)
     async def download_gpt_import_linux() -> FileResponse:
-        tool = Path(settings.gpt_import_9router_linux_path)
-        if not tool.is_file():
-            raise HTTPException(status_code=404, detail="Linux import tool is temporarily unavailable")
+        bundle = Path(settings.gpt_import_9router_linux_zip_path)
+        if not bundle.is_file():
+            raise HTTPException(status_code=404, detail="Linux import tool ZIP is temporarily unavailable")
         return FileResponse(
-            tool,
-            media_type="text/x-python",
-            filename="import_to_9router.py",
+            bundle,
+            media_type="application/zip",
+            filename="import_to_9router_linux.zip",
             headers={"Cache-Control": "public, max-age=300", "X-Content-Type-Options": "nosniff"},
         )
 
