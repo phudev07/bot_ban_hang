@@ -102,5 +102,5 @@ def test_quick_access_buttons_use_one_animated_icon_each() -> None:
     assert [button.icon_custom_emoji_id for button in buttons] == [
         EMOJI_IDS["🏠"],
         EMOJI_IDS["🛒"],
-        EMOJI_IDS["💰"],
+        EMOJI_IDS["💳"],
     ]

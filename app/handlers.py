@@ -1551,14 +1551,14 @@ def create_router(
         )
         price_text = (
             f"<b>{format_vnd(display_price)}</b> "
-            f"<small>({format_usd_price_from_vnd(display_price, settings.binance_pay_usd_to_vnd)})</small>"
+            f"({format_usd_price_from_vnd(display_price, settings.binance_pay_usd_to_vnd)})"
         )
         if pricing is not None and pricing.flash_sale is not None:
             price_text = (
                 f"<s>{format_vnd(product.price)}</s> "
                 f"({format_usd_price_from_vnd(product.price, settings.binance_pay_usd_to_vnd)}) → "
                 f"<b>{format_vnd(display_price)}</b> "
-                f"<small>({format_usd_price_from_vnd(display_price, settings.binance_pay_usd_to_vnd)})</small>"
+                f"({format_usd_price_from_vnd(display_price, settings.binance_pay_usd_to_vnd)})"
             )
         text = (
             f"{product_brand_emoji(name)} <b>{safe_customer_html(name)}</b>\n\n"
