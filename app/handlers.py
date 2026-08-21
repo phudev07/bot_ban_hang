@@ -12,6 +12,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.autosms import AutoSmsClient
+from app.binance_pay import BinancePayClient, BinancePayError, vnd_to_usdt
 from app.chat_cleanup import delete_recent_messages
 from app.config import Settings
 from app.custom_emoji import product_brand_emoji
@@ -32,7 +33,7 @@ from app.keyboards import (
     categories_menu,
     codex_products_menu,
     coupon_quantity_menu,
-    deposit_amounts,
+    deposit_amounts_for_providers,
     language_menu,
     main_menu,
     order_history_menu,
@@ -107,6 +108,7 @@ from app.suppliers import (
 from app.utils import (
     SecretCipher,
     build_sepay_qr_url,
+    format_usd_from_vnd,
     format_vnd,
     parse_vnd,
     safe_customer_html,
@@ -321,6 +323,7 @@ def create_router(
     nce_client: ExternalSupplierClient | None = None,
     haji_client: HajiClient | None = None,
     autosms_client: AutoSmsClient | None = None,
+    binance_pay_client: BinancePayClient | None = None,
 ) -> Router:
     router = Router(name="customer")
     bot_username_cache: str | None = None
@@ -338,6 +341,7 @@ def create_router(
         if value is not None
     }
     sms_enabled = bool(sms_sources)
+    binance_pay_enabled = binance_pay_client is not None
 
     def sms_source_settings(source_key: str) -> tuple[int, int, int]:
         if source_key == "1":
@@ -462,12 +466,13 @@ def create_router(
                 "back:menu",
                 display_prices,
                 origin="quick",
+                usd_to_vnd=settings.binance_pay_usd_to_vnd,
             ),
         )
 
     async def send_deposit_menu(message: Message, session: AsyncSession) -> None:
         user = await get_or_create_user(message, session)
-        if not settings.sepay_enabled:
+        if not settings.sepay_enabled and not binance_pay_enabled:
             text = (
                 "💳 Chức năng nạp tiền đang được cấu hình. Vui lòng quay lại sau."
                 if user.language == "vi"
@@ -478,11 +483,24 @@ def create_router(
         text = (
             f"💳 <b>Nạp tiền tự động</b>\n\n"
             f"Chọn số tiền muốn nạp. Tối thiểu {format_vnd(settings.min_deposit)}."
+            + (
+                f"\n₿ Binance Pay quy đổi: 1 USDT ≈ {format_vnd(settings.binance_pay_usd_to_vnd)}."
+                if binance_pay_enabled
+                else ""
+            )
             if user.language == "vi"
             else f"💳 <b>Automatic deposit</b>\n\n"
             f"Choose an amount. Minimum {format_vnd(settings.min_deposit)}."
         )
-        await message.answer(text, reply_markup=deposit_amounts(user.language))
+        await message.answer(
+            text,
+            reply_markup=deposit_amounts_for_providers(
+                user.language,
+                sepay_enabled=settings.sepay_enabled,
+                binance_enabled=binance_pay_enabled,
+                usd_to_vnd=settings.binance_pay_usd_to_vnd,
+            ),
+        )
 
     async def send_preorder_menu(message: Message, session: AsyncSession) -> None:
         user = await get_or_create_user(message, session)
@@ -507,7 +525,11 @@ def create_router(
                 text += "\n\nHiện không có mặt hàng hết kho nào đang nhận đặt trước."
         await message.answer(
             text,
-            reply_markup=preorder_products_menu(products, user.language),
+            reply_markup=preorder_products_menu(
+                products,
+                user.language,
+                settings.binance_pay_usd_to_vnd,
+            ),
         )
 
     def preorder_error_message(code: str, language: str) -> str:
@@ -739,6 +761,7 @@ def create_router(
                     user.language,
                     "menu:products",
                     display_prices,
+                    usd_to_vnd=settings.binance_pay_usd_to_vnd,
                 ),
             )
 
@@ -768,6 +791,7 @@ def create_router(
                     "back:menu",
                     display_prices,
                     origin="quick",
+                    usd_to_vnd=settings.binance_pay_usd_to_vnd,
                 ),
             )
 
@@ -811,6 +835,7 @@ def create_router(
                     products,
                     user.language,
                     display_prices,
+                    settings.binance_pay_usd_to_vnd,
                 ),
             )
 
@@ -844,7 +869,11 @@ def create_router(
             await edit_or_send_text(
                 callback.message,
                 text,
-                reply_markup=preorder_products_menu(products, user.language),
+                reply_markup=preorder_products_menu(
+                    products,
+                    user.language,
+                    settings.binance_pay_usd_to_vnd,
+                ),
             )
 
     @router.callback_query(F.data.startswith("preorder:product:"))
@@ -1176,6 +1205,7 @@ def create_router(
                     "menu:quick",
                     display_prices,
                     origin="quick",
+                    usd_to_vnd=settings.binance_pay_usd_to_vnd,
                 ),
             )
 
@@ -1514,10 +1544,16 @@ def create_router(
             if pricing is not None and pricing.seller_price_id is not None
             else labels[0]
         )
-        price_text = f"<b>{format_vnd(display_price)}</b>"
+        price_text = (
+            f"<b>{format_vnd(display_price)}</b> "
+            f"<small>({format_usd_from_vnd(display_price, settings.binance_pay_usd_to_vnd)})</small>"
+        )
         if pricing is not None and pricing.flash_sale is not None:
             price_text = (
-                f"<s>{format_vnd(product.price)}</s> → <b>{format_vnd(display_price)}</b>"
+                f"<s>{format_vnd(product.price)}</s> "
+                f"({format_usd_from_vnd(product.price, settings.binance_pay_usd_to_vnd)}) → "
+                f"<b>{format_vnd(display_price)}</b> "
+                f"<small>({format_usd_from_vnd(display_price, settings.binance_pay_usd_to_vnd)})</small>"
             )
         text = (
             f"{product_brand_emoji(name)} <b>{safe_customer_html(name)}</b>\n\n"
@@ -2621,7 +2657,7 @@ def create_router(
     @router.callback_query(F.data == "menu:deposit")
     async def deposit_menu(callback: CallbackQuery, session: AsyncSession) -> None:
         user = await get_or_create_user(callback, session)
-        if not settings.sepay_enabled:
+        if not settings.sepay_enabled and not binance_pay_enabled:
             text = (
                 "💳 Chức năng nạp tiền đang được cấu hình. Vui lòng quay lại sau."
                 if user.language == "vi"
@@ -2634,12 +2670,30 @@ def create_router(
         text = (
             f"💳 <b>Nạp tiền tự động</b>\n\n"
             f"Chọn số tiền muốn nạp. Tối thiểu {format_vnd(settings.min_deposit)}."
+            + (
+                f"\n₿ Binance Pay quy đổi: 1 USDT ≈ {format_vnd(settings.binance_pay_usd_to_vnd)}."
+                if binance_pay_enabled
+                else ""
+            )
             if user.language == "vi"
             else f"💳 <b>Automatic deposit</b>\n\n"
             f"Choose an amount. Minimum {format_vnd(settings.min_deposit)}."
+            + (
+                f"\n₿ Binance Pay rate: 1 USDT ≈ {format_vnd(settings.binance_pay_usd_to_vnd)}."
+                if binance_pay_enabled
+                else ""
+            )
         )
         if callback.message:
-            await callback.message.edit_text(text, reply_markup=deposit_amounts(user.language))
+            await callback.message.edit_text(
+                text,
+                reply_markup=deposit_amounts_for_providers(
+                    user.language,
+                    sepay_enabled=settings.sepay_enabled,
+                    binance_enabled=binance_pay_enabled,
+                    usd_to_vnd=settings.binance_pay_usd_to_vnd,
+                ),
+            )
         await callback.answer()
 
     @router.callback_query(F.data.startswith("deposit:"))
@@ -2649,22 +2703,46 @@ def create_router(
         state: FSMContext,
     ) -> None:
         user = await get_or_create_user(callback, session)
-        if not settings.sepay_enabled:
+        parts = callback.data.split(":")
+        provider = parts[1] if len(parts) >= 3 else "sepay"
+        raw_amount = parts[2] if len(parts) >= 3 else parts[1]
+        if provider == "binance":
+            if not binance_pay_enabled:
+                await callback.answer("Nạp Binance Pay chưa được bật.", show_alert=True)
+                return
+        elif not settings.sepay_enabled:
             await callback.answer("Nạp tiền chưa được bật.", show_alert=True)
             return
-        raw_amount = callback.data.split(":", 1)[1]
         if raw_amount == "other":
+            await state.update_data(deposit_provider=provider)
             await state.set_state(DepositStates.waiting_for_amount)
             prompt = (
                 f"Nhập số tiền muốn nạp, tối thiểu {format_vnd(settings.min_deposit)}."
                 if user.language == "vi"
                 else f"Enter an amount, minimum {format_vnd(settings.min_deposit)}."
             )
+            if provider == "binance":
+                prompt += (
+                    f"\n₿ Binance Pay: 1 USDT ≈ {format_vnd(settings.binance_pay_usd_to_vnd)}."
+                    if user.language == "vi"
+                    else f"\n₿ Binance Pay: 1 USDT ≈ {format_vnd(settings.binance_pay_usd_to_vnd)}."
+                )
             if callback.message:
                 await callback.message.edit_text(prompt, reply_markup=back_menu(user.language))
             await callback.answer()
             return
-        await create_and_show_deposit(callback.message, session, user, int(raw_amount))
+        try:
+            amount = int(raw_amount)
+        except ValueError:
+            await callback.answer("Số tiền không hợp lệ.", show_alert=True)
+            return
+        await create_and_show_deposit(
+            callback.message,
+            session,
+            user,
+            amount,
+            provider=provider,
+        )
         await callback.answer()
 
     @router.message(DepositStates.waiting_for_amount)
@@ -2682,19 +2760,26 @@ def create_router(
                 else f"Invalid amount. Minimum {format_vnd(settings.min_deposit)}."
             )
             return
+        data = await state.get_data()
+        provider = str(data.get("deposit_provider") or "sepay")
         await state.clear()
-        await create_and_show_deposit(message, session, user, amount)
+        await create_and_show_deposit(message, session, user, amount, provider=provider)
 
     async def create_and_show_deposit(
         target: Message | None,
         session: AsyncSession,
         user: User,
         amount: int,
+        *,
+        provider: str = "sepay",
     ) -> None:
         if target is None:
             return
         if amount < settings.min_deposit:
             await target.answer(f"Số tiền tối thiểu là {format_vnd(settings.min_deposit)}.")
+            return
+        if provider == "binance":
+            await create_and_show_binance_deposit(target, session, user, amount)
             return
         try:
             deposit = await create_deposit(
@@ -2749,6 +2834,94 @@ def create_router(
             sent.chat.id,
             sent.message_id,
         )
+
+    async def create_and_show_binance_deposit(
+        target: Message,
+        session: AsyncSession,
+        user: User,
+        amount: int,
+    ) -> None:
+        if binance_pay_client is None:
+            await target.answer("Nạp Binance Pay hiện chưa được bật.")
+            return
+        if amount < settings.min_deposit:
+            await target.answer(
+                f"Số tiền tối thiểu là {format_vnd(settings.min_deposit)}."
+                if user.language == "vi"
+                else f"Minimum deposit is {format_vnd(settings.min_deposit)}."
+            )
+            return
+        deposit = None
+        try:
+            deposit = await create_deposit(
+                session,
+                user.telegram_id,
+                amount,
+                settings.binance_pay_payment_prefix,
+                payment_kind="binance",
+                expiry_seconds=settings.binance_pay_expiry_seconds,
+                max_pending_deposits=settings.max_pending_deposits_per_user,
+            )
+            order = await binance_pay_client.create_order(
+                merchant_trade_no=deposit.code,
+                amount_vnd=amount,
+            )
+        except PendingDepositLimitReached:
+            await target.answer(
+                "Bạn đang có quá nhiều yêu cầu nạp chờ thanh toán. Hãy dùng yêu cầu cũ "
+                "hoặc chờ hết hạn."
+            )
+            return
+        except BinancePayError:
+            if deposit is not None:
+                deposit.status = "failed"
+                deposit.failure_reason = "binance_create_failed"
+                await session.commit()
+            await target.answer(
+                "Binance Pay đang bận hoặc chưa sẵn sàng. Vui lòng thử lại sau."
+                if user.language == "vi"
+                else "Binance Pay is temporarily unavailable. Please try again later."
+            )
+            return
+        amount_usdt = vnd_to_usdt(amount, settings.binance_pay_usd_to_vnd)
+        amount_usdt_text = format(amount_usdt, "f")
+        text = (
+            "₿ <b>Nạp tiền qua Binance Pay</b>\n\n"
+            f"💰 Số tiền ví: <b>{format_vnd(amount)}</b>\n"
+            f"💵 Thanh toán: <b>${amount_usdt_text} USDT</b>\n"
+            f"🧾 Mã nạp: <code>{escape(deposit.code)}</code>\n\n"
+            "Bấm nút bên dưới để thanh toán. Ví chỉ được cộng sau khi Binance xác nhận thành công."
+            f"\n\n⏳ Yêu cầu hết hạn sau {settings.binance_pay_expiry_seconds // 60} phút."
+            if user.language == "vi"
+            else "₿ <b>Deposit with Binance Pay</b>\n\n"
+            f"💰 Wallet amount: <b>{format_vnd(amount)}</b>\n"
+            f"💵 Payment: <b>${amount_usdt_text} USDT</b>\n"
+            f"🧾 Deposit code: <code>{escape(deposit.code)}</code>\n\n"
+            "Use the button below to pay. Your wallet is credited only after Binance confirms payment."
+            f"\n\n⏳ This request expires in {settings.binance_pay_expiry_seconds // 60} minutes."
+        )
+        from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
+
+        markup = InlineKeyboardMarkup(
+            inline_keyboard=[
+                [
+                    InlineKeyboardButton(
+                        text="₿ Thanh toán Binance Pay"
+                        if user.language == "vi"
+                        else "₿ Pay with Binance Pay",
+                        url=order.checkout_url,
+                    )
+                ],
+                [
+                    InlineKeyboardButton(
+                        text="↩️ Quay lại" if user.language == "vi" else "↩️ Back",
+                        callback_data="back:menu",
+                    )
+                ],
+            ]
+        )
+        sent = await target.answer(text, reply_markup=markup)
+        await register_deposit_message(session, deposit.id, sent.chat.id, sent.message_id)
 
     @router.callback_query(F.data == "menu:orders")
     async def show_orders(callback: CallbackQuery, session: AsyncSession) -> None:

@@ -11,7 +11,7 @@ from aiogram.utils.keyboard import InlineKeyboardBuilder
 
 from app.i18n import tr
 from app.models import Category, Order, Preorder, Product
-from app.utils import format_vnd, sanitize_customer_text
+from app.utils import format_usd_from_vnd, format_vnd, sanitize_customer_text
 
 
 @dataclass(frozen=True)
@@ -88,6 +88,7 @@ def main_menu(
 def preorder_products_menu(
     products: list[Product],
     language: str,
+    usd_to_vnd: int | None = None,
 ) -> InlineKeyboardMarkup:
     rows: list[list[InlineKeyboardButton]] = []
     for product in products:
@@ -98,7 +99,10 @@ def preorder_products_menu(
         rows.append(
             [
                 InlineKeyboardButton(
-                    text=f"📦 {name} · {format_vnd(unit_price)}/1",
+                    text=(
+                        f"📦 {name} · {format_vnd(unit_price)}/1"
+                        + (f" ({format_usd_from_vnd(unit_price, usd_to_vnd)})" if usd_to_vnd else "")
+                    ),
                     callback_data=f"preorder:product:{product.id}",
                 )
             ]
@@ -368,6 +372,7 @@ def codex_products_menu(
     products: list[Product],
     language: str,
     prices: dict[int, int] | None = None,
+    usd_to_vnd: int | None = None,
 ) -> InlineKeyboardMarkup:
     return products_menu(
         products,
@@ -375,6 +380,7 @@ def codex_products_menu(
         "back:menu",
         prices,
         origin="codex",
+        usd_to_vnd=usd_to_vnd,
     )
 
 
@@ -385,6 +391,7 @@ def products_menu(
     prices: dict[int, int] | None = None,
     *,
     origin: str | None = None,
+    usd_to_vnd: int | None = None,
 ) -> InlineKeyboardMarkup:
     builder = InlineKeyboardBuilder()
     for product in products:
@@ -396,7 +403,10 @@ def products_menu(
         )
         in_stock = not product.force_out_of_stock and menu_stock > 0
         stock_label = "Hết hàng" if language == "vi" else "Out of stock"
-        button_text = f"{name} · {format_vnd(display_price)}"
+        price_text = format_vnd(display_price)
+        if usd_to_vnd:
+            price_text += f" ({format_usd_from_vnd(display_price, usd_to_vnd)})"
+        button_text = f"{name} · {price_text}"
         if not in_stock:
             button_text = f"🔴 {button_text} · {stock_label}"
         builder.button(
@@ -605,13 +615,44 @@ def purchase_payment_options(
 
 
 def deposit_amounts(language: str) -> InlineKeyboardMarkup:
+    return deposit_amounts_for_providers(language, sepay_enabled=True)
+
+
+def deposit_amounts_for_providers(
+    language: str,
+    *,
+    sepay_enabled: bool = True,
+    binance_enabled: bool = False,
+    usd_to_vnd: int = 27_500,
+) -> InlineKeyboardMarkup:
     builder = InlineKeyboardBuilder()
     for amount in (50_000, 100_000, 200_000, 500_000):
-        builder.button(text=format_vnd(amount), callback_data=f"deposit:{amount}")
+        if sepay_enabled:
+            builder.button(
+                text=f"🏦 {format_vnd(amount)}",
+                callback_data=f"deposit:sepay:{amount}",
+            )
+        if binance_enabled:
+            builder.button(
+                text=f"₿ {format_usd_from_vnd(amount, usd_to_vnd)}",
+                callback_data=f"deposit:binance:{amount}",
+            )
     builder.adjust(2)
-    builder.row(
-        InlineKeyboardButton(text=tr(language, "other_amount"), callback_data="deposit:other")
-    )
+    if sepay_enabled:
+        builder.button(
+            text="🏦 Nhập số tiền khác" if language == "vi" else "🏦 Other bank amount",
+            callback_data="deposit:sepay:other",
+        )
+    if binance_enabled:
+        builder.button(
+            text=(
+                "₿ Nhập số tiền Binance khác"
+                if language == "vi"
+                else "₿ Other Binance amount"
+            ),
+            callback_data="deposit:binance:other",
+        )
+    builder.adjust(2)
     builder.row(InlineKeyboardButton(text=tr(language, "back"), callback_data="back:menu"))
     return builder.as_markup()
 

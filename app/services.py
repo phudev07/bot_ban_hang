@@ -23,6 +23,7 @@ from app.flash_sales import (
     reserve_flash_sale,
     stop_unsafe_flash_sale,
 )
+from app.binance_pay import BinancePayError, usdt_to_vnd
 from app.haji_suppliers import HajiClient, refresh_haji_product
 from app.lehai_suppliers import (
     LeHaiPremiumClient,
@@ -3468,7 +3469,7 @@ async def _process_sepay_payment(
                 deposit.failure_reason = "blocked_user"
                 rejected_status = "failed_request_payment"
                 credit_status = "failed_request"
-            elif deposit.payment_kind not in {"wallet", "direct_purchase"}:
+            elif deposit.payment_kind not in {"wallet", "binance", "direct_purchase"}:
                 deposit.status = "failed"
                 deposit.failed_at = now
                 deposit.failure_reason = "invalid_payment_kind"
@@ -4303,6 +4304,82 @@ async def _process_sepay_payment(
             username=user.username,
             paid_at=deposit.paid_at,
         )
+
+
+async def process_binance_payment(
+    session_factory: async_sessionmaker[AsyncSession],
+    payload: dict[str, object],
+    payment_prefix: str,
+    *,
+    usd_to_vnd: int,
+    cipher: SecretCipher | None = None,
+    supplier_client: SumistoreClient | None = None,
+    referral_commission_percent: int = 2,
+    lehai_client: LeHaiPremiumClient | None = None,
+    canboso_client: ExternalSupplierClient | None = None,
+    nce_client: ExternalSupplierClient | None = None,
+    haji_client: HajiClient | None = None,
+) -> PaymentResult:
+    """Normalize a successful Binance Pay event into the wallet credit path.
+
+    Binance reports USDT while deposits are recorded in VND. The deposit code
+    is the merchant trade number, and the amount is checked before the shared
+    payment settlement logic is allowed to credit the wallet.
+    """
+    status = str(payload.get("bizStatus") or payload.get("status") or "").upper()
+    if status != "PAY_SUCCESS":
+        return PaymentResult("binance_payment_not_successful")
+    merchant_trade_no = str(payload.get("merchantTradeNo") or "").strip()
+    provider_tx_id = str(
+        payload.get("bizId") or payload.get("bizIdStr") or payload.get("orderId") or ""
+    ).strip()
+    order_amount = payload.get("orderAmount")
+    if not merchant_trade_no or not provider_tx_id or not isinstance(order_amount, dict):
+        return PaymentResult("invalid_binance_payment")
+    currency = str(order_amount.get("currency") or "").upper()
+    if currency != "USDT":
+        return PaymentResult("invalid_binance_currency")
+    raw_total = order_amount.get("total")
+    try:
+        provider_amount_vnd = usdt_to_vnd(raw_total, usd_to_vnd)
+    except BinancePayError:
+        return PaymentResult("invalid_amount")
+
+    async with session_factory() as session:
+        deposit = await session.scalar(
+            select(Deposit).where(Deposit.code == merchant_trade_no).with_for_update()
+        )
+        if deposit is None:
+            return PaymentResult("deposit_not_found", deposit_code=merchant_trade_no)
+        if deposit.payment_kind != "binance":
+            return PaymentResult("invalid_payment_kind", deposit_code=deposit.code)
+        expected_amount = int(deposit.requested_amount)
+        # Amounts are generated to eight decimal places, so a two-VND guard
+        # tolerates decimal serialization without accepting an underpayment.
+        if abs(provider_amount_vnd - expected_amount) > 2:
+            normalized_amount = provider_amount_vnd
+        else:
+            normalized_amount = expected_amount
+
+    normalized_payload = {
+        "transferType": "in",
+        "id": provider_tx_id,
+        "amount": normalized_amount,
+        "content": merchant_trade_no,
+    }
+    return await _process_sepay_payment(
+        session_factory,
+        normalized_payload,
+        payment_prefix,
+        cipher,
+        supplier_client,
+        referral_commission_percent,
+        None,
+        lehai_client,
+        canboso_client,
+        nce_client,
+        haji_client,
+    )
 
 
 async def recent_orders(session: AsyncSession, user_id: int, limit: int = 10) -> list[Order]:

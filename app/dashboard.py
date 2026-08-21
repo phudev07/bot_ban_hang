@@ -1644,6 +1644,7 @@ def create_dashboard_router(
                     }
                     for value, label in filter_labels.items()
                 ],
+                usd_to_vnd=settings.binance_pay_usd_to_vnd,
             ),
         )
 
@@ -1776,6 +1777,7 @@ def create_dashboard_router(
                 api_routes_enabled=bool(enabled_supplier_providers(product)),
                 local_stock=local_stock,
                 stock_alert_mode=stock_alert_mode(product),
+                usd_to_vnd=settings.binance_pay_usd_to_vnd,
             ),
         )
 
@@ -6641,6 +6643,11 @@ def create_dashboard_router(
             if settings.public_base_url
             else "/webhooks/sepay"
         )
+        binance_webhook_url = (
+            settings.public_base_url.rstrip("/") + "/webhooks/binance-pay"
+            if settings.public_base_url
+            else "/webhooks/binance-pay"
+        )
         return templates.TemplateResponse(
             request,
             "system.html",
@@ -6650,6 +6657,7 @@ def create_dashboard_router(
                 "system",
                 settings=settings,
                 webhook_url=webhook_url,
+                binance_webhook_url=binance_webhook_url,
             ),
         )
 

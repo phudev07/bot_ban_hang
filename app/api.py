@@ -14,6 +14,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from starlette.middleware.sessions import SessionMiddleware
 
 from app.autosms import AutoSmsClient
+from app.binance_pay import BinancePayClient, verify_binance_pay_signature
 from app.config import Settings
 from app.canboso_suppliers import CanbosoClient
 from app.dashboard import create_dashboard_router
@@ -28,7 +29,7 @@ from app.public_api import client_ip, create_public_api_docs_router, create_publ
 from app.product_tutorials import send_purchase_tutorials
 from app.rate_limit import FixedWindowRateLimiter, RateLimitDecision, RateLimitRule
 from app.rentsim import RentSimClient
-from app.services import process_sepay_payment
+from app.services import process_binance_payment, process_sepay_payment
 from app.suppliers import ExternalSupplierClient, SumistoreClient
 from app.utils import SecretCipher, format_vnd, verify_sepay_hmac
 from app.warehouse_api import create_warehouse_api_router
@@ -64,6 +65,7 @@ def create_api(
     nce_client: ExternalSupplierClient | None = None,
     haji_client: HajiClient | None = None,
     autosms_client: AutoSmsClient | None = None,
+    binance_pay_client: BinancePayClient | None = None,
 ) -> FastAPI:
     owned_api_redis = api_redis is None
     api_redis_client = api_redis or Redis.from_url(settings.redis_url, decode_responses=True)
@@ -109,14 +111,19 @@ def create_api(
     async def limit_public_ingress(request: Request, call_next):
         path = request.url.path
         remote_ip = client_ip(request) or "unknown"
-        if request.method == "POST" and path == "/webhooks/sepay":
+        if request.method == "POST" and path in {"/webhooks/sepay", "/webhooks/binance-pay"}:
+            provider = "binance" if path.endswith("binance-pay") else "sepay"
             per_ip = await ingress_limiter.hit(
-                f"sepay:ip:{remote_ip}",
+                f"{provider}:ip:{remote_ip}",
                 (
                     RateLimitRule("burst", 20, 10),
                     RateLimitRule(
                         "minute",
-                        settings.sepay_webhook_rate_limit_per_minute,
+                        (
+                            settings.binance_pay_webhook_rate_limit_per_minute
+                            if provider == "binance"
+                            else settings.sepay_webhook_rate_limit_per_minute
+                        ),
                         60,
                     ),
                 ),
@@ -124,11 +131,15 @@ def create_api(
             if not per_ip.allowed:
                 return rate_limited_response(per_ip)
             global_limit = await ingress_limiter.hit(
-                "sepay:global",
+                f"{provider}:global",
                 (
                     RateLimitRule(
                         "minute",
-                        settings.sepay_webhook_global_rate_limit_per_minute,
+                        (
+                            settings.binance_pay_webhook_global_rate_limit_per_minute
+                            if provider == "binance"
+                            else settings.sepay_webhook_global_rate_limit_per_minute
+                        ),
                         60,
                     ),
                 ),
@@ -609,5 +620,115 @@ def create_api(
                 )
 
         return {"success": True, "status": result.status}
+
+    @app.post("/webhooks/binance-pay")
+    async def binance_pay_webhook(
+        request: Request,
+        binance_pay_timestamp: str | None = Header(
+            default=None, alias="BinancePay-Timestamp"
+        ),
+        binance_pay_nonce: str | None = Header(default=None, alias="BinancePay-Nonce"),
+        binance_pay_certificate_sn: str | None = Header(
+            default=None, alias="BinancePay-Certificate-SN"
+        ),
+        binance_pay_signature: str | None = Header(
+            default=None, alias="BinancePay-Signature"
+        ),
+    ) -> dict[str, object]:
+        if binance_pay_client is None or not settings.binance_pay_enabled:
+            raise HTTPException(status_code=503, detail="Binance Pay integration is disabled")
+        content_length = request.headers.get("content-length")
+        if content_length and content_length.isdigit() and int(content_length) > 64 * 1024:
+            raise HTTPException(status_code=413, detail="Webhook payload is too large")
+        raw_body = await request.body()
+        if len(raw_body) > 64 * 1024:
+            raise HTTPException(status_code=413, detail="Webhook payload is too large")
+        if not hmac.compare_digest(
+            str(binance_pay_certificate_sn or ""), binance_pay_client.api_key
+        ) or not verify_binance_pay_signature(
+            raw_body,
+            timestamp=binance_pay_timestamp,
+            nonce=binance_pay_nonce,
+            signature=binance_pay_signature,
+            secret_key=binance_pay_client.secret_key,
+            tolerance_seconds=settings.binance_pay_webhook_tolerance_seconds,
+        ):
+            raise HTTPException(status_code=401, detail="Invalid Binance Pay signature")
+        try:
+            payload = json.loads(raw_body)
+        except json.JSONDecodeError as exc:
+            raise HTTPException(status_code=400, detail="Invalid JSON payload") from exc
+        if not isinstance(payload, dict):
+            raise HTTPException(status_code=400, detail="Invalid payload")
+        nested = payload.get("data")
+        event_payload = {**payload, **nested} if isinstance(nested, dict) else payload
+        if str(event_payload.get("bizStatus") or "").upper() != "PAY_SUCCESS":
+            logger.info(
+                "Binance Pay event ignored: status=%s",
+                safe_log_value(event_payload.get("bizStatus") or event_payload.get("status")),
+            )
+            return {"returnCode": "SUCCESS", "returnMessage": None, "status": "ignored"}
+
+        result = await process_binance_payment(
+            session_factory,
+            event_payload,
+            settings.binance_pay_payment_prefix,
+            usd_to_vnd=settings.binance_pay_usd_to_vnd,
+            cipher=cipher,
+            supplier_client=supplier_client,
+            referral_commission_percent=settings.referral_commission_percent,
+            lehai_client=lehai_client,
+            canboso_client=canboso_client,
+            nce_client=nce_client,
+            haji_client=haji_client,
+        )
+        logger.info("Binance Pay webhook processed: status=%s", result.status)
+        if (
+            deposit_notification_bot is not None
+            and result.user_id is not None
+            and result.status
+            in {
+                "credited",
+                "amount_mismatch",
+                "expired_payment",
+                "already_paid_payment",
+                "failed_request_payment",
+            }
+        ):
+            await send_deposit_notification(deposit_notification_bot, settings.admin_ids, result)
+
+        if result.status == "credited" and result.user_id is not None:
+            try:
+                balance_line = (
+                    f"\nSố dư mới: <b>{format_vnd(result.balance)}</b>"
+                    if result.balance is not None
+                    else ""
+                )
+                await bot.send_message(
+                    result.user_id,
+                    "✅ <b>Nạp Binance Pay thành công</b>\n"
+                    f"Số tiền ví: <b>{format_vnd(result.amount)}</b>\n"
+                    f"{balance_line}\n\nSố dư đã được cập nhật, bạn có thể mua hàng ngay.",
+                    reply_markup=main_menu(
+                        result.language,
+                        sms_enabled=(rentsim_client is not None or autosms_client is not None),
+                        codex_enabled=haji_client is not None,
+                    ),
+                )
+            except Exception:
+                logger.exception("Could not notify user %s about Binance Pay deposit", result.user_id)
+
+        rejected_message = {
+            "amount_mismatch": "⚠️ Số tiền Binance Pay không khớp yêu cầu nên chưa được cộng ví.",
+            "expired_payment": "⚠️ Yêu cầu nạp Binance Pay đã hết hạn nên chưa được cộng ví.",
+            "already_paid_payment": "⚠️ Yêu cầu nạp này đã được xử lý, hệ thống không cộng lần hai.",
+            "failed_request_payment": "⚠️ Yêu cầu nạp Binance Pay đã thất bại nên chưa được cộng ví.",
+        }.get(result.status)
+        if rejected_message and result.user_id is not None:
+            try:
+                await bot.send_message(result.user_id, rejected_message)
+            except Exception:
+                logger.exception("Could not notify user %s about rejected Binance payment", result.user_id)
+        return {"returnCode": "SUCCESS", "returnMessage": None, "status": result.status}
 
     return app

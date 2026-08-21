@@ -16,6 +16,7 @@ from sqlalchemy import delete, select, text
 from app.admin import create_admin_router
 from app.api import create_api
 from app.autosms import create_autosms_client
+from app.binance_pay import create_binance_pay_client
 from app.broadcasts import (
     BroadcastRateLimiter,
     backfill_stock_alert_messages,
@@ -1499,6 +1500,7 @@ async def main() -> None:
     )
     rentsim_client = create_rentsim_client(settings)
     autosms_client = create_autosms_client(settings)
+    binance_pay_client = create_binance_pay_client(settings)
 
     cipher = SecretCipher(settings.inventory_encryption_key.get_secret_value())
     fingerprinted_items = await backfill_inventory_fingerprints(session_factory, cipher)
@@ -1545,6 +1547,7 @@ async def main() -> None:
             nce_client=nce_client,
             haji_client=haji_client,
             autosms_client=autosms_client,
+            binance_pay_client=binance_pay_client,
         )
     )
 
@@ -1562,6 +1565,7 @@ async def main() -> None:
         nce_client=nce_client,
         haji_client=haji_client,
         autosms_client=autosms_client,
+        binance_pay_client=binance_pay_client,
     )
     server = uvicorn.Server(
         uvicorn.Config(

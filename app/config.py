@@ -38,6 +38,17 @@ class Settings(BaseSettings):
     payment_expiry_seconds: int = 300
     payment_expiry_sweep_seconds: int = 2
     max_pending_deposits_per_user: int = 3
+    binance_pay_enabled: bool = False
+    binance_pay_base_url: str = "https://bpay.binanceapi.com"
+    binance_pay_api_key: SecretStr = SecretStr("")
+    binance_pay_secret_key: SecretStr = SecretStr("")
+    binance_pay_payment_prefix: str = "BN"
+    binance_pay_usd_to_vnd: int = 27_500
+    binance_pay_timeout_seconds: float = 15
+    binance_pay_expiry_seconds: int = 900
+    binance_pay_webhook_tolerance_seconds: int = 300
+    binance_pay_webhook_rate_limit_per_minute: int = 60
+    binance_pay_webhook_global_rate_limit_per_minute: int = 300
     # Optional rollout boundary for the Admin payment settlement controls.
     # Existing requests before this instant remain view-only.
     manual_payment_controls_since: datetime | None = Field(
@@ -195,6 +206,28 @@ class Settings(BaseSettings):
                     raise ValueError("SePay HMAC secret is missing")
             elif not self.sepay_api_key.get_secret_value():
                 raise ValueError("SePay API key is missing")
+        if self.binance_pay_enabled and not (
+            self.binance_pay_api_key.get_secret_value()
+            and self.binance_pay_secret_key.get_secret_value()
+        ):
+            raise ValueError("Binance Pay is enabled but API credentials are missing")
+        if not self.binance_pay_base_url.strip():
+            raise ValueError("Binance Pay base URL is missing")
+        if self.binance_pay_usd_to_vnd <= 0 or self.binance_pay_timeout_seconds <= 0:
+            raise ValueError("Binance Pay exchange rate or timeout configuration is invalid")
+        if not 60 <= self.binance_pay_expiry_seconds <= 3600:
+            raise ValueError("Binance Pay expiry must be between 60 and 3600 seconds")
+        if not 30 <= self.binance_pay_webhook_tolerance_seconds <= 900:
+            raise ValueError("Binance Pay webhook tolerance must be between 30 and 900 seconds")
+        if self.binance_pay_webhook_rate_limit_per_minute < 10:
+            raise ValueError("Binance Pay webhook rate limit is too small")
+        if (
+            self.binance_pay_webhook_global_rate_limit_per_minute
+            < self.binance_pay_webhook_rate_limit_per_minute
+        ):
+            raise ValueError("Global Binance Pay webhook limit must cover the per-IP limit")
+        if not 2 <= len(self.binance_pay_payment_prefix) <= 10 or not self.binance_pay_payment_prefix.isalnum():
+            raise ValueError("Binance Pay payment prefix must contain 2-10 letters or numbers")
         if self.dashboard_enabled and not all(
             (
                 self.dashboard_username,
