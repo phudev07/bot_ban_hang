@@ -63,6 +63,19 @@ def test_hmac_sepay_configuration() -> None:
     assert settings.payment_expiry_sweep_seconds == 2
 
 
+def test_binance_pay_wallet_deposit_configuration() -> None:
+    with pytest.raises(ValidationError):
+        base_settings(binance_pay_enabled=True)
+    settings = base_settings(
+        binance_pay_enabled=True,
+        binance_pay_api_key="certificate-sn",
+        binance_pay_secret_key="secret",
+    )
+    assert settings.binance_pay_payment_prefix == "BN"
+    assert settings.binance_pay_usd_to_vnd == 27_500
+    assert settings.binance_pay_expiry_seconds == 900
+
+
 def test_payment_expiry_configuration_is_bounded() -> None:
     with pytest.raises(ValidationError):
         base_settings(payment_expiry_seconds=59)
