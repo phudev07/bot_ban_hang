@@ -179,9 +179,10 @@ def delivery_file(
         character for character in shop_order_code if character.isalnum() or character in "-_"
     )[:64] or "shop"
     extension = "".join(character for character in file_extension if character.isalnum()) or "txt"
+    filename_prefix = "don-hang" if language == "vi" else "order"
     return BufferedInputFile(
         content.encode("utf-8-sig"),
-        filename=f"don-hang-{safe_code}.{extension}",
+        filename=f"{filename_prefix}-{safe_code}.{extension}",
     )
 
 

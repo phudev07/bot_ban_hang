@@ -466,16 +466,27 @@ def create_api(
         if result.status == "credited" and result.user_id is not None:
             try:
                 balance_line = (
-                    f"\nSố dư mới: <b>{format_vnd(result.balance)}</b>"
+                    (
+                        f"\nSố dư mới: <b>{format_vnd(result.balance)}</b>"
+                        if result.language == "vi"
+                        else f"\nNew balance: <b>{format_vnd(result.balance)}</b>"
+                    )
                     if result.balance is not None
                     else ""
                 )
                 await bot.send_message(
                     result.user_id,
-                    "✅ <b>Nạp tiền thành công</b>\n"
-                    f"Số tiền: <b>{format_vnd(result.amount)}</b>\n"
-                    f"{balance_line}\n\n"
-                    "Số dư đã được cập nhật, bạn có thể mua hàng ngay.",
+                    (
+                        "✅ <b>Nạp tiền thành công</b>\n"
+                        f"Số tiền: <b>{format_vnd(result.amount)}</b>\n"
+                        f"{balance_line}\n\n"
+                        "Số dư đã được cập nhật, bạn có thể mua hàng ngay."
+                        if result.language == "vi"
+                        else "✅ <b>Deposit successful</b>\n"
+                        f"Amount: <b>{format_vnd(result.amount)}</b>\n"
+                        f"{balance_line}\n\n"
+                        "Your balance has been updated. You can shop now."
+                    ),
                     reply_markup=main_menu(
                         result.language,
                         sms_enabled=(rentsim_client is not None or autosms_client is not None),
@@ -700,15 +711,25 @@ def create_api(
         if result.status == "credited" and result.user_id is not None:
             try:
                 balance_line = (
-                    f"\nSố dư USD mới: <b>{format_usd_tenths(result.balance_usd_tenths)}</b>"
+                    (
+                        f"\nSố dư USD mới: <b>{format_usd_tenths(result.balance_usd_tenths)}</b>"
+                        if result.language == "vi"
+                        else f"\nNew USD balance: <b>{format_usd_tenths(result.balance_usd_tenths)}</b>"
+                    )
                     if result.balance_usd_tenths is not None
                     else ""
                 )
                 await bot.send_message(
                     result.user_id,
-                    "✅ <b>Nạp Binance Pay thành công</b>\n"
-                    f"Số tiền ví USD: <b>{format_usd_tenths(result.amount)}</b>\n"
-                    f"{balance_line}\n\nSố dư đã được cập nhật, bạn có thể mua hàng ngay.",
+                    (
+                        "✅ <b>Nạp Binance Pay thành công</b>\n"
+                        f"Số tiền ví USD: <b>{format_usd_tenths(result.amount)}</b>\n"
+                        f"{balance_line}\n\nSố dư đã được cập nhật, bạn có thể mua hàng ngay."
+                        if result.language == "vi"
+                        else "✅ <b>Binance Pay deposit successful</b>\n"
+                        f"USD wallet amount: <b>{format_usd_tenths(result.amount)}</b>\n"
+                        f"{balance_line}\n\nYour balance has been updated. You can shop now."
+                    ),
                     reply_markup=main_menu(
                         result.language,
                         sms_enabled=(rentsim_client is not None or autosms_client is not None),
@@ -719,10 +740,26 @@ def create_api(
                 logger.exception("Could not notify user %s about Binance Pay deposit", result.user_id)
 
         rejected_message = {
-            "amount_mismatch": "⚠️ Số tiền Binance Pay không khớp yêu cầu nên chưa được cộng ví.",
-            "expired_payment": "⚠️ Yêu cầu nạp Binance Pay đã hết hạn nên chưa được cộng ví.",
-            "already_paid_payment": "⚠️ Yêu cầu nạp này đã được xử lý, hệ thống không cộng lần hai.",
-            "failed_request_payment": "⚠️ Yêu cầu nạp Binance Pay đã thất bại nên chưa được cộng ví.",
+            "amount_mismatch": (
+                "⚠️ Số tiền Binance Pay không khớp yêu cầu nên chưa được cộng ví."
+                if result.language == "vi"
+                else "⚠️ The Binance Pay amount did not match the request, so your wallet was not credited."
+            ),
+            "expired_payment": (
+                "⚠️ Yêu cầu nạp Binance Pay đã hết hạn nên chưa được cộng ví."
+                if result.language == "vi"
+                else "⚠️ This Binance Pay deposit request expired, so your wallet was not credited."
+            ),
+            "already_paid_payment": (
+                "⚠️ Yêu cầu nạp này đã được xử lý, hệ thống không cộng lần hai."
+                if result.language == "vi"
+                else "⚠️ This deposit request was already processed and was not credited twice."
+            ),
+            "failed_request_payment": (
+                "⚠️ Yêu cầu nạp Binance Pay đã thất bại nên chưa được cộng ví."
+                if result.language == "vi"
+                else "⚠️ This Binance Pay deposit request failed, so your wallet was not credited."
+            ),
         }.get(result.status)
         if rejected_message and result.user_id is not None:
             try:

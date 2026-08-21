@@ -277,7 +277,11 @@ def validate_binance_pay_transaction(
 
 
 def home_text(user: User, settings: Settings) -> str:
-    username = f"@{escape(user.username)}" if user.username else "Chưa đặt"
+    username = (
+        f"@{escape(user.username)}"
+        if user.username
+        else ("Not set" if user.language == "en" else "Chưa đặt")
+    )
     group_url = escape(settings.community_group_url, quote=True)
     group_line_en = (
         f'\n📢 Telegram group: <a href="{group_url}">Join group</a>' if group_url else ""
@@ -616,7 +620,12 @@ def create_router(
             "too_late": "This preorder is being fulfilled or has ended and cannot be cancelled.",
         }
         messages = vi_messages if language == "vi" else en_messages
-        return messages.get(code, "Không thể xử lý đơn đặt trước. Vui lòng thử lại.")
+        default = (
+            "Không thể xử lý đơn đặt trước. Vui lòng thử lại."
+            if language == "vi"
+            else "The preorder could not be processed. Please try again."
+        )
+        return messages.get(code, default)
 
     @router.message(CommandStart())
     async def start(
@@ -944,7 +953,12 @@ def create_router(
         try:
             product_id = int(callback.data.rsplit(":", 1)[1])
         except (TypeError, ValueError):
-            await callback.answer("Mặt hàng không hợp lệ.", show_alert=True)
+            await callback.answer(
+                "Mặt hàng không hợp lệ."
+                if user.language == "vi"
+                else "Invalid product.",
+                show_alert=True,
+            )
             return
         products = await preorderable_products(session)
         product = next((item for item in products if item.id == product_id), None)
@@ -1066,7 +1080,12 @@ def create_router(
             quantity_value = int(quantity)
             base_price_value = int(base_price)
         except (AttributeError, TypeError, ValueError):
-            await callback.answer("Dữ liệu đặt trước không hợp lệ.", show_alert=True)
+            await callback.answer(
+                "Dữ liệu đặt trước không hợp lệ."
+                if language == "vi"
+                else "Invalid preorder data.",
+                show_alert=True,
+            )
             return
         try:
             preorder = await create_preorder(
@@ -1185,7 +1204,12 @@ def create_router(
             .limit(1)
         )
         if order_id is None:
-            await callback.answer("Không tìm thấy đơn đã giao.", show_alert=True)
+            await callback.answer(
+                "Không tìm thấy đơn đã giao."
+                if user.language == "vi"
+                else "Delivered order not found.",
+                show_alert=True,
+            )
             return
         orders = await order_bundle(session, user.telegram_id, order_id)
         order_ids, shop_order_code, product_name, secrets, total_amount = bundle_values(
@@ -1252,7 +1276,7 @@ def create_router(
             if group == "gpt" and user.language == "vi"
             else "🤖 <b>GPT accounts</b>"
             if group == "gpt"
-            else "💎 <b>GG Pro 18M</b>"
+            else "💎 <b>Google Pro 18M</b>"
         )
         if callback.message:
             await callback.message.edit_text(
@@ -1391,7 +1415,9 @@ def create_router(
             client = sms_sources[source_key]
         markup, _fallback_price, cooldown_seconds = sms_source_settings(source_key)
         country = sms_country_name(client.provider, user.language)
-        await callback.answer("⏳ Đang lấy số...")
+        await callback.answer(
+            "⏳ Đang lấy số..." if user.language == "vi" else "⏳ Getting a number..."
+        )
         loading_text = (
             f"⏳ <b>Getting a ChatGPT number with country code {escape(country)}...</b>\n\n"
             "The bot is reserving your rental. Please wait and do not tap the rent button again."
@@ -1569,7 +1595,12 @@ def create_router(
         origin = parts[2] if len(parts) >= 3 and parts[2] in {"quick", "codex"} else None
         product = await session.get(Product, product_id)
         if product is None or not product.active:
-            await callback.answer("Sản phẩm không tồn tại.", show_alert=True)
+            await callback.answer(
+                "Sản phẩm không tồn tại."
+                if user.language == "vi"
+                else "Product not found.",
+                show_alert=True,
+            )
             return
         await callback.answer()
         # Background supplier workers keep this cached stock fresh. The actual
@@ -1999,7 +2030,12 @@ def create_router(
         product_id = int(callback.data.split(":", 1)[1])
         product = await session.get(Product, product_id)
         if product is None or not product.active:
-            await callback.answer("Sản phẩm không tồn tại.", show_alert=True)
+            await callback.answer(
+                "Sản phẩm không tồn tại."
+                if user.language == "vi"
+                else "Product not found.",
+                show_alert=True,
+            )
             return
         pricing = await product_pricing(
             session,
@@ -2008,7 +2044,9 @@ def create_router(
         )
         if pricing is not None and pricing.flash_sale is not None:
             await callback.answer(
-                "Sản phẩm đang Flash Sale nên không cộng thêm mã giảm giá.",
+                "Sản phẩm đang Flash Sale nên không cộng thêm mã giảm giá."
+                if user.language == "vi"
+                else "This product is on Flash Sale, so coupons cannot be stacked.",
                 show_alert=True,
             )
             return
@@ -2046,7 +2084,11 @@ def create_router(
         product = await session.get(Product, int(data.get("product_id", 0)))
         if product is None or not product.active:
             await state.clear()
-            await message.answer("Sản phẩm không còn tồn tại.")
+            await message.answer(
+                "Sản phẩm không còn tồn tại."
+                if user.language == "vi"
+                else "This product is no longer available."
+            )
             return
         stock = await available_stock(session, product.id)
         try:
@@ -2120,7 +2162,12 @@ def create_router(
         )
         product = await session.get(Product, product_id)
         if product is None or not product.active:
-            await callback.answer("Sản phẩm không tồn tại.", show_alert=True)
+            await callback.answer(
+                "Sản phẩm không tồn tại."
+                if user.language == "vi"
+                else "Product not found.",
+                show_alert=True,
+            )
             return
         stock = await available_stock(session, product.id)
         pricing = await product_pricing(
@@ -2131,7 +2178,9 @@ def create_router(
         )
         if pricing is None and expected_flash_sale_id is not None:
             await callback.answer(
-                "Suất Flash Sale vừa hết hoặc giá vốn đã tăng.",
+                "Suất Flash Sale vừa hết hoặc giá vốn đã tăng."
+                if user.language == "vi"
+                else "The Flash Sale allocation ended or supplier cost increased.",
                 show_alert=True,
             )
             return
@@ -2151,7 +2200,12 @@ def create_router(
                         origin=origin,
                     )
                 )
-            await callback.answer("Sản phẩm đã hết hàng.", show_alert=True)
+            await callback.answer(
+                "Sản phẩm đã hết hàng."
+                if user.language == "vi"
+                else "This product is out of stock.",
+                show_alert=True,
+            )
             return
         text = (
             f"🧮 <b>Chọn số lượng</b>\n\n"
@@ -2208,11 +2262,21 @@ def create_router(
         )
         product = await session.get(Product, product_id)
         if product is None or not product.active or not product.allow_quantity:
-            await callback.answer("Sản phẩm không hợp lệ.", show_alert=True)
+            await callback.answer(
+                "Sản phẩm không hợp lệ."
+                if user.language == "vi"
+                else "Invalid product.",
+                show_alert=True,
+            )
             return
         stock = await available_stock(session, product.id)
         if stock <= 0:
-            await callback.answer("Sản phẩm đã hết hàng.", show_alert=True)
+            await callback.answer(
+                "Sản phẩm đã hết hàng."
+                if user.language == "vi"
+                else "This product is out of stock.",
+                show_alert=True,
+            )
             return
         pricing = await product_pricing(
             session,
@@ -2222,7 +2286,9 @@ def create_router(
         )
         if pricing is None and expected_flash_sale_id is not None:
             await callback.answer(
-                "Suất Flash Sale vừa hết hoặc giá vốn đã tăng.",
+                "Suất Flash Sale vừa hết hoặc giá vốn đã tăng."
+                if user.language == "vi"
+                else "The Flash Sale allocation ended or supplier cost increased.",
                 show_alert=True,
             )
             return
@@ -2266,7 +2332,11 @@ def create_router(
             quantity = 0
         maximum = min(product.max_quantity, maximum_quantity) if product is not None else 1
         if product is None or quantity < 1 or quantity > maximum:
-            await message.answer(f"Số lượng không hợp lệ. Hãy nhập từ 1 đến {maximum}.")
+            await message.answer(
+                f"Số lượng không hợp lệ. Hãy nhập từ 1 đến {maximum}."
+                if user.language == "vi"
+                else f"Invalid quantity. Enter a number from 1 to {maximum}."
+            )
             return
         await state.clear()
         normalized_flash_sale_id = (
@@ -2304,7 +2374,12 @@ def create_router(
         _, product_id_text, coupon_id_text = callback.data.split(":")
         product = await session.get(Product, int(product_id_text))
         if product is None or not product.active or not product.allow_quantity:
-            await callback.answer("Sản phẩm không hợp lệ.", show_alert=True)
+            await callback.answer(
+                "Sản phẩm không hợp lệ."
+                if user.language == "vi"
+                else "Invalid product.",
+                show_alert=True,
+            )
             return
         try:
             pricing = await product_pricing(
@@ -2323,7 +2398,12 @@ def create_router(
         stock = await available_stock(session, product.id)
         maximum = purchase_quantity_limit(product, stock)
         if maximum <= 0:
-            await callback.answer("Sản phẩm đã hết hàng.", show_alert=True)
+            await callback.answer(
+                "Sản phẩm đã hết hàng."
+                if user.language == "vi"
+                else "This product is out of stock.",
+                show_alert=True,
+            )
             return
         await state.set_state(PurchaseStates.waiting_for_coupon_quantity)
         await state.update_data(
@@ -2359,7 +2439,11 @@ def create_router(
         except ValueError:
             quantity = 0
         if quantity < 1 or quantity > maximum:
-            await message.answer(f"Số lượng không hợp lệ. Hãy nhập từ 1 đến {maximum}.")
+            await message.answer(
+                f"Số lượng không hợp lệ. Hãy nhập từ 1 đến {maximum}."
+                if user.language == "vi"
+                else f"Invalid quantity. Enter a number from 1 to {maximum}."
+            )
             return
         await state.clear()
         await complete_product_purchase(
@@ -2390,7 +2474,12 @@ def create_router(
         )
         product = await session.get(Product, product_id)
         if product is None or not product.active:
-            await callback.answer("Sản phẩm không tồn tại.", show_alert=True)
+            await callback.answer(
+                "Sản phẩm không tồn tại."
+                if user.language == "vi"
+                else "Product not found.",
+                show_alert=True,
+            )
             return
         if callback.message and await show_seller_purchase_confirmation(
             callback.message,
@@ -2485,7 +2574,12 @@ def create_router(
     ) -> None:
         user = await get_or_create_user(callback, session)
         if not settings.sepay_enabled:
-            await callback.answer("Thanh toán QR chưa được bật.", show_alert=True)
+            await callback.answer(
+                "Thanh toán QR chưa được bật."
+                if user.language == "vi"
+                else "QR payments are not enabled.",
+                show_alert=True,
+            )
             return
         parts = callback.data.split(":")
         product_id = int(parts[1])
@@ -2499,20 +2593,40 @@ def create_router(
                 coupon_id = int(parts[3])
         product = await session.get(Product, product_id)
         if product is None or not product.active:
-            await callback.answer("Sản phẩm không tồn tại.", show_alert=True)
+            await callback.answer(
+                "Sản phẩm không tồn tại."
+                if user.language == "vi"
+                else "Product not found.",
+                show_alert=True,
+            )
             return
         if quantity < 1 or quantity > product.max_quantity:
-            await callback.answer("Số lượng không hợp lệ.", show_alert=True)
+            await callback.answer(
+                "Số lượng không hợp lệ."
+                if user.language == "vi"
+                else "Invalid quantity.",
+                show_alert=True,
+            )
             return
         if quantity > 1 and not product.allow_quantity:
-            await callback.answer("Sản phẩm không hỗ trợ mua nhiều.", show_alert=True)
+            await callback.answer(
+                "Sản phẩm không hỗ trợ mua nhiều."
+                if user.language == "vi"
+                else "This product does not support multiple-item purchases.",
+                show_alert=True,
+            )
             return
         local_stock = await local_inventory_stock(session, product.id)
         if local_stock < quantity and (
             await available_stock(session, product.id)
             < quantity
         ):
-            await callback.answer("Sản phẩm vừa hết hàng.", show_alert=True)
+            await callback.answer(
+                "Sản phẩm vừa hết hàng."
+                if user.language == "vi"
+                else "This product just went out of stock.",
+                show_alert=True,
+            )
             return
 
         try:
@@ -2534,11 +2648,18 @@ def create_router(
         if pricing is None:
             if expected_flash_sale_id is not None:
                 await callback.answer(
-                    "Suất Flash Sale vừa hết hoặc giá vốn đã tăng.",
+                    "Suất Flash Sale vừa hết hoặc giá vốn đã tăng."
+                    if user.language == "vi"
+                    else "The Flash Sale allocation ended or supplier cost increased.",
                     show_alert=True,
                 )
                 return
-            await callback.answer("Mã giảm giá không còn hiệu lực.", show_alert=True)
+            await callback.answer(
+                "Mã giảm giá không còn hiệu lực."
+                if user.language == "vi"
+                else "This discount code is no longer valid.",
+                show_alert=True,
+            )
             return
         checkout_quote = await product_checkout_quote(
             session,
@@ -2553,7 +2674,9 @@ def create_router(
         )
         if not checkout_quote.available:
             await callback.answer(
-                "Nguồn hàng vừa thay đổi, vui lòng thử lại.",
+                "Nguồn hàng vừa thay đổi, vui lòng thử lại."
+                if user.language == "vi"
+                else "Stock just changed. Please try again.",
                 show_alert=True,
             )
             return
@@ -2569,7 +2692,9 @@ def create_router(
             )
         ):
             await callback.answer(
-                "Giá vốn phần hàng còn lại cao hơn giá Flash Sale.",
+                "Giá vốn phần hàng còn lại cao hơn giá Flash Sale."
+                if user.language == "vi"
+                else "The source cost for the remaining items is higher than the Flash Sale price.",
                 show_alert=True,
             )
             return
@@ -2596,14 +2721,18 @@ def create_router(
             )
         except PendingDepositLimitReached:
             await callback.answer(
-                "Bạn đang có quá nhiều QR chờ thanh toán. Hãy dùng QR cũ hoặc chờ hết hạn.",
+                "Bạn đang có quá nhiều QR chờ thanh toán. Hãy dùng QR cũ hoặc chờ hết hạn."
+                if user.language == "vi"
+                else "You have too many pending QR payments. Use an existing QR or wait for one to expire.",
                 show_alert=True,
             )
             return
         except FlashSaleUnavailable:
             await session.rollback()
             await callback.answer(
-                "Suất Flash Sale vừa hết. Vui lòng mở lại sản phẩm để xem giá hiện tại.",
+                "Suất Flash Sale vừa hết. Vui lòng mở lại sản phẩm để xem giá hiện tại."
+                if user.language == "vi"
+                else "The Flash Sale allocation ended. Reopen the product to see the current price.",
                 show_alert=True,
             )
             return
@@ -2787,10 +2916,20 @@ def create_router(
             raw_amount = parts[2] if len(parts) >= 3 else parts[1]
         if provider == "binance":
             if not binance_pay_enabled:
-                await callback.answer("Nạp Binance Pay chưa được bật.", show_alert=True)
+                await callback.answer(
+                    "Nạp Binance Pay chưa được bật."
+                    if user.language == "vi"
+                    else "Binance Pay deposits are not enabled.",
+                    show_alert=True,
+                )
                 return
         elif not settings.sepay_enabled:
-            await callback.answer("Nạp tiền chưa được bật.", show_alert=True)
+            await callback.answer(
+                "Nạp tiền chưa được bật."
+                if user.language == "vi"
+                else "Deposits are not enabled.",
+                show_alert=True,
+            )
             return
         if raw_amount == "other":
             await state.update_data(deposit_provider=provider, deposit_currency=currency)
@@ -2813,12 +2952,22 @@ def create_router(
         try:
             amount = int(raw_amount)
         except ValueError:
-            await callback.answer("Số tiền không hợp lệ.", show_alert=True)
+            await callback.answer(
+                "Số tiền không hợp lệ."
+                if user.language == "vi"
+                else "Invalid amount.",
+                show_alert=True,
+            )
             return
         amount_usd = amount if provider == "binance" and currency == "usd" else None
         if amount_usd is not None:
             if amount_usd < 1:
-                await callback.answer("Số USD tối thiểu là $1.", show_alert=True)
+                await callback.answer(
+                    "Số USD tối thiểu là $1."
+                    if user.language == "vi"
+                    else "The minimum USD amount is $1.",
+                    show_alert=True,
+                )
                 return
             amount = amount_usd * 10
         await create_and_show_deposit(
@@ -3134,7 +3283,11 @@ def create_router(
         state: FSMContext,
     ) -> None:
         if binance_pay_client is None:
-            await target.answer("Nạp Binance Pay hiện chưa được bật.")
+            await target.answer(
+                "Nạp Binance Pay hiện chưa được bật."
+                if user.language == "vi"
+                else "Binance Pay deposits are not enabled."
+            )
             return
         if amount < 10:
             await target.answer(
@@ -3156,6 +3309,9 @@ def create_router(
             await target.answer(
                 "Bạn đang có quá nhiều yêu cầu nạp chờ thanh toán. Hãy dùng yêu cầu cũ "
                 "hoặc chờ hết hạn."
+                if user.language == "vi"
+                else "You have too many pending deposit requests. Use the existing request "
+                "or wait for it to expire."
             )
             return
         amount_usdt_text = format_usd_tenths(amount)
@@ -3226,7 +3382,12 @@ def create_router(
         order_id = int(callback.data.split(":", 1)[1])
         orders = await order_bundle(session, user.telegram_id, order_id)
         if not orders:
-            await callback.answer("Không tìm thấy đơn hàng.", show_alert=True)
+            await callback.answer(
+                "Không tìm thấy đơn hàng."
+                if user.language == "vi"
+                else "Order not found.",
+                show_alert=True,
+            )
             return
         order_ids, shop_order_code, product_name, secrets, total_amount = bundle_values(
             orders, user
@@ -3261,7 +3422,12 @@ def create_router(
         order_id = int(callback.data.split(":", 1)[1])
         orders = await order_bundle(session, user.telegram_id, order_id)
         if not orders:
-            await callback.answer("Không tìm thấy đơn hàng.", show_alert=True)
+            await callback.answer(
+                "Không tìm thấy đơn hàng."
+                if user.language == "vi"
+                else "Order not found.",
+                show_alert=True,
+            )
             return
         order_ids, shop_order_code, product_name, secrets, total_amount = bundle_values(
             orders, user
@@ -3421,7 +3587,9 @@ def create_router(
             )
         if client.admin_blocked:
             await callback.answer(
-                "API đang bị admin đình chỉ. Hãy liên hệ hỗ trợ.",
+                "API đang bị admin đình chỉ. Hãy liên hệ hỗ trợ."
+                if user.language == "vi"
+                else "The API has been suspended by an administrator. Please contact support.",
                 show_alert=True,
             )
             return
@@ -3440,9 +3608,15 @@ def create_router(
         await callback.answer()
 
     @router.callback_query(F.data == "warehouse-api:blocked")
-    async def warehouse_api_blocked(callback: CallbackQuery) -> None:
+    async def warehouse_api_blocked(
+        callback: CallbackQuery,
+        session: AsyncSession,
+    ) -> None:
+        user = await get_or_create_user(callback, session)
         await callback.answer(
-            "API đang bị admin đình chỉ. Hãy liên hệ hỗ trợ.",
+            "API đang bị admin đình chỉ. Hãy liên hệ hỗ trợ."
+            if user.language == "vi"
+            else "The API has been suspended by an administrator. Please contact support.",
             show_alert=True,
         )
 
