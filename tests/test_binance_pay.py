@@ -7,8 +7,8 @@ from app.binance_pay import (
 
 
 def test_binance_pay_vnd_usdt_conversion_is_decimal_and_reversible() -> None:
-    assert vnd_to_usdt(27_500) == vnd_to_usdt(27_500, 27_500)
-    assert str(vnd_to_usdt(27_500)) == "1.00000000"
+    assert vnd_to_usdt(26_500) == vnd_to_usdt(26_500, 26_500)
+    assert str(vnd_to_usdt(26_500)) == "1.00000000"
     assert usdt_to_vnd("0.4", 27_500) == 11_000
 
 

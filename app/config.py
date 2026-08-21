@@ -43,7 +43,7 @@ class Settings(BaseSettings):
     binance_pay_api_key: SecretStr = SecretStr("")
     binance_pay_secret_key: SecretStr = SecretStr("")
     binance_pay_payment_prefix: str = "BN"
-    binance_pay_usd_to_vnd: int = 27_500
+    binance_pay_usd_to_vnd: int = 26_500
     binance_pay_timeout_seconds: float = 15
     binance_pay_expiry_seconds: int = 900
     binance_pay_webhook_tolerance_seconds: int = 300

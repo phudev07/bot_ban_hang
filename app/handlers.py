@@ -495,11 +495,6 @@ def create_router(
             f"👛 Ví VND: <b>{format_vnd(user.balance)}</b>\n"
             f"💵 Ví USD: <b>{format_usd_tenths(getattr(user, 'balance_usd_tenths', 0))}</b>\n\n"
             f"Chọn số tiền muốn nạp. Tối thiểu {format_vnd(settings.min_deposit)}."
-            + (
-                f"\n🪙 Binance Pay quy đổi: 1 USDT ≈ {format_vnd(settings.binance_pay_usd_to_vnd)}."
-                if binance_pay_enabled
-                else ""
-            )
             if user.language == "vi"
             else f"💳 <b>Automatic deposit</b>\n\n"
             f"👛 VND wallet: <b>{format_vnd(user.balance)}</b>\n"
@@ -2703,21 +2698,11 @@ def create_router(
             f"👛 Ví VND: <b>{format_vnd(user.balance)}</b>\n"
             f"💵 Ví USD: <b>{format_usd_tenths(getattr(user, 'balance_usd_tenths', 0))}</b>\n\n"
             f"Chọn số tiền muốn nạp. Tối thiểu {format_vnd(settings.min_deposit)}."
-            + (
-                f"\n🪙 Binance Pay quy đổi: 1 USDT ≈ {format_vnd(settings.binance_pay_usd_to_vnd)}."
-                if binance_pay_enabled
-                else ""
-            )
             if user.language == "vi"
             else f"💳 <b>Automatic deposit</b>\n\n"
             f"👛 VND wallet: <b>{format_vnd(user.balance)}</b>\n"
             f"💵 USD wallet: <b>{format_usd_tenths(getattr(user, 'balance_usd_tenths', 0))}</b>\n\n"
             f"Choose an amount. Minimum {format_vnd(settings.min_deposit)}."
-            + (
-                f"\n🪙 Binance Pay rate: 1 USDT ≈ {format_vnd(settings.binance_pay_usd_to_vnd)}."
-                if binance_pay_enabled
-                else ""
-            )
         )
         if callback.message:
             await callback.message.edit_text(

@@ -17,7 +17,7 @@ import httpx
 
 logger = logging.getLogger(__name__)
 BINANCE_PAY_ORDER_PATH = "/binancepay/openapi/v2/order"
-DEFAULT_USD_TO_VND = 27_500
+DEFAULT_USD_TO_VND = 26_500
 
 
 class BinancePayError(RuntimeError):
