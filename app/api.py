@@ -749,11 +749,6 @@ def create_api(
                 if result.language == "vi"
                 else "⚠️ This Binance Pay deposit request expired, so your wallet was not credited."
             ),
-            "already_paid_payment": (
-                "⚠️ Yêu cầu nạp này đã được xử lý, hệ thống không cộng lần hai."
-                if result.language == "vi"
-                else "⚠️ This deposit request was already processed and was not credited twice."
-            ),
             "failed_request_payment": (
                 "⚠️ Yêu cầu nạp Binance Pay đã thất bại nên chưa được cộng ví."
                 if result.language == "vi"
