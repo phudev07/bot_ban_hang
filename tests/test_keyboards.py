@@ -62,6 +62,10 @@ def test_bank_and_binance_deposit_columns_stay_aligned() -> None:
     assert keyboard.inline_keyboard[1][1].callback_data == "deposit:binance:usd:1"
     assert keyboard.inline_keyboard[4][0].callback_data == "deposit:sepay:500000"
     assert keyboard.inline_keyboard[4][1].callback_data == "deposit:binance:usd:10"
+    assert [button.text for button in keyboard.inline_keyboard[5]] == [
+        "🏦 Số tiền khác",
+        "🪙 Số tiền khác",
+    ]
 
 
 def test_out_of_stock_product_button_is_red_and_clearly_labelled() -> None:
