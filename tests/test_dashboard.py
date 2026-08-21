@@ -2524,6 +2524,97 @@ def test_admin_can_import_recovered_external_inventory(tmp_path) -> None:
     asyncio.run(verify_database())
 
 
+def test_admin_inventory_import_accepts_large_multipart_payload(tmp_path) -> None:
+    async def setup_database():
+        database_path = (tmp_path / "dashboard-large-inventory.db").as_posix()
+        engine = create_async_engine(f"sqlite+aiosqlite:///{database_path}")
+        async with engine.begin() as connection:
+            await connection.run_sync(Base.metadata.create_all)
+        sessions = async_sessionmaker(engine, expire_on_commit=False)
+        async with sessions() as session:
+            category = Category(name_vi="ChatGPT", name_en="ChatGPT")
+            session.add(category)
+            await session.flush()
+            product = Product(
+                category_id=category.id,
+                name_vi="GPT Free large import",
+                name_en="GPT Free large import",
+                price=40_000,
+                fulfillment_source="local",
+                product_type="account",
+                active=True,
+            )
+            session.add(product)
+            await session.commit()
+        return engine, sessions, product.id
+
+    engine, sessions, product_id = asyncio.run(setup_database())
+    encryption_key = Fernet.generate_key().decode()
+    settings = Settings(
+        _env_file=None,
+        bot_token="123456:ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghi",
+        inventory_encryption_key=encryption_key,
+        sepay_enabled=False,
+        dashboard_enabled=True,
+        dashboard_username="admin",
+        dashboard_password_hash=hash_dashboard_password("dashboard-password"),
+        dashboard_session_secret="session-secret-long-enough-for-tests",
+    )
+    app = create_api(settings, sessions, FakeBot(), SecretCipher(encryption_key))  # type: ignore[arg-type]
+
+    rows = [
+        f"large-{index}@example.com|password-{index}|"
+        + '{"accessToken":"'
+        + ("token-" + str(index)).ljust(2_200, "x")
+        + '","refreshToken":"refresh-token"}'
+        for index in range(500)
+    ]
+    items = "\n".join(rows)
+    assert len(items.encode()) > 1024 * 1024
+
+    with TestClient(app, base_url="https://testserver") as client:
+        login = client.post(
+            "/admin/login",
+            data={"username": "admin", "password": "dashboard-password"},
+            follow_redirects=False,
+        )
+        assert login.status_code == 303
+        inventory_page = client.get("/admin/inventory")
+        csrf = re.search(r'name="csrf" value="([^"]+)"', inventory_page.text).group(1)
+        imported = client.post(
+            "/admin/inventory",
+            data={
+                "csrf": csrf,
+                "product_id": str(product_id),
+                "cost_amount": "35.000",
+            },
+            files={"items": (None, items)},
+            follow_redirects=False,
+        )
+        assert imported.status_code == 303
+
+    async def verify_database() -> None:
+        async with sessions() as session:
+            imported_count = int(
+                await session.scalar(
+                    select(func.count(InventoryItem.id)).where(
+                        InventoryItem.product_id == product_id,
+                        InventoryItem.status == "available",
+                    )
+                )
+                or 0
+            )
+            assert imported_count == 500
+            first_item = await session.scalar(
+                select(InventoryItem).where(InventoryItem.product_id == product_id)
+            )
+            assert first_item is not None
+            assert first_item.encrypted_secret != rows[0]
+        await engine.dispose()
+
+    asyncio.run(verify_database())
+
+
 def test_deleting_unlocked_external_inventory_recalculates_stock(tmp_path) -> None:
     async def setup_database():
         database_path = (tmp_path / "dashboard-delete-external-inventory.db").as_posix()

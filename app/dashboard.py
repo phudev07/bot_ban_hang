@@ -3794,17 +3794,36 @@ def create_dashboard_router(
     @router.post("/admin/inventory")
     async def add_inventory(
         request: Request,
-        csrf: str = Form(...),
-        product_id: int = Form(...),
-        items: str = Form(...),
-        cost_amount: str = Form(...),
-        import_note_id: str = Form(""),
-        new_import_note: str = Form(""),
-        lock_sale_price: str | None = Form(None),
-        notify_stock_arrival: str | None = Form(None),
     ) -> RedirectResponse:
         if not is_admin(request):
             return redirect_to_login()
+
+        # Starlette limits each multipart field to 1 MiB by default. GPT Free
+        # imports include access/refresh tokens, so parse this admin-only form
+        # with a bounded limit that stays below Caddy's 8 MiB request limit.
+        async with request.form(
+            max_files=0,
+            max_fields=32,
+            max_part_size=7 * 1024 * 1024,
+        ) as form:
+            def text_field(name: str, default: str = "") -> str:
+                value = form.get(name)
+                return value if isinstance(value, str) else default
+
+            csrf = text_field("csrf")
+            raw_product_id = text_field("product_id")
+            items = text_field("items")
+            cost_amount = text_field("cost_amount")
+            import_note_id = text_field("import_note_id")
+            new_import_note = text_field("new_import_note")
+            lock_sale_price = form.get("lock_sale_price")
+            notify_stock_arrival = form.get("notify_stock_arrival")
+
+        try:
+            product_id = int(raw_product_id)
+        except (TypeError, ValueError):
+            flash(request, "Sản phẩm hoặc dữ liệu kho không hợp lệ.", "error")
+            return RedirectResponse("/admin/inventory", status_code=303)
         if not valid_csrf(request, csrf):
             return RedirectResponse("/admin/inventory", status_code=303)
         normalized_new_note = " ".join(new_import_note.split())
