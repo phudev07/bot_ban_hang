@@ -8,6 +8,7 @@ import time
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from typing import Literal
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Request
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse
@@ -45,7 +46,11 @@ from app.services import (
 )
 from app.suppliers import ExternalSupplierClient, SumistoreClient
 from app.suppliers import EXTERNAL_FULFILLMENT_SOURCES, SELLABLE_FULFILLMENT_SOURCES
-from app.utils import SecretCipher, sanitize_customer_text
+from app.utils import (
+    SecretCipher,
+    format_usd_price_from_vnd,
+    sanitize_customer_text,
+)
 
 
 templates = Jinja2Templates(directory=Path(__file__).parent / "templates")
@@ -115,6 +120,7 @@ class ApiOrderBody(BaseModel):
     coupon_code: str | None = Field(default=None, max_length=64)
     flash_sale_id: int | None = Field(default=None, ge=1)
     max_unit_price: int | None = Field(default=None, ge=1)
+    currency: Literal["VND", "USD"] = "VND"
 
 
 @dataclass(frozen=True)
@@ -323,6 +329,8 @@ def order_payload(
             for unit_price, quantity in grouped_prices.items()
         ],
         "total_amount": sum(unit_prices),
+        "payment_currency": representative.payment_currency,
+        "payment_amount": int(representative.payment_amount or 0),
         "discount_amount": sum(order.discount_amount for order in orders),
         "accounts": [
             cipher.decrypt(order.inventory_item.encrypted_secret) for order in orders
@@ -466,7 +474,7 @@ def create_public_api_router(
             "name": "VietShare Warehouse API",
             "version": "v1",
             "purpose": "Synchronize account products, selling prices and stock, then place orders",
-            "currency": "VND",
+            "currency": ["VND", "USD"],
             "documentation": api_docs_url(settings),
             "authentication": {
                 "headers": [
@@ -504,6 +512,8 @@ def create_public_api_router(
             "admin_blocked": principal.client.admin_blocked,
             "telegram_id": principal.user.telegram_id,
             "balance": principal.user.balance,
+            "balance_usd_tenths": principal.user.balance_usd_tenths,
+            "supported_currencies": ["VND", "USD"],
             "rate_limit_per_minute": principal.client.rate_limit_per_minute,
         }
 
@@ -567,6 +577,10 @@ def create_public_api_router(
                         "name": sanitize_customer_text(product.name_vi),
                         "description": sanitize_customer_text(product.description_vi),
                         "price": display_prices[product.id],
+                        "price_usd": format_usd_price_from_vnd(
+                            display_prices[product.id], settings.binance_pay_usd_to_vnd
+                        ),
+                        "currency": ["VND", "USD"],
                         "flash_sale_id": flash_sale.id if flash_sale else None,
                         "stock": stock,
                         "allow_quantity": product.allow_quantity,
@@ -608,6 +622,11 @@ def create_public_api_router(
                 "price": (
                     pricing.final_unit_price if pricing is not None else product.price
                 ),
+                "price_usd": format_usd_price_from_vnd(
+                    pricing.final_unit_price if pricing is not None else product.price,
+                    settings.binance_pay_usd_to_vnd,
+                ),
+                "currency": ["VND", "USD"],
                 "flash_sale_id": flash_sale.id if flash_sale else None,
                 "stock": stock,
                 "allow_quantity": product.allow_quantity,
@@ -633,7 +652,12 @@ def create_public_api_router(
                 "MAX_UNIT_PRICE_REQUIRED",
                 "max_unit_price is required to protect the buyer from price changes",
             )
-        request_json = json.dumps(body.model_dump(), sort_keys=True, separators=(",", ":"))
+        request_data = body.model_dump()
+        # Keep idempotency hashes compatible with requests created before the
+        # optional USD wallet currency field existed.
+        if body.currency == "VND":
+            request_data.pop("currency", None)
+        request_json = json.dumps(request_data, sort_keys=True, separators=(",", ":"))
         request_hash = hashlib.sha256(request_json.encode()).hexdigest()
         order_request = ApiOrderRequest(
             api_client_id=principal.client.id,
@@ -771,6 +795,7 @@ def create_public_api_router(
                 expected_flash_sale_id=expected_flash_sale_id,
                 max_unit_price=body.max_unit_price,
                 usd_to_vnd=settings.binance_pay_usd_to_vnd,
+                preferred_payment_currency=body.currency,
             )
         except Exception:
             logger.exception("Shop API order %s needs supplier review after an exception", order_request.id)

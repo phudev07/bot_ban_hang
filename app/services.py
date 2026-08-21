@@ -1668,6 +1668,7 @@ async def purchase_product(
     wallet_already_charged: bool = False,
     expected_total_amount: int | None = None,
     usd_to_vnd: int = 27_500,
+    preferred_payment_currency: str | None = None,
 ) -> PurchaseResult:
     if wallet_already_charged and preorder_id is None:
         return PurchaseResult(False, "invalid_preorder_payment")
@@ -1718,6 +1719,7 @@ async def purchase_product(
                 wallet_already_charged=wallet_already_charged,
                 expected_total_amount=expected_total_amount,
                 usd_to_vnd=usd_to_vnd,
+                preferred_payment_currency=preferred_payment_currency,
             )
     return await _purchase_product(
         session_factory,
@@ -1746,6 +1748,7 @@ async def purchase_product(
         wallet_already_charged=wallet_already_charged,
         expected_total_amount=expected_total_amount,
         usd_to_vnd=usd_to_vnd,
+        preferred_payment_currency=preferred_payment_currency,
     )
 
 
@@ -1777,6 +1780,7 @@ async def _purchase_product(
     wallet_already_charged: bool,
     expected_total_amount: int | None,
     usd_to_vnd: int,
+    preferred_payment_currency: str | None,
 ) -> PurchaseResult:
     async with session_factory() as session:
         async with session.begin():
@@ -2142,10 +2146,22 @@ async def _purchase_product(
                 else pricing.discount_per_unit * len(inventory_items)
             )
             usd_total_tenths = usd_tenths_from_vnd(total_amount, usd_to_vnd)
+            requested_currency = str(preferred_payment_currency or "").upper()
+            if requested_currency not in {"", "VND", "USD"}:
+                return PurchaseResult(False, "invalid_currency", total_amount=total_amount)
             payment_currency = "VND"
             payment_amount = total_amount
             if not wallet_already_charged:
-                if int(user.balance or 0) >= total_amount:
+                if requested_currency == "USD":
+                    if int(user.balance_usd_tenths or 0) >= usd_total_tenths:
+                        payment_currency = "USD"
+                        payment_amount = usd_total_tenths
+                    else:
+                        payment_currency = ""
+                elif requested_currency == "VND":
+                    if int(user.balance or 0) < total_amount:
+                        payment_currency = ""
+                elif int(user.balance or 0) >= total_amount:
                     payment_currency = "VND"
                 elif int(user.balance_usd_tenths or 0) >= usd_total_tenths:
                     payment_currency = "USD"
@@ -3034,6 +3050,8 @@ class ManualDepositApprovalResult:
     user_id: int | None = None
     amount: int = 0
     balance: int = 0
+    currency: str = "VND"
+    balance_usd_tenths: int = 0
     deposit_code: str = ""
     username: str | None = None
     language: str = "vi"
@@ -3045,6 +3063,8 @@ class ManualDepositCancellationResult:
     user_id: int | None = None
     amount: int = 0
     balance: int = 0
+    currency: str = "VND"
+    balance_usd_tenths: int = 0
     deposit_code: str = ""
     username: str | None = None
     language: str = "vi"
@@ -3063,7 +3083,7 @@ async def approve_wallet_deposit(
             )
             if deposit is None:
                 return ManualDepositApprovalResult("not_found")
-            if deposit.payment_kind != "wallet":
+            if deposit.payment_kind not in {"wallet", "binance"}:
                 return ManualDepositApprovalResult("invalid_kind", deposit_code=deposit.code)
             if deposit.status == "paid":
                 return ManualDepositApprovalResult("already_paid", deposit_code=deposit.code)
@@ -3095,12 +3115,14 @@ async def approve_wallet_deposit(
 
             approved_at = datetime.now(UTC)
             amount = int(deposit.requested_amount)
+            currency = str(deposit.currency or "VND").upper()
             session.add(
                 PaymentTransaction(
                     deposit_id=deposit.id,
                     user_id=user.telegram_id,
                     provider_tx_id=f"ADMIN-DEPOSIT-{deposit.id}",
                     amount=amount,
+                    currency=currency,
                     credit_status="credited",
                 )
             )
@@ -3109,6 +3131,7 @@ async def approve_wallet_deposit(
                     user_id=user.telegram_id,
                     admin_username=admin_username,
                     amount=amount,
+                    currency=currency,
                     reason=f"Duyệt nạp thủ công mã {deposit.code}",
                 )
             )
@@ -3121,6 +3144,7 @@ async def approve_wallet_deposit(
                 reference_type="deposit",
                 reference_id=deposit.code,
                 description=f"Admin {admin_username} duyệt nạp thủ công mã {deposit.code}",
+                currency=currency,
             )
             deposit.status = "paid"
             deposit.paid_amount = amount
@@ -3132,6 +3156,8 @@ async def approve_wallet_deposit(
                 user_id=user.telegram_id,
                 amount=amount,
                 balance=user.balance,
+                currency=currency,
+                balance_usd_tenths=user.balance_usd_tenths,
                 deposit_code=deposit.code,
                 username=user.username,
                 language=user.language,
@@ -3149,7 +3175,7 @@ async def cancel_wallet_deposit(
             )
             if deposit is None:
                 return ManualDepositCancellationResult("not_found")
-            if deposit.payment_kind != "wallet":
+            if deposit.payment_kind not in {"wallet", "binance"}:
                 return ManualDepositCancellationResult(
                     "invalid_kind",
                     deposit_code=deposit.code,
@@ -3205,6 +3231,8 @@ async def cancel_wallet_deposit(
                 user_id=user.telegram_id,
                 amount=int(deposit.requested_amount),
                 balance=int(user.balance),
+                currency=str(deposit.currency or "VND").upper(),
+                balance_usd_tenths=int(user.balance_usd_tenths or 0),
                 deposit_code=deposit.code,
                 username=user.username,
                 language=user.language,

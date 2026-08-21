@@ -123,6 +123,7 @@ from app.utils import (
     format_usd_from_vnd,
     format_usd_price_from_vnd,
     format_usd_tenths,
+    format_wallet_amount,
     format_vnd,
     parse_vnd,
 )
@@ -6126,7 +6127,7 @@ def create_dashboard_router(
         if not successful_direct and not successful_wallet:
             messages = {
                 "not_found": "Không tìm thấy yêu cầu nạp.",
-                "invalid_kind": "Chỉ có thể duyệt thủ công yêu cầu nạp vào ví.",
+                "invalid_kind": "Chỉ có thể duyệt thủ công yêu cầu nạp ví VND/USD hoặc mua trực tiếp bằng QR.",
                 "already_paid": "Yêu cầu này đã được thanh toán trước đó.",
                 "already_paid_payment": "Yêu cầu này đã được xử lý trước đó.",
                 "already_credited": "Tiền của yêu cầu này đã được cộng trước đó.",
@@ -6160,8 +6161,9 @@ def create_dashboard_router(
             )
         else:
             message = (
-                f"Đã duyệt {format_vnd(result.amount)} vào ví mã {result.deposit_code}. "
-                f"Số dư mới {format_vnd(result.balance)}."
+                f"Đã duyệt {format_wallet_amount(result.amount, result.currency)} vào ví mã "
+                f"{result.deposit_code}. Số dư mới "
+                f"{format_wallet_amount(result.balance_usd_tenths if result.currency == 'USD' else result.balance, result.currency)}."
             )
         if not wants_json:
             flash(request, message)
@@ -6171,8 +6173,8 @@ def create_dashboard_router(
                     result.user_id,
                     "✅ <b>Khoản nạp đã được Admin duyệt</b>\n\n"
                     f"• Mã nạp: <code>{escape(result.deposit_code)}</code>\n"
-                    f"• Đã cộng vào ví: <b>{format_vnd(result.amount)}</b>\n"
-                    f"• Số dư hiện tại: <b>{format_vnd(result.balance)}</b>\n\n"
+                    f"• Đã cộng vào ví: <b>{format_wallet_amount(result.amount, result.currency)}</b>\n"
+                    f"• Số dư hiện tại: <b>{format_wallet_amount(result.balance_usd_tenths if result.currency == 'USD' else result.balance, result.currency)}</b>\n\n"
                     "Bạn có thể mua hàng ngay.",
                 )
             except Exception:
@@ -6259,6 +6261,8 @@ def create_dashboard_router(
                     "deposit_id": deposit_id,
                     "message": message,
                     "balance": result.balance,
+                    "currency": result.currency,
+                    "balance_usd_tenths": result.balance_usd_tenths,
                     "delivered": result.status == "direct_purchase_completed",
                     "refunded_to_wallet": result.status == "direct_purchase_fallback",
                 }
@@ -6327,9 +6331,30 @@ def create_dashboard_router(
             flash(request, message, "error")
             return RedirectResponse("/admin/payments", status_code=303)
 
-        message = f"Đã hủy yêu cầu nạp {format_vnd(result.amount)} mã {result.deposit_code}."
+        message = (
+            f"Đã hủy yêu cầu nạp {format_wallet_amount(result.amount, result.currency)} "
+            f"mã {result.deposit_code}."
+        )
         if not wants_json:
             flash(request, message)
+        if (
+            bot is not None
+            and result.user_id is not None
+            and payment_kind == "binance"
+        ):
+            try:
+                await bot.send_message(
+                    result.user_id,
+                    "❌ <b>Yêu cầu nạp Binance đã bị hủy</b>\n\n"
+                    f"• Mã nạp: <code>{escape(result.deposit_code)}</code>\n"
+                    f"• Số tiền: <b>{format_wallet_amount(result.amount, result.currency)}</b>\n"
+                    "Khoản nạp này không được cộng vào ví. Nếu bạn đã chuyển tiền, hãy liên hệ hỗ trợ.",
+                )
+            except Exception:
+                logger.exception(
+                    "Could not notify user %s about manual Binance deposit cancellation",
+                    result.user_id,
+                )
         if wants_json:
             return JSONResponse(
                 {
@@ -6337,6 +6362,7 @@ def create_dashboard_router(
                     "status": "cancelled",
                     "deposit_id": deposit_id,
                     "message": message,
+                    "currency": result.currency,
                 }
             )
         return RedirectResponse("/admin/payments", status_code=303)

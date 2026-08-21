@@ -747,6 +747,7 @@ class BalanceAdjustment(Base):
     user_id: Mapped[int] = mapped_column(ForeignKey("users.telegram_id"), index=True)
     admin_username: Mapped[str] = mapped_column(String(255))
     amount: Mapped[int] = mapped_column(BigInteger)
+    currency: Mapped[str] = mapped_column(String(3), default="VND", server_default="VND", index=True)
     reason: Mapped[str] = mapped_column(String(500))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 

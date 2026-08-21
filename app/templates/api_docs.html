@@ -407,7 +407,7 @@ signature = hmac_sha256(API_SECRET, canonical)</pre>
               <tr><td><code>max_quantity</code></td><td>integer</td><td>Số lượng tối đa trong một request.</td></tr>
             </tbody>
           </table>
-          <div class="note" style="margin-top:14px">Tồn kho và giá có thể thay đổi giữa lúc đọc và lúc mua. Luôn sao chép <code>price</code> từ catalog vào <code>max_unit_price</code>; nếu giá tăng, đơn sẽ dừng với <code>PRICE_CHANGED</code> thay vì mua cao hơn dự kiến. Chỉ coi đơn thành công khi <code>POST /v1/orders</code> trả HTTP 200.</div>
+            <div class="note" style="margin-top:14px">Ví API hỗ trợ riêng VND và USD. Mặc định đơn dùng VND; gửi <code>"currency":"USD"</code> để trừ ví USD (đơn vị ví USD là 0,1 USD). <code>max_unit_price</code> vẫn là giá VND để khóa giá nguồn.</div>
           <div class="note good-note" style="margin-top:14px"><strong>Khuyến nghị đồng bộ 10-30 giây/lần.</strong> Không gọi catalog liên tục theo từng request của khách; hệ thống vẫn kiểm tra lại giá và tồn trong transaction mua.</div>
         </section>
 
@@ -419,7 +419,8 @@ signature = hmac_sha256(API_SECRET, canonical)</pre>
             <tbody>
               <tr><td><code>product_id</code></td><td class="required">Có</td><td>integer</td><td>ID sản phẩm từ catalog.</td></tr>
               <tr><td><code>quantity</code></td><td>Không</td><td>integer</td><td>Mặc định 1; tối đa theo sản phẩm và không quá 100.</td></tr>
-              <tr><td><code>max_unit_price</code></td><td class="required">Có</td><td>integer</td><td>Giá tối đa chấp nhận cho mỗi tài khoản. Gửi <code>price</code> vừa đọc từ catalog.</td></tr>
+              <tr><td><code>max_unit_price</code></td><td class="required">Có</td><td>integer</td><td>Giá tối đa VND chấp nhận cho mỗi tài khoản. Gửi <code>price</code> vừa đọc từ catalog.</td></tr>
+              <tr><td><code>currency</code></td><td>Không</td><td><code>VND</code> | <code>USD</code></td><td>Ví bị trừ. Mặc định <code>VND</code>; chọn <code>USD</code> để trừ số dư đô riêng.</td></tr>
               <tr><td><code>coupon_code</code></td><td>Không</td><td>string</td><td>Mã giảm giá dành riêng cho sản phẩm, tối đa 64 ký tự. Không cộng dồn khi tài khoản API đang được áp giá seller.</td></tr>
               <tr><td><code>flash_sale_id</code></td><td>Không</td><td>integer</td><td>ID từ catalog. Nên gửi khi khác null để đơn thất bại an toàn nếu Flash Sale vừa hết hoặc giá vốn tăng.</td></tr>
             </tbody>
@@ -429,7 +430,7 @@ signature = hmac_sha256(API_SECRET, canonical)</pre>
 Idempotency-Key: reseller-order-20260718-00001
 Content-Type: application/json
 
-{"product_id":7,"quantity":2,"max_unit_price":25000,"flash_sale_id":123}</pre></div>
+{"product_id":7,"quantity":2,"max_unit_price":25000,"currency":"USD","flash_sale_id":123}</pre></div>
           <div class="code-wrap"><button class="copy" data-copy-target="order-response">Sao chép</button><pre id="order-response">{
   "success": true,
   "order": {

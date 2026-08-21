@@ -753,6 +753,18 @@ async def initialize_database(engine, session_factory, seed_demo_data: bool) -> 
             )
         )
         await connection.execute(
+            text(
+                "ALTER TABLE balance_adjustments ADD COLUMN IF NOT EXISTS "
+                "currency VARCHAR(3) NOT NULL DEFAULT 'VND'"
+            )
+        )
+        await connection.execute(
+            text(
+                "CREATE INDEX IF NOT EXISTS ix_balance_adjustments_currency "
+                "ON balance_adjustments (currency)"
+            )
+        )
+        await connection.execute(
             text("ALTER TABLE orders ADD COLUMN IF NOT EXISTS supplier_order_code VARCHAR(64) NULL")
         )
         await connection.execute(
