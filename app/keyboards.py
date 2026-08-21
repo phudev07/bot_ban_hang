@@ -11,7 +11,7 @@ from aiogram.utils.keyboard import InlineKeyboardBuilder
 
 from app.i18n import tr
 from app.models import Category, Order, Preorder, Product
-from app.utils import format_usd_from_vnd, format_vnd, sanitize_customer_text
+from app.utils import format_usd_price_from_vnd, format_vnd, sanitize_customer_text
 
 
 @dataclass(frozen=True)
@@ -101,7 +101,7 @@ def preorder_products_menu(
                 InlineKeyboardButton(
                     text=(
                         f"📦 {name} · {format_vnd(unit_price)}/1"
-                        + (f" ({format_usd_from_vnd(unit_price, usd_to_vnd)})" if usd_to_vnd else "")
+                        + (f" ({format_usd_price_from_vnd(unit_price, usd_to_vnd)})" if usd_to_vnd else "")
                     ),
                     callback_data=f"preorder:product:{product.id}",
                 )
@@ -405,7 +405,7 @@ def products_menu(
         stock_label = "Hết hàng" if language == "vi" else "Out of stock"
         price_text = format_vnd(display_price)
         if usd_to_vnd:
-            price_text += f" ({format_usd_from_vnd(display_price, usd_to_vnd)})"
+            price_text += f" ({format_usd_price_from_vnd(display_price, usd_to_vnd)})"
         button_text = f"{name} · {price_text}"
         if not in_stock:
             button_text = f"🔴 {button_text} · {stock_label}"
@@ -632,10 +632,11 @@ def deposit_amounts_for_providers(
                 text=f"🏦 {format_vnd(amount)}",
                 callback_data=f"deposit:sepay:{amount}",
             )
-        if binance_enabled:
+    if binance_enabled:
+        for usd_amount in (1, 2, 5, 10):
             builder.button(
-                text=f"₿ {format_usd_from_vnd(amount, usd_to_vnd)}",
-                callback_data=f"deposit:binance:{amount}",
+                text=f"₿ ${usd_amount}",
+                callback_data=f"deposit:binance:usd:{usd_amount}",
             )
     builder.adjust(2)
     if sepay_enabled:
@@ -650,7 +651,7 @@ def deposit_amounts_for_providers(
                 if language == "vi"
                 else "₿ Other Binance amount"
             ),
-            callback_data="deposit:binance:other",
+            callback_data="deposit:binance:usd:other",
         )
     builder.adjust(2)
     builder.row(InlineKeyboardButton(text=tr(language, "back"), callback_data="back:menu"))

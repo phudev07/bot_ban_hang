@@ -12,7 +12,12 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.autosms import AutoSmsClient
-from app.binance_pay import BinancePayClient, BinancePayError, vnd_to_usdt
+from app.binance_pay import (
+    BinancePayClient,
+    BinancePayError,
+    format_usdt_deposit,
+    vnd_to_usdt,
+)
 from app.chat_cleanup import delete_recent_messages
 from app.config import Settings
 from app.custom_emoji import product_brand_emoji
@@ -108,7 +113,7 @@ from app.suppliers import (
 from app.utils import (
     SecretCipher,
     build_sepay_qr_url,
-    format_usd_from_vnd,
+    format_usd_price_from_vnd,
     format_vnd,
     parse_vnd,
     safe_customer_html,
@@ -1546,14 +1551,14 @@ def create_router(
         )
         price_text = (
             f"<b>{format_vnd(display_price)}</b> "
-            f"<small>({format_usd_from_vnd(display_price, settings.binance_pay_usd_to_vnd)})</small>"
+            f"<small>({format_usd_price_from_vnd(display_price, settings.binance_pay_usd_to_vnd)})</small>"
         )
         if pricing is not None and pricing.flash_sale is not None:
             price_text = (
                 f"<s>{format_vnd(product.price)}</s> "
-                f"({format_usd_from_vnd(product.price, settings.binance_pay_usd_to_vnd)}) → "
+                f"({format_usd_price_from_vnd(product.price, settings.binance_pay_usd_to_vnd)}) → "
                 f"<b>{format_vnd(display_price)}</b> "
-                f"<small>({format_usd_from_vnd(display_price, settings.binance_pay_usd_to_vnd)})</small>"
+                f"<small>({format_usd_price_from_vnd(display_price, settings.binance_pay_usd_to_vnd)})</small>"
             )
         text = (
             f"{product_brand_emoji(name)} <b>{safe_customer_html(name)}</b>\n\n"
@@ -2705,7 +2710,12 @@ def create_router(
         user = await get_or_create_user(callback, session)
         parts = callback.data.split(":")
         provider = parts[1] if len(parts) >= 3 else "sepay"
-        raw_amount = parts[2] if len(parts) >= 3 else parts[1]
+        currency = "vnd"
+        if len(parts) >= 4 and parts[2] == "usd":
+            currency = "usd"
+            raw_amount = parts[3]
+        else:
+            raw_amount = parts[2] if len(parts) >= 3 else parts[1]
         if provider == "binance":
             if not binance_pay_enabled:
                 await callback.answer("Nạp Binance Pay chưa được bật.", show_alert=True)
@@ -2714,7 +2724,7 @@ def create_router(
             await callback.answer("Nạp tiền chưa được bật.", show_alert=True)
             return
         if raw_amount == "other":
-            await state.update_data(deposit_provider=provider)
+            await state.update_data(deposit_provider=provider, deposit_currency=currency)
             await state.set_state(DepositStates.waiting_for_amount)
             prompt = (
                 f"Nhập số tiền muốn nạp, tối thiểu {format_vnd(settings.min_deposit)}."
@@ -2723,9 +2733,9 @@ def create_router(
             )
             if provider == "binance":
                 prompt += (
-                    f"\n₿ Binance Pay: 1 USDT ≈ {format_vnd(settings.binance_pay_usd_to_vnd)}."
+                    "\n₿ Nhập số USD nguyên, tối thiểu $1."
                     if user.language == "vi"
-                    else f"\n₿ Binance Pay: 1 USDT ≈ {format_vnd(settings.binance_pay_usd_to_vnd)}."
+                    else "\n₿ Enter a whole USD amount, minimum $1."
                 )
             if callback.message:
                 await callback.message.edit_text(prompt, reply_markup=back_menu(user.language))
@@ -2736,12 +2746,19 @@ def create_router(
         except ValueError:
             await callback.answer("Số tiền không hợp lệ.", show_alert=True)
             return
+        amount_usd = amount if provider == "binance" and currency == "usd" else None
+        if amount_usd is not None:
+            if amount_usd < 1:
+                await callback.answer("Số USD tối thiểu là $1.", show_alert=True)
+                return
+            amount *= settings.binance_pay_usd_to_vnd
         await create_and_show_deposit(
             callback.message,
             session,
             user,
             amount,
             provider=provider,
+            amount_usd=amount_usd,
         )
         await callback.answer()
 
@@ -2753,17 +2770,41 @@ def create_router(
     ) -> None:
         user = await get_or_create_user(message, session)
         amount = parse_vnd(message.text or "")
-        if amount is None or amount < settings.min_deposit:
+        data = await state.get_data()
+        provider = str(data.get("deposit_provider") or "sepay")
+        currency = str(data.get("deposit_currency") or "vnd")
+        if amount is None or (
+            not (provider == "binance" and currency == "usd")
+            and amount < settings.min_deposit
+        ):
             await message.answer(
                 f"Số tiền không hợp lệ. Tối thiểu {format_vnd(settings.min_deposit)}."
                 if user.language == "vi"
                 else f"Invalid amount. Minimum {format_vnd(settings.min_deposit)}."
             )
             return
-        data = await state.get_data()
-        provider = str(data.get("deposit_provider") or "sepay")
+        amount_usd = None
+        if provider == "binance" and currency == "usd":
+            try:
+                amount_usd = int((message.text or "").strip().replace("$", ""))
+            except ValueError:
+                amount_usd = None
+            if amount_usd is None or amount_usd < 1:
+                await message.answer(
+                    "Số USD không hợp lệ. Tối thiểu là $1." if user.language == "vi"
+                    else "Invalid USD amount. Minimum is $1."
+                )
+                return
+            amount = amount_usd * settings.binance_pay_usd_to_vnd
         await state.clear()
-        await create_and_show_deposit(message, session, user, amount, provider=provider)
+        await create_and_show_deposit(
+            message,
+            session,
+            user,
+            amount,
+            provider=provider,
+            amount_usd=amount_usd,
+        )
 
     async def create_and_show_deposit(
         target: Message | None,
@@ -2772,6 +2813,7 @@ def create_router(
         amount: int,
         *,
         provider: str = "sepay",
+        amount_usd: int | None = None,
     ) -> None:
         if target is None:
             return
@@ -2779,7 +2821,13 @@ def create_router(
             await target.answer(f"Số tiền tối thiểu là {format_vnd(settings.min_deposit)}.")
             return
         if provider == "binance":
-            await create_and_show_binance_deposit(target, session, user, amount)
+            await create_and_show_binance_deposit(
+                target,
+                session,
+                user,
+                amount,
+                amount_usd=amount_usd,
+            )
             return
         try:
             deposit = await create_deposit(
@@ -2840,6 +2888,8 @@ def create_router(
         session: AsyncSession,
         user: User,
         amount: int,
+        *,
+        amount_usd: int | None = None,
     ) -> None:
         if binance_pay_client is None:
             await target.answer("Nạp Binance Pay hiện chưa được bật.")
@@ -2872,19 +2922,31 @@ def create_router(
                 "hoặc chờ hết hạn."
             )
             return
-        except BinancePayError:
+        except BinancePayError as exc:
             if deposit is not None:
                 deposit.status = "failed"
                 deposit.failure_reason = "binance_create_failed"
                 await session.commit()
+            if "400004" in str(exc):
+                message = (
+                    "Binance Pay chưa cấp quyền cho API key hoặc IP VPS chưa nằm trong whitelist. "
+                    "Vui lòng kiểm tra quyền Merchant API và whitelist IP 160.191.243.91."
+                    if user.language == "vi"
+                    else "Binance Pay API permission/IP whitelist is not configured. "
+                    "Check Merchant API permissions and whitelist VPS IP 160.191.243.91."
+                )
+            else:
+                message = (
+                    "Binance Pay đang bận hoặc chưa sẵn sàng. Vui lòng thử lại sau."
+                    if user.language == "vi"
+                    else "Binance Pay is temporarily unavailable. Please try again later."
+                )
             await target.answer(
-                "Binance Pay đang bận hoặc chưa sẵn sàng. Vui lòng thử lại sau."
-                if user.language == "vi"
-                else "Binance Pay is temporarily unavailable. Please try again later."
+                message
             )
             return
         amount_usdt = vnd_to_usdt(amount, settings.binance_pay_usd_to_vnd)
-        amount_usdt_text = format(amount_usdt, "f")
+        amount_usdt_text = format_usdt_deposit(amount_usdt)
         text = (
             "₿ <b>Nạp tiền qua Binance Pay</b>\n\n"
             f"💰 Số tiền ví: <b>{format_vnd(amount)}</b>\n"

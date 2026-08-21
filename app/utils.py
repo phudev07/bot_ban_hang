@@ -3,7 +3,7 @@ import hmac
 import re
 import time
 import unicodedata
-from decimal import Decimal, ROUND_HALF_UP
+from decimal import Decimal, ROUND_CEILING, ROUND_HALF_UP
 from html import escape
 from html.parser import HTMLParser
 from urllib.parse import urlencode, urlsplit
@@ -38,6 +38,15 @@ def format_usd_from_vnd(
     )
     sign = "-" if value < 0 else "+" if show_positive_sign and value > 0 else ""
     return f"{sign}${abs(value):,.2f}"
+
+
+def format_usd_price_from_vnd(amount: int, vnd_per_usd: int) -> str:
+    """Display product prices in USD, always rounded upward to one decimal."""
+    rate = Decimal(max(1, int(vnd_per_usd)))
+    value = (Decimal(max(0, int(amount))) / rate).quantize(
+        Decimal("0.1"), rounding=ROUND_CEILING
+    )
+    return f"${value:,.1f}"
 
 
 def parse_vnd(value: str) -> int | None:

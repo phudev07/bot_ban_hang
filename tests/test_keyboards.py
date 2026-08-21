@@ -1,5 +1,6 @@
 from app.keyboards import (
     codex_products_menu,
+    deposit_amounts_for_providers,
     main_menu,
     order_history_menu,
     product_detail,
@@ -32,6 +33,22 @@ def test_out_of_stock_product_has_no_buy_button() -> None:
     callbacks = [button.callback_data for row in keyboard.inline_keyboard for button in row]
 
     assert callbacks == ["cat:2"]
+
+
+def test_binance_deposit_buttons_use_whole_usd_presets() -> None:
+    keyboard = deposit_amounts_for_providers(
+        "vi",
+        sepay_enabled=False,
+        binance_enabled=True,
+    )
+    buttons = [button for row in keyboard.inline_keyboard for button in row]
+    assert [button.text for button in buttons[:4]] == ["₿ $1", "₿ $2", "₿ $5", "₿ $10"]
+    assert [button.callback_data for button in buttons[:4]] == [
+        "deposit:binance:usd:1",
+        "deposit:binance:usd:2",
+        "deposit:binance:usd:5",
+        "deposit:binance:usd:10",
+    ]
 
 
 def test_out_of_stock_product_button_is_red_and_clearly_labelled() -> None:

@@ -8,6 +8,7 @@ from app.utils import (
     build_sepay_qr_url,
     find_deposit_code,
     format_vnd,
+    format_usd_price_from_vnd,
     inventory_account_identity,
     normalize_inventory_identity,
     parse_vnd,
@@ -21,6 +22,11 @@ def test_format_and_parse_vnd() -> None:
     assert format_vnd(1234567) == "1.234.567đ"
     assert parse_vnd("100.000 đ") == 100_000
     assert parse_vnd("abc") is None
+
+
+def test_product_usd_price_rounds_up_to_one_decimal() -> None:
+    assert format_usd_price_from_vnd(33_825, 27_500) == "$1.3"
+    assert format_usd_price_from_vnd(27_500, 27_500) == "$1.0"
 
 
 def test_round_vnd_to_thousand_preserves_exact_five_hundred() -> None:

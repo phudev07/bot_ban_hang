@@ -191,7 +191,7 @@ def reply_button_emoji_id(text: str) -> str | None:
     if normalized in {"mua nhanh", "quick buy"}:
         return EMOJI_IDS["🛒"]
     if normalized in {"nạp tiền", "deposit"}:
-        return EMOJI_IDS["💰"]
+        return EMOJI_IDS["💳"]
     return None
 
 

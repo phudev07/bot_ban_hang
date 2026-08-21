@@ -56,6 +56,12 @@ def usdt_to_vnd(amount: object, usd_to_vnd: int = DEFAULT_USD_TO_VND) -> int:
     )
 
 
+def format_usdt_deposit(amount: Decimal) -> str:
+    """Format a deposit amount without exposing Binance's 8-decimal precision."""
+    text = format(amount.normalize(), "f")
+    return text.rstrip("0").rstrip(".") if "." in text else text
+
+
 def _format_amount(value: Decimal) -> str:
     return format(value.quantize(Decimal("0.00000001"), rounding=ROUND_HALF_UP), "f")
 
@@ -179,6 +185,12 @@ class BinancePayClient:
         if response.status_code >= 400 or str(payload.get("status") or "") != "SUCCESS":
             code = str(payload.get("code") or "unknown")
             message = str(payload.get("errorMessage") or payload.get("message") or "request failed")
+            logger.warning(
+                "Binance Pay API rejected request: http_status=%s code=%s message=%s",
+                response.status_code,
+                code[:80],
+                message[:160],
+            )
             raise BinancePayError(f"Binance Pay request failed ({code}): {message[:160]}")
         return payload
 
