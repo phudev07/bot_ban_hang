@@ -3478,7 +3478,11 @@ async def _process_sepay_payment(
                     PaymentTransaction.provider_tx_id == provider_tx_id
                 )
             )
-            if existing is not None:
+            if existing is not None and existing.credit_status != "submitted":
+                return PaymentResult("duplicate", existing.user_id, existing.amount)
+            if existing is not None and (
+                existing.deposit_id != deposit.id or existing.user_id != deposit.user_id
+            ):
                 return PaymentResult("duplicate", existing.user_id, existing.amount)
             user = await session.scalar(
                 select(User).where(User.telegram_id == deposit.user_id).with_for_update()
@@ -3567,16 +3571,21 @@ async def _process_sepay_payment(
             if rejected_status is not None and credit_status is not None:
                 if credit_status in {"expired", "failed_request"}:
                     await release_deposit_flash_sale(session, deposit)
-                session.add(
-                    PaymentTransaction(
-                        deposit_id=deposit.id,
-                        user_id=user.telegram_id,
-                        provider_tx_id=provider_tx_id,
-                        amount=amount,
-                        currency=currency,
-                        credit_status=credit_status,
+                if existing is None:
+                    session.add(
+                        PaymentTransaction(
+                            deposit_id=deposit.id,
+                            user_id=user.telegram_id,
+                            provider_tx_id=provider_tx_id,
+                            amount=amount,
+                            currency=currency,
+                            credit_status=credit_status,
+                        )
                     )
-                )
+                else:
+                    existing.amount = amount
+                    existing.currency = currency
+                    existing.credit_status = credit_status
                 await session.flush()
                 return PaymentResult(
                     rejected_status,
@@ -4315,16 +4324,21 @@ async def _process_sepay_payment(
                     deposit.paid_at = now
                     deposit.failed_at = None
                     deposit.failure_reason = None
-                    session.add(
-                        PaymentTransaction(
-                            deposit_id=deposit.id,
-                            user_id=user.telegram_id,
-                            provider_tx_id=provider_tx_id,
-                            amount=amount,
-                            currency=currency,
-                            credit_status="credited",
+                    if existing is None:
+                        session.add(
+                            PaymentTransaction(
+                                deposit_id=deposit.id,
+                                user_id=user.telegram_id,
+                                provider_tx_id=provider_tx_id,
+                                amount=amount,
+                                currency=currency,
+                                credit_status="credited",
+                            )
                         )
-                    )
+                    else:
+                        existing.amount = amount
+                        existing.currency = currency
+                        existing.credit_status = "credited"
                     await session.flush()
                     return PaymentResult(
                         "direct_purchase_completed",
@@ -4366,16 +4380,21 @@ async def _process_sepay_payment(
             deposit.paid_at = now
             deposit.failed_at = None
             deposit.failure_reason = None
-            session.add(
-                PaymentTransaction(
-                    deposit_id=deposit.id,
-                    user_id=user.telegram_id,
-                    provider_tx_id=provider_tx_id,
-                    amount=amount,
-                    currency=currency,
-                    credit_status="credited",
+            if existing is None:
+                session.add(
+                    PaymentTransaction(
+                        deposit_id=deposit.id,
+                        user_id=user.telegram_id,
+                        provider_tx_id=provider_tx_id,
+                        amount=amount,
+                        currency=currency,
+                        credit_status="credited",
+                    )
                 )
-            )
+            else:
+                existing.amount = amount
+                existing.currency = currency
+                existing.credit_status = "credited"
             user_id = user.telegram_id
             language = user.language
 

@@ -13,6 +13,7 @@ from aiogram.fsm.context import FSMContext
 from aiogram.types import CallbackQuery, ErrorEvent, Message, ReplyKeyboardRemove
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
+from sqlalchemy.exc import IntegrityError
 
 from app.autosms import AutoSmsClient
 from app.binance_pay import (
@@ -62,7 +63,7 @@ from app.keyboards import (
 )
 from app.lehai_suppliers import LeHaiPremiumClient
 from app.maintenance import sms_rental_maintenance_enabled
-from app.models import ApiClient, Deposit, Order, Product, QuantityDiscount, User
+from app.models import ApiClient, Deposit, Order, PaymentTransaction, Product, QuantityDiscount, User
 from app.partner_services import ensure_api_client, referral_stats, rotate_api_secret
 from app.payment_expiry import register_deposit_message
 from app.product_tutorials import send_purchase_tutorials
@@ -2916,6 +2917,40 @@ def create_router(
                 else "This Binance deposit request has expired or is no longer valid."
             )
             return
+        existing_attempt = await session.scalar(
+            select(PaymentTransaction).where(
+                PaymentTransaction.provider_tx_id == transaction_id
+            )
+        )
+        if existing_attempt is not None:
+            await message.answer(
+                "Transaction ID này đã được gửi hoặc đã xử lý, không thể dùng lại."
+                if user.language == "vi"
+                else "This transaction ID was already submitted or processed and cannot be reused."
+            )
+            return
+        try:
+            # Reserve the ID before querying Binance. This blocks replay even
+            # when the first lookup returns not found or the API is unavailable.
+            session.add(
+                PaymentTransaction(
+                    deposit_id=deposit.id,
+                    user_id=user.telegram_id,
+                    provider_tx_id=transaction_id,
+                    amount=0,
+                    currency="USD",
+                    credit_status="submitted",
+                )
+            )
+            await session.commit()
+        except IntegrityError:
+            await session.rollback()
+            await message.answer(
+                "Transaction ID này đã được gửi hoặc đã xử lý, không thể dùng lại."
+                if user.language == "vi"
+                else "This transaction ID was already submitted or processed and cannot be reused."
+            )
+            return
         created_at = deposit.created_at
         start_time_ms = int(created_at.timestamp() * 1000) if created_at is not None else None
         try:
@@ -2925,6 +2960,8 @@ def create_router(
                 end_time_ms=int(datetime.now(UTC).timestamp() * 1000),
             )
         except BinancePayError as exc:
+            existing_attempt.credit_status = "rejected_lookup"
+            await session.commit()
             logger.error(
                 "Binance Pay transaction verification failed: user_id=%s deposit=%s detail=%s",
                 user.telegram_id,
@@ -2954,6 +2991,10 @@ def create_router(
             recipient_uid=settings.binance_pay_recipient_uid,
             expected_amount_tenths=deposit.requested_amount,
         ):
+            existing_attempt.credit_status = (
+                "rejected_not_found" if transaction is None else "rejected_mismatch"
+            )
+            await session.commit()
             await message.answer(
                 "Không tìm thấy giao dịch hợp lệ hoặc số tiền/UID người nhận không khớp. "
                 "Hãy kiểm tra lại transaction ID và số tiền đã chuyển."

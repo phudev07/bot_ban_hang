@@ -46,7 +46,7 @@ class Settings(BaseSettings):
     binance_pay_payment_prefix: str = "BN"
     binance_pay_usd_to_vnd: int = 26_500
     binance_pay_timeout_seconds: float = 15
-    binance_pay_expiry_seconds: int = 900
+    binance_pay_expiry_seconds: int = 600
     binance_pay_webhook_tolerance_seconds: int = 300
     binance_pay_webhook_rate_limit_per_minute: int = 60
     binance_pay_webhook_global_rate_limit_per_minute: int = 300

@@ -75,7 +75,7 @@ def test_binance_pay_wallet_deposit_configuration() -> None:
     assert settings.binance_pay_read_base_url == "https://api.binance.com"
     assert settings.binance_pay_recipient_uid == "1218561925"
     assert settings.binance_pay_usd_to_vnd == 26_500
-    assert settings.binance_pay_expiry_seconds == 900
+    assert settings.binance_pay_expiry_seconds == 600
 
 
 def test_payment_expiry_configuration_is_bounded() -> None:

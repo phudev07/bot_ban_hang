@@ -105,6 +105,54 @@ def test_binance_deposit_credits_usd_wallet_without_vnd_conversion() -> None:
     asyncio.run(scenario())
 
 
+def test_submitted_binance_transaction_id_is_reused_for_settlement_once() -> None:
+    async def scenario() -> None:
+        engine, sessions = await make_database()
+        async with sessions() as session:
+            user = User(telegram_id=72002, full_name="USD replay test")
+            session.add(user)
+            await session.commit()
+            deposit = await create_deposit(
+                session,
+                user.telegram_id,
+                10,
+                "BN",
+                payment_kind="binance",
+                currency="USD",
+            )
+            session.add(
+                PaymentTransaction(
+                    deposit_id=deposit.id,
+                    user_id=user.telegram_id,
+                    provider_tx_id="pay-replay-1",
+                    amount=0,
+                    currency="USD",
+                    credit_status="submitted",
+                )
+            )
+            await session.commit()
+        result = await process_sepay_payment(
+            sessions,
+            {
+                "id": "pay-replay-1",
+                "amount": 10,
+                "code": deposit.code,
+                "transferType": "in",
+            },
+            "BN",
+            currency="USD",
+        )
+        async with sessions() as session:
+            transaction = await session.scalar(select(PaymentTransaction))
+            stored_user = await session.get(User, user.telegram_id)
+            assert result.status == "credited"
+            assert transaction is not None and transaction.credit_status == "credited"
+            assert stored_user is not None and stored_user.balance_usd_tenths == 10
+        await engine.dispose()
+
+    asyncio.run(scenario())
+
+
 def test_seller_price_uses_each_inventory_cost_and_keeps_normal_price_unchanged() -> None:
     async def scenario() -> None:
         engine, sessions = await make_database()
