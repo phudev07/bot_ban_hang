@@ -1602,6 +1602,7 @@ async def main() -> None:
             haji_client=haji_client,
             autosms_client=autosms_client,
             binance_pay_client=binance_pay_client,
+            deposit_notification_bot=deposit_notification_bot,
         )
     )
 

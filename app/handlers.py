@@ -24,6 +24,7 @@ from app.chat_cleanup import delete_recent_messages
 from app.config import Settings
 from app.custom_emoji import product_brand_emoji
 from app.database import release_session_connection
+from app.deposit_notifications import send_deposit_notification
 from app.delivery import (
     delivery_files,
     delivery_keyboard,
@@ -383,6 +384,7 @@ def create_router(
     haji_client: HajiClient | None = None,
     autosms_client: AutoSmsClient | None = None,
     binance_pay_client: BinancePayClient | None = None,
+    deposit_notification_bot: Bot | None = None,
 ) -> Router:
     router = Router(name="customer")
     bot_username_cache: str | None = None
@@ -3183,6 +3185,16 @@ def create_router(
             referral_commission_percent=settings.referral_commission_percent,
             currency="USD",
         )
+        if (
+            deposit_notification_bot is not None
+            and result.status == "credited"
+            and result.user_id is not None
+        ):
+            await send_deposit_notification(
+                deposit_notification_bot,
+                settings.admin_ids,
+                result,
+            )
         if result.status in {"credited", "already_paid_payment", "duplicate"}:
             await state.clear()
         if result.status == "credited":

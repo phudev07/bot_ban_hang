@@ -702,7 +702,6 @@ def create_api(
                 "credited",
                 "amount_mismatch",
                 "expired_payment",
-                "already_paid_payment",
                 "failed_request_payment",
             }
         ):
