@@ -42,7 +42,7 @@ def test_binance_deposit_buttons_use_whole_usd_presets() -> None:
         binance_enabled=True,
     )
     buttons = [button for row in keyboard.inline_keyboard for button in row]
-    assert [button.text for button in buttons[:4]] == ["₿ $1", "₿ $2", "₿ $5", "₿ $10"]
+    assert [button.text for button in buttons[:4]] == ["🪙 $1", "🪙 $2", "🪙 $5", "🪙 $10"]
     assert [button.callback_data for button in buttons[:4]] == [
         "deposit:binance:usd:1",
         "deposit:binance:usd:2",

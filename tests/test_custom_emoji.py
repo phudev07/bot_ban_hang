@@ -93,6 +93,16 @@ def test_animate_html_covers_customer_information_icons() -> None:
         assert f'emoji-id="{EMOJI_IDS[emoji]}"' in rendered
 
 
+def test_animate_html_uses_valid_coin_fallback_for_binance() -> None:
+    rendered = animate_html("🪙 Binance Pay")
+
+    assert rendered.startswith(
+        f'<tg-emoji emoji-id="{BINANCE_DEPOSIT_EMOJI_ID}">🪙</tg-emoji>'
+    )
+    # U+20BF must never be emitted as custom-emoji fallback content.
+    assert "₿" not in rendered
+
+
 def test_quick_access_buttons_use_one_animated_icon_each() -> None:
     method = SendMessage(
         chat_id=1,
@@ -113,6 +123,6 @@ def test_quick_access_buttons_use_one_animated_icon_each() -> None:
 
 def test_deposit_provider_emojis_are_distinct() -> None:
     assert button_emoji_id("🏦 50.000đ") == BANK_DEPOSIT_EMOJI_ID
-    assert button_emoji_id("₿ $1") == BINANCE_DEPOSIT_EMOJI_ID
+    assert button_emoji_id("🪙 $1") == BINANCE_DEPOSIT_EMOJI_ID
     assert button_emoji_id("MBBank") == MBBANK_COLUMN_EMOJI_ID
     assert button_emoji_id("Binance") == BINANCE_COLUMN_EMOJI_ID

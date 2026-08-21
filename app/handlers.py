@@ -496,7 +496,7 @@ def create_router(
             f"💵 Ví USD: <b>{format_usd_tenths(getattr(user, 'balance_usd_tenths', 0))}</b>\n\n"
             f"Chọn số tiền muốn nạp. Tối thiểu {format_vnd(settings.min_deposit)}."
             + (
-                f"\n₿ Binance Pay quy đổi: 1 USDT ≈ {format_vnd(settings.binance_pay_usd_to_vnd)}."
+                f"\n🪙 Binance Pay quy đổi: 1 USDT ≈ {format_vnd(settings.binance_pay_usd_to_vnd)}."
                 if binance_pay_enabled
                 else ""
             )
@@ -2704,7 +2704,7 @@ def create_router(
             f"💵 Ví USD: <b>{format_usd_tenths(getattr(user, 'balance_usd_tenths', 0))}</b>\n\n"
             f"Chọn số tiền muốn nạp. Tối thiểu {format_vnd(settings.min_deposit)}."
             + (
-                f"\n₿ Binance Pay quy đổi: 1 USDT ≈ {format_vnd(settings.binance_pay_usd_to_vnd)}."
+                f"\n🪙 Binance Pay quy đổi: 1 USDT ≈ {format_vnd(settings.binance_pay_usd_to_vnd)}."
                 if binance_pay_enabled
                 else ""
             )
@@ -2714,7 +2714,7 @@ def create_router(
             f"💵 USD wallet: <b>{format_usd_tenths(getattr(user, 'balance_usd_tenths', 0))}</b>\n\n"
             f"Choose an amount. Minimum {format_vnd(settings.min_deposit)}."
             + (
-                f"\n₿ Binance Pay rate: 1 USDT ≈ {format_vnd(settings.binance_pay_usd_to_vnd)}."
+                f"\n🪙 Binance Pay rate: 1 USDT ≈ {format_vnd(settings.binance_pay_usd_to_vnd)}."
                 if binance_pay_enabled
                 else ""
             )
@@ -2767,9 +2767,9 @@ def create_router(
             )
             if provider == "binance":
                 prompt += (
-                    "\n₿ Nhập số USD nguyên, tối thiểu $1."
+                    "\n🪙 Nhập số USD nguyên, tối thiểu $1."
                     if user.language == "vi"
-                    else "\n₿ Enter a whole USD amount, minimum $1."
+                    else "\n🪙 Enter a whole USD amount, minimum $1."
                 )
             if callback.message:
                 await callback.message.edit_text(prompt, reply_markup=back_menu(user.language))
@@ -2980,14 +2980,14 @@ def create_router(
             return
         amount_usdt_text = format_usd_tenths(amount)
         text = (
-            "₿ <b>Nạp tiền qua Binance Pay</b>\n\n"
+            "🪙 <b>Nạp tiền qua Binance Pay</b>\n\n"
             f"💵 Số tiền ví USD: <b>{amount_usdt_text}</b>\n"
             f"💵 Thanh toán: <b>{amount_usdt_text} USDT</b>\n"
             f"🧾 Mã nạp: <code>{escape(deposit.code)}</code>\n\n"
             "Bấm nút bên dưới để thanh toán. Ví chỉ được cộng sau khi Binance xác nhận thành công."
             f"\n\n⏳ Yêu cầu hết hạn sau {settings.binance_pay_expiry_seconds // 60} phút."
             if user.language == "vi"
-            else "₿ <b>Deposit with Binance Pay</b>\n\n"
+            else "🪙 <b>Deposit with Binance Pay</b>\n\n"
             f"💵 USD wallet amount: <b>{amount_usdt_text}</b>\n"
             f"💵 Payment: <b>{amount_usdt_text} USDT</b>\n"
             f"🧾 Deposit code: <code>{escape(deposit.code)}</code>\n\n"
@@ -3000,9 +3000,9 @@ def create_router(
             inline_keyboard=[
                 [
                     InlineKeyboardButton(
-                        text="₿ Thanh toán Binance Pay"
+                        text="🪙 Thanh toán Binance Pay"
                         if user.language == "vi"
-                        else "₿ Pay with Binance Pay",
+                        else "🪙 Pay with Binance Pay",
                         url=order.checkout_url,
                     )
                 ],

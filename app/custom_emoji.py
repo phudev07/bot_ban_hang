@@ -66,7 +66,9 @@ EMOJI_IDS = {
     "⛔": "6318589958403661297",
     "🔴": "6318565734788112189",
     "🏦": BANK_DEPOSIT_EMOJI_ID,
-    "₿": BINANCE_DEPOSIT_EMOJI_ID,
+    # U+20BF is a currency symbol, not an emoji; Telegram rejects it as the
+    # fallback content of a custom-emoji entity. Use the coin emoji instead.
+    "🪙": BINANCE_DEPOSIT_EMOJI_ID,
     "☰": "6318554396074451012",
 }
 

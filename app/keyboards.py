@@ -654,7 +654,7 @@ def deposit_amounts_for_providers(
                     callback_data=f"deposit:sepay:{bank_amount}",
                 ),
                 InlineKeyboardButton(
-                    text=f"₿ ${usd_amount}",
+                    text=f"🪙 ${usd_amount}",
                     callback_data=f"deposit:binance:usd:{usd_amount}",
                 ),
             )
@@ -664,7 +664,7 @@ def deposit_amounts_for_providers(
                 callback_data="deposit:sepay:other",
             ),
             InlineKeyboardButton(
-                text="₿ Binance khác" if language == "vi" else "₿ Other Binance",
+                text="🪙 Binance khác" if language == "vi" else "🪙 Other Binance",
                 callback_data="deposit:binance:usd:other",
             ),
         )
@@ -678,7 +678,7 @@ def deposit_amounts_for_providers(
         if binance_enabled:
             for usd_amount in binance_amounts:
                 builder.button(
-                    text=f"₿ ${usd_amount}",
+                    text=f"🪙 ${usd_amount}",
                     callback_data=f"deposit:binance:usd:{usd_amount}",
                 )
         builder.adjust(2)
@@ -690,9 +690,9 @@ def deposit_amounts_for_providers(
         if binance_enabled:
             builder.button(
                 text=(
-                    "₿ Nhập số tiền Binance khác"
+                    "🪙 Nhập số tiền Binance khác"
                     if language == "vi"
-                    else "₿ Other Binance amount"
+                    else "🪙 Other Binance amount"
                 ),
                 callback_data="deposit:binance:usd:other",
             )
