@@ -185,7 +185,15 @@ class BinancePayClient:
         if not isinstance(records, list):
             return None
         for record in records:
-            if isinstance(record, dict) and str(record.get("transactionId") or "") == transaction_id:
+            if not isinstance(record, dict):
+                continue
+            # Binance shows the C2C order ID in some wallet screens while the
+            # read API uses transactionId as its primary identifier. Accept
+            # both, then let the caller settle with the canonical transactionId.
+            if transaction_id in {
+                str(record.get("transactionId") or ""),
+                str(record.get("orderId") or ""),
+            }:
                 return record
         return None
 

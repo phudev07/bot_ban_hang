@@ -3151,10 +3151,30 @@ def create_router(
                 "Check the transaction ID and amount."
             )
             return
+        canonical_transaction_id = str(
+            transaction.get("transactionId") or transaction_id
+        ).strip()
+        if canonical_transaction_id != transaction_id:
+            canonical_attempt = await session.scalar(
+                select(PaymentTransaction).where(
+                    PaymentTransaction.provider_tx_id == canonical_transaction_id
+                )
+            )
+            if canonical_attempt is not None and canonical_attempt.id != existing_attempt.id:
+                existing_attempt.credit_status = "rejected_duplicate"
+                await session.commit()
+                await message.answer(
+                    "Giao dịch này đã được xử lý trước đó."
+                    if user.language == "vi"
+                    else "This transaction has already been processed."
+                )
+                return
+            existing_attempt.provider_tx_id = canonical_transaction_id
+            await session.commit()
         result = await process_sepay_payment(
             session_factory,
             {
-                "id": transaction_id,
+                "id": canonical_transaction_id,
                 "amount": deposit.requested_amount,
                 "code": deposit.code,
                 "transferType": "in",
