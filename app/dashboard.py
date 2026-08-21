@@ -6337,24 +6337,6 @@ def create_dashboard_router(
         )
         if not wants_json:
             flash(request, message)
-        if (
-            bot is not None
-            and result.user_id is not None
-            and payment_kind == "binance"
-        ):
-            try:
-                await bot.send_message(
-                    result.user_id,
-                    "❌ <b>Yêu cầu nạp Binance đã bị hủy</b>\n\n"
-                    f"• Mã nạp: <code>{escape(result.deposit_code)}</code>\n"
-                    f"• Số tiền: <b>{format_wallet_amount(result.amount, result.currency)}</b>\n"
-                    "Khoản nạp này không được cộng vào ví. Nếu bạn đã chuyển tiền, hãy liên hệ hỗ trợ.",
-                )
-            except Exception:
-                logger.exception(
-                    "Could not notify user %s about manual Binance deposit cancellation",
-                    result.user_id,
-                )
         if wants_json:
             return JSONResponse(
                 {
