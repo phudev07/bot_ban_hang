@@ -1024,6 +1024,12 @@ def create_dashboard_router(
             wallet_total = int(
                 await session.scalar(select(func.coalesce(func.sum(User.balance), 0))) or 0
             )
+            wallet_total_usd = int(
+                await session.scalar(
+                    select(func.coalesce(func.sum(User.balance_usd_tenths), 0))
+                )
+                or 0
+            )
             account_buyers = set(
                 await session.scalars(
                     select(Order.user_id)
@@ -1298,6 +1304,7 @@ def create_dashboard_router(
                     "pending_amount": pending_amount,
                     "received_today": received_today,
                     "wallet_total": wallet_total,
+                    "wallet_total_usd": wallet_total_usd,
                     "average_order": revenue // orders if orders else 0,
                     "buyer_rate": round(buying_users / users * 100, 1) if users else 0,
                 },

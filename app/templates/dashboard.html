@@ -29,7 +29,7 @@
   <article><span>Tồn kho khả dụng</span><strong>{{ stats.stock }}</strong><small>Kho bot và tồn API hiện tại</small></article>
   <article><span>Thanh toán đang chờ</span><strong>{{ stats.pending }}</strong><small>{{ stats.pending_amount|vnd }} chưa khớp</small></article>
   <article><span>Tiền nhận hôm nay</span><strong>{{ stats.received_today|vnd }}</strong><small>Webhook ngân hàng đã ghi nhận</small></article>
-  <article><span>Số dư ví khách</span><strong>{{ stats.wallet_total|vnd }}</strong><small>Khoản bot đang giữ hộ khách</small></article>
+  <article><span>Số dư ví khách</span><strong>{{ stats.wallet_total|vnd }}</strong><small>USD {{ stats.wallet_total_usd|usd_tenths }} · Khoản bot đang giữ hộ khách</small></article>
 </section>
 
 <div class="dashboard-grid chart-layout">
