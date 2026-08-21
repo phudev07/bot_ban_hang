@@ -72,6 +72,8 @@ def test_binance_pay_wallet_deposit_configuration() -> None:
         binance_pay_secret_key="secret",
     )
     assert settings.binance_pay_payment_prefix == "BN"
+    assert settings.binance_pay_read_base_url == "https://api.binance.com"
+    assert settings.binance_pay_recipient_uid == "1218561925"
     assert settings.binance_pay_usd_to_vnd == 26_500
     assert settings.binance_pay_expiry_seconds == 900
 

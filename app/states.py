@@ -3,6 +3,7 @@ from aiogram.fsm.state import State, StatesGroup
 
 class DepositStates(StatesGroup):
     waiting_for_amount = State()
+    waiting_for_binance_transaction = State()
 
 
 class PurchaseStates(StatesGroup):

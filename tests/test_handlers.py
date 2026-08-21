@@ -6,6 +6,7 @@ from aiogram.types import InlineKeyboardMarkup, ReplyKeyboardMarkup, ReplyKeyboa
 
 from app.handlers import (
     binance_customer_error_message,
+    validate_binance_pay_transaction,
     coupon_error_message,
     edit_or_send_text,
     home_text,
@@ -19,6 +20,31 @@ def test_binance_customer_error_hides_provider_diagnostics() -> None:
     assert text == "Binance Pay đang tạm thời không khả dụng. Vui lòng thử lại sau."
     assert "400004" not in text
     assert "160.191.243.91" not in text
+
+
+def test_binance_pay_transaction_requires_incoming_exact_amount_and_recipient() -> None:
+    transaction = {
+        "transactionId": "tx-1",
+        "amount": "1",
+        "currency": "USDT",
+        "receiverInfo": {"binanceId": "1218561925"},
+    }
+
+    assert validate_binance_pay_transaction(
+        transaction,
+        recipient_uid="1218561925",
+        expected_amount_tenths=10,
+    )
+    assert not validate_binance_pay_transaction(
+        {**transaction, "amount": "-1"},
+        recipient_uid="1218561925",
+        expected_amount_tenths=10,
+    )
+    assert not validate_binance_pay_transaction(
+        transaction,
+        recipient_uid="9999999999",
+        expected_amount_tenths=10,
+    )
 
 
 def test_coupon_errors_explain_the_exact_reason() -> None:

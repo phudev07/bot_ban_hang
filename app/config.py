@@ -40,6 +40,7 @@ class Settings(BaseSettings):
     max_pending_deposits_per_user: int = 3
     binance_pay_enabled: bool = False
     binance_pay_base_url: str = "https://bpay.binanceapi.com"
+    binance_pay_read_base_url: str = "https://api.binance.com"
     binance_pay_api_key: SecretStr = SecretStr("")
     binance_pay_secret_key: SecretStr = SecretStr("")
     binance_pay_payment_prefix: str = "BN"
@@ -49,6 +50,7 @@ class Settings(BaseSettings):
     binance_pay_webhook_tolerance_seconds: int = 300
     binance_pay_webhook_rate_limit_per_minute: int = 60
     binance_pay_webhook_global_rate_limit_per_minute: int = 300
+    binance_pay_recipient_uid: str = "1218561925"
     # Optional rollout boundary for the Admin payment settlement controls.
     # Existing requests before this instant remain view-only.
     manual_payment_controls_since: datetime | None = Field(

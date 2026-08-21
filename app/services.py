@@ -3342,6 +3342,7 @@ async def process_sepay_payment(
     nce_client: ExternalSupplierClient | None = None,
     haji_client: HajiClient | None = None,
     manual_deposit_id: int | None = None,
+    currency: str = "VND",
 ) -> PaymentResult:
     if (
         supplier_client is not None
@@ -3396,6 +3397,7 @@ async def process_sepay_payment(
                         nce_client,
                         haji_client,
                         manual_deposit_id,
+                        currency=currency,
                     )
     return await _process_sepay_payment(
         session_factory,
@@ -3410,6 +3412,7 @@ async def process_sepay_payment(
         nce_client,
         haji_client,
         manual_deposit_id,
+        currency=currency,
     )
 
 

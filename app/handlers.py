@@ -1,5 +1,7 @@
 import asyncio
 import logging
+from datetime import UTC, datetime
+from decimal import Decimal, InvalidOperation
 from html import escape
 
 from aiogram import Bot, F, Router
@@ -60,7 +62,7 @@ from app.keyboards import (
 )
 from app.lehai_suppliers import LeHaiPremiumClient
 from app.maintenance import sms_rental_maintenance_enabled
-from app.models import ApiClient, Order, Product, QuantityDiscount, User
+from app.models import ApiClient, Deposit, Order, Product, QuantityDiscount, User
 from app.partner_services import ensure_api_client, referral_stats, rotate_api_secret
 from app.payment_expiry import register_deposit_message
 from app.product_tutorials import send_purchase_tutorials
@@ -91,6 +93,7 @@ from app.services import (
     product_pricing,
     purchase_quantity_limit,
     purchase_product,
+    process_sepay_payment,
     recent_orders,
     user_activity_stats,
 )
@@ -238,6 +241,38 @@ def binance_customer_error_message(language: str) -> str:
         if language == "vi"
         else "Binance Pay is temporarily unavailable. Please try again later."
     )
+
+
+def validate_binance_pay_transaction(
+    transaction: dict[str, object],
+    *,
+    recipient_uid: str,
+    expected_amount_tenths: int,
+) -> bool:
+    """Validate an incoming Pay transfer before it reaches wallet settlement."""
+    if str(transaction.get("currency") or "").upper() != "USDT":
+        return False
+    try:
+        amount_tenths = int(
+            (Decimal(str(transaction.get("amount") or "0")) * Decimal("10")).quantize(
+                Decimal("1")
+            )
+        )
+    except (InvalidOperation, ValueError, TypeError):
+        return False
+    if amount_tenths != int(expected_amount_tenths) or amount_tenths <= 0:
+        return False
+    recipient_uid = str(recipient_uid).strip()
+    receiver_info = transaction.get("receiverInfo")
+    receiver_ids: set[str] = set()
+    if isinstance(receiver_info, dict):
+        for key in ("binanceId", "accountId", "uid"):
+            value = str(receiver_info.get(key) or "").strip()
+            if value:
+                receiver_ids.add(value)
+    if receiver_ids:
+        return recipient_uid in receiver_ids and not str(transaction.get("amount", "")).startswith("-")
+    return str(transaction.get("uid") or "").strip() == recipient_uid and amount_tenths > 0
 
 
 def home_text(user: User, settings: Settings) -> str:
@@ -2793,6 +2828,7 @@ def create_router(
             provider=provider,
             amount_usd=amount_usd,
             bot=bot,
+            state=state,
         )
         await callback.answer()
 
@@ -2840,7 +2876,130 @@ def create_router(
             provider=provider,
             amount_usd=amount_usd,
             bot=bot,
+            state=state,
         )
+
+    @router.message(DepositStates.waiting_for_binance_transaction)
+    async def receive_binance_transaction(
+        message: Message,
+        session: AsyncSession,
+        session_factory: async_sessionmaker[AsyncSession],
+        state: FSMContext,
+        bot: Bot,
+    ) -> None:
+        user = await get_or_create_user(message, session)
+        transaction_id = (message.text or "").strip()
+        if not transaction_id or len(transaction_id) > 255:
+            await message.answer(
+                "Mã transaction ID không hợp lệ. Hãy gửi đúng mã giao dịch Binance."
+                if user.language == "vi"
+                else "Invalid transaction ID. Send the exact Binance transaction ID."
+            )
+            return
+        data = await state.get_data()
+        deposit_code = str(data.get("binance_deposit_code") or "").strip()
+        deposit = await session.scalar(
+            select(Deposit)
+            .where(
+                Deposit.code == deposit_code,
+                Deposit.user_id == user.telegram_id,
+                Deposit.payment_kind == "binance",
+                Deposit.currency == "USD",
+            )
+            .with_for_update()
+        )
+        if deposit is None or deposit.status != "pending":
+            await state.clear()
+            await message.answer(
+                "Yêu cầu nạp Binance đã hết hạn hoặc không còn hiệu lực."
+                if user.language == "vi"
+                else "This Binance deposit request has expired or is no longer valid."
+            )
+            return
+        created_at = deposit.created_at
+        start_time_ms = int(created_at.timestamp() * 1000) if created_at is not None else None
+        try:
+            transaction = await binance_pay_client.find_pay_transaction(
+                transaction_id,
+                start_time_ms=start_time_ms,
+                end_time_ms=int(datetime.now(UTC).timestamp() * 1000),
+            )
+        except BinancePayError as exc:
+            logger.error(
+                "Binance Pay transaction verification failed: user_id=%s deposit=%s detail=%s",
+                user.telegram_id,
+                deposit.code,
+                str(exc)[:300],
+            )
+            admin_text = (
+                "🚨 <b>Binance Pay không đọc được giao dịch</b>\n\n"
+                f"• User: <code>{user.telegram_id}</code>\n"
+                f"• Mã nạp: <code>{escape(deposit.code)}</code>\n"
+                f"• Transaction ID: <code>{escape(transaction_id)}</code>\n"
+                f"• Lỗi nguồn: <code>{escape(str(exc)[:500])}</code>"
+            )
+            for admin_id in settings.admin_ids:
+                try:
+                    await bot.send_message(admin_id, admin_text)
+                except Exception:
+                    logger.exception(
+                        "Could not notify admin %s about Binance transaction lookup failure",
+                        admin_id,
+                    )
+            if user.telegram_id not in settings.admin_ids:
+                await message.answer(binance_customer_error_message(user.language))
+            return
+        if transaction is None or not validate_binance_pay_transaction(
+            transaction,
+            recipient_uid=settings.binance_pay_recipient_uid,
+            expected_amount_tenths=deposit.requested_amount,
+        ):
+            await message.answer(
+                "Không tìm thấy giao dịch hợp lệ hoặc số tiền/UID người nhận không khớp. "
+                "Hãy kiểm tra lại transaction ID và số tiền đã chuyển."
+                if user.language == "vi"
+                else "No matching transaction was found, or the amount/recipient UID is incorrect. "
+                "Check the transaction ID and amount."
+            )
+            return
+        result = await process_sepay_payment(
+            session_factory,
+            {
+                "id": transaction_id,
+                "amount": deposit.requested_amount,
+                "code": deposit.code,
+                "transferType": "in",
+            },
+            settings.binance_pay_payment_prefix,
+            referral_commission_percent=settings.referral_commission_percent,
+            currency="USD",
+        )
+        if result.status in {"credited", "already_paid_payment", "duplicate"}:
+            await state.clear()
+        if result.status == "credited":
+            await message.answer(
+                (
+                    f"✅ Đã cộng {format_usd_tenths(result.amount)} vào ví USD.\n"
+                    f"💵 Số dư hiện tại: <b>{format_usd_tenths(result.balance_usd_tenths or 0)}</b>"
+                )
+                if user.language == "vi"
+                else (
+                    f"✅ Credited {format_usd_tenths(result.amount)} to your USD wallet.\n"
+                    f"💵 Current balance: <b>{format_usd_tenths(result.balance_usd_tenths or 0)}</b>"
+                )
+            )
+        elif result.status in {"duplicate", "already_paid_payment"}:
+            await message.answer(
+                "Giao dịch này đã được xử lý trước đó."
+                if user.language == "vi"
+                else "This transaction has already been processed."
+            )
+        else:
+            await message.answer(
+                "Không thể cộng tiền từ giao dịch này. Vui lòng liên hệ hỗ trợ."
+                if user.language == "vi"
+                else "This transaction could not be credited. Please contact support."
+            )
 
     async def create_and_show_deposit(
         target: Message | None,
@@ -2851,6 +3010,7 @@ def create_router(
         provider: str = "sepay",
         amount_usd: int | None = None,
         bot: Bot,
+        state: FSMContext,
     ) -> None:
         if target is None:
             return
@@ -2865,6 +3025,7 @@ def create_router(
                 amount,
                 amount_usd=amount_usd,
                 bot=bot,
+                state=state,
             )
             return
         try:
@@ -2929,6 +3090,7 @@ def create_router(
         *,
         amount_usd: int | None = None,
         bot: Bot,
+        state: FSMContext,
     ) -> None:
         if binance_pay_client is None:
             await target.answer("Nạp Binance Pay hiện chưa được bật.")
@@ -2938,7 +3100,6 @@ def create_router(
                 "Số USD tối thiểu là $1." if user.language == "vi" else "Minimum deposit is $1."
             )
             return
-        deposit = None
         try:
             deposit = await create_deposit(
                 session,
@@ -2950,82 +3111,31 @@ def create_router(
                 expiry_seconds=settings.binance_pay_expiry_seconds,
                 max_pending_deposits=settings.max_pending_deposits_per_user,
             )
-            order = await binance_pay_client.create_order(
-                merchant_trade_no=deposit.code,
-                amount_usd_tenths=amount,
-            )
         except PendingDepositLimitReached:
             await target.answer(
                 "Bạn đang có quá nhiều yêu cầu nạp chờ thanh toán. Hãy dùng yêu cầu cũ "
                 "hoặc chờ hết hạn."
             )
             return
-        except BinancePayError as exc:
-            if deposit is not None:
-                deposit.status = "failed"
-                deposit.failure_reason = "binance_create_failed"
-                await session.commit()
-            detail = str(exc)
-            logger.error(
-                "Binance Pay order creation failed: user_id=%s deposit=%s detail=%s",
-                user.telegram_id,
-                deposit.code if deposit is not None else "none",
-                detail[:300],
-            )
-            admin_text = (
-                "🚨 <b>Binance Pay không tạo được đơn</b>\n\n"
-                f"• User: <code>{user.telegram_id}</code>\n"
-                f"• Mã nạp: <code>{escape(deposit.code if deposit is not None else '—')}</code>\n"
-                f"• Số tiền: <b>{format_usd_tenths(amount)}</b>\n"
-                f"• Lỗi nguồn: <code>{escape(detail[:500])}</code>\n\n"
-                "Kiểm tra Merchant API, certificate SN/secret và whitelist IP VPS."
-            )
-            for admin_id in settings.admin_ids:
-                try:
-                    await bot.send_message(admin_id, admin_text)
-                except Exception:
-                    logger.exception("Could not notify admin %s about Binance Pay failure", admin_id)
-            # The admin may also be the test user. Avoid sending the generic
-            # customer error to that same chat after the detailed admin alert.
-            if user.telegram_id not in settings.admin_ids:
-                await target.answer(binance_customer_error_message(user.language))
-            return
         amount_usdt_text = format_usd_tenths(amount)
         text = (
-            "🪙 <b>Nạp tiền qua Binance Pay</b>\n\n"
-            f"💵 Số tiền ví USD: <b>{amount_usdt_text}</b>\n"
-            f"💵 Thanh toán: <b>{amount_usdt_text} USDT</b>\n"
-            f"🧾 Mã nạp: <code>{escape(deposit.code)}</code>\n\n"
-            "Bấm nút bên dưới để thanh toán. Ví chỉ được cộng sau khi Binance xác nhận thành công."
+            "🪙 <b>Nạp USD qua Binance</b>\n\n"
+            f"💵 Số tiền cần chuyển: <b>{amount_usdt_text}</b> USDT\n"
+            f"👤 Binance UID nhận: <code>{escape(settings.binance_pay_recipient_uid)}</code>\n\n"
+            "Hãy chuyển đúng số tiền tới UID trên, sau đó gửi mã transaction ID vào đây. "
+            "Bot chỉ cộng ví khi Binance xác nhận đúng giao dịch và đúng số tiền."
             f"\n\n⏳ Yêu cầu hết hạn sau {settings.binance_pay_expiry_seconds // 60} phút."
             if user.language == "vi"
-            else "🪙 <b>Deposit with Binance Pay</b>\n\n"
-            f"💵 USD wallet amount: <b>{amount_usdt_text}</b>\n"
-            f"💵 Payment: <b>{amount_usdt_text} USDT</b>\n"
-            f"🧾 Deposit code: <code>{escape(deposit.code)}</code>\n\n"
-            "Use the button below to pay. Your wallet is credited only after Binance confirms payment."
+            else "🪙 <b>Deposit USD via Binance</b>\n\n"
+            f"💵 Amount to send: <b>{amount_usdt_text}</b> USDT\n"
+            f"👤 Recipient Binance UID: <code>{escape(settings.binance_pay_recipient_uid)}</code>\n\n"
+            "Send the exact amount to this UID, then send the transaction ID here. "
+            "The wallet is credited only after Binance verifies the matching transfer."
             f"\n\n⏳ This request expires in {settings.binance_pay_expiry_seconds // 60} minutes."
         )
-        from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
-
-        markup = InlineKeyboardMarkup(
-            inline_keyboard=[
-                [
-                    InlineKeyboardButton(
-                        text="🪙 Thanh toán Binance Pay"
-                        if user.language == "vi"
-                        else "🪙 Pay with Binance Pay",
-                        url=order.checkout_url,
-                    )
-                ],
-                [
-                    InlineKeyboardButton(
-                        text="↩️ Quay lại" if user.language == "vi" else "↩️ Back",
-                        callback_data="back:menu",
-                    )
-                ],
-            ]
-        )
+        await state.set_state(DepositStates.waiting_for_binance_transaction)
+        await state.update_data(binance_deposit_code=deposit.code)
+        markup = back_menu(user.language)
         sent = await target.answer(text, reply_markup=markup)
         await register_deposit_message(session, deposit.id, sent.chat.id, sent.message_id)
 

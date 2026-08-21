@@ -11,13 +11,16 @@ import secrets
 import time
 from dataclasses import dataclass
 from decimal import Decimal, ROUND_HALF_UP
+from urllib.parse import urlencode
 
 import httpx
 
 
 logger = logging.getLogger(__name__)
 BINANCE_PAY_ORDER_PATH = "/binancepay/openapi/v2/order"
+BINANCE_PAY_TRANSACTIONS_PATH = "/sapi/v1/pay/transactions"
 DEFAULT_USD_TO_VND = 26_500
+DEFAULT_READ_BASE_URL = "https://api.binance.com"
 
 
 class BinancePayError(RuntimeError):
@@ -110,12 +113,81 @@ class BinancePayClient:
         secret_key: str,
         timeout_seconds: float = 15,
         usd_to_vnd: int = DEFAULT_USD_TO_VND,
+        read_base_url: str = DEFAULT_READ_BASE_URL,
     ) -> None:
         self.base_url = base_url.rstrip("/")
+        self.read_base_url = read_base_url.rstrip("/")
         self.api_key = api_key
         self.secret_key = secret_key
         self.timeout_seconds = timeout_seconds
         self.usd_to_vnd = max(1, int(usd_to_vnd))
+
+    async def find_pay_transaction(
+        self,
+        transaction_id: str,
+        *,
+        start_time_ms: int | None = None,
+        end_time_ms: int | None = None,
+        limit: int = 100,
+    ) -> dict[str, object] | None:
+        """Find one incoming Binance Pay transfer using the read-only API."""
+        transaction_id = transaction_id.strip()
+        if not transaction_id:
+            return None
+        params: dict[str, str] = {
+            "timestamp": str(int(time.time() * 1000)),
+            "limit": str(max(1, min(100, int(limit)))),
+        }
+        if start_time_ms is not None:
+            params["startTime"] = str(max(0, int(start_time_ms)))
+        if end_time_ms is not None:
+            params["endTime"] = str(max(0, int(end_time_ms)))
+        query = urlencode(params)
+        signature = hmac.new(
+            self.secret_key.encode("utf-8"),
+            query.encode("utf-8"),
+            hashlib.sha256,
+        ).hexdigest()
+        params["signature"] = signature
+        headers = {
+            "X-MBX-APIKEY": self.api_key,
+            "Accept": "application/json",
+        }
+        try:
+            async with httpx.AsyncClient(timeout=self.timeout_seconds) as client:
+                response = await client.get(
+                    self.read_base_url + BINANCE_PAY_TRANSACTIONS_PATH,
+                    params=params,
+                    headers=headers,
+                )
+        except httpx.HTTPError as exc:
+            logger.warning("Binance Pay transaction lookup failed: %s", type(exc).__name__)
+            raise BinancePayError("Binance Pay transaction lookup is unavailable") from exc
+        try:
+            payload = response.json()
+        except ValueError as exc:
+            raise BinancePayError("Binance Pay returned invalid transaction data") from exc
+        if not isinstance(payload, dict):
+            raise BinancePayError("Binance Pay returned invalid transaction data")
+        if response.status_code >= 400 or str(payload.get("code") or "") != "000000":
+            code = str(payload.get("code") or "unknown")
+            message = str(payload.get("message") or payload.get("msg") or "request failed")
+            logger.warning(
+                "Binance Pay transaction lookup rejected: http_status=%s code=%s message=%s",
+                response.status_code,
+                code[:80],
+                message[:160],
+            )
+            raise BinancePayError(f"Binance Pay transaction lookup failed ({code})")
+        records = payload.get("data")
+        if isinstance(records, dict):
+            records = [records]
+        if not isinstance(records, list):
+            return None
+        for record in records:
+            if isinstance(record, dict) and str(record.get("transactionId") or "") == transaction_id:
+                return record
+        return None
 
     async def create_order(
         self,
@@ -214,4 +286,5 @@ def create_binance_pay_client(settings) -> BinancePayClient | None:
         secret_key=settings.binance_pay_secret_key.get_secret_value(),
         timeout_seconds=settings.binance_pay_timeout_seconds,
         usd_to_vnd=settings.binance_pay_usd_to_vnd,
+        read_base_url=settings.binance_pay_read_base_url,
     )
