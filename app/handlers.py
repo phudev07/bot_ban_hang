@@ -1,4 +1,5 @@
 import asyncio
+import logging
 from html import escape
 
 from aiogram import Bot, F, Router
@@ -121,6 +122,9 @@ from app.utils import (
 )
 
 
+logger = logging.getLogger(__name__)
+
+
 COUPON_ERROR_MESSAGES = {
     "coupon_empty": (
         "Bạn chưa nhập mã giảm giá.",
@@ -225,6 +229,15 @@ def coupon_error_message(code: str, language: str) -> str:
             else "The discount code could not be applied. Please try again."
         )
     return messages[0] if language == "vi" else messages[1]
+
+
+def binance_customer_error_message(language: str) -> str:
+    """Keep provider credentials, permissions, and network details admin-only."""
+    return (
+        "Binance Pay đang tạm thời không khả dụng. Vui lòng thử lại sau."
+        if language == "vi"
+        else "Binance Pay is temporarily unavailable. Please try again later."
+    )
 
 
 def home_text(user: User, settings: Settings) -> str:
@@ -2725,6 +2738,7 @@ def create_router(
         callback: CallbackQuery,
         session: AsyncSession,
         state: FSMContext,
+        bot: Bot,
     ) -> None:
         user = await get_or_create_user(callback, session)
         parts = callback.data.split(":")
@@ -2778,6 +2792,7 @@ def create_router(
             amount,
             provider=provider,
             amount_usd=amount_usd,
+            bot=bot,
         )
         await callback.answer()
 
@@ -2786,6 +2801,7 @@ def create_router(
         message: Message,
         session: AsyncSession,
         state: FSMContext,
+        bot: Bot,
     ) -> None:
         user = await get_or_create_user(message, session)
         amount = parse_vnd(message.text or "")
@@ -2823,6 +2839,7 @@ def create_router(
             amount,
             provider=provider,
             amount_usd=amount_usd,
+            bot=bot,
         )
 
     async def create_and_show_deposit(
@@ -2833,6 +2850,7 @@ def create_router(
         *,
         provider: str = "sepay",
         amount_usd: int | None = None,
+        bot: Bot,
     ) -> None:
         if target is None:
             return
@@ -2846,6 +2864,7 @@ def create_router(
                 user,
                 amount,
                 amount_usd=amount_usd,
+                bot=bot,
             )
             return
         try:
@@ -2909,6 +2928,7 @@ def create_router(
         amount: int,
         *,
         amount_usd: int | None = None,
+        bot: Bot,
     ) -> None:
         if binance_pay_client is None:
             await target.answer("Nạp Binance Pay hiện chưa được bật.")
@@ -2945,22 +2965,28 @@ def create_router(
                 deposit.status = "failed"
                 deposit.failure_reason = "binance_create_failed"
                 await session.commit()
-            if "400004" in str(exc):
-                message = (
-                    "Binance Pay chưa cấp quyền cho API key hoặc IP VPS chưa nằm trong whitelist. "
-                    "Vui lòng kiểm tra quyền Merchant API và whitelist IP 160.191.243.91."
-                    if user.language == "vi"
-                    else "Binance Pay API permission/IP whitelist is not configured. "
-                    "Check Merchant API permissions and whitelist VPS IP 160.191.243.91."
-                )
-            else:
-                message = (
-                    "Binance Pay đang bận hoặc chưa sẵn sàng. Vui lòng thử lại sau."
-                    if user.language == "vi"
-                    else "Binance Pay is temporarily unavailable. Please try again later."
-                )
+            detail = str(exc)
+            logger.error(
+                "Binance Pay order creation failed: user_id=%s deposit=%s detail=%s",
+                user.telegram_id,
+                deposit.code if deposit is not None else "none",
+                detail[:300],
+            )
+            admin_text = (
+                "🚨 <b>Binance Pay không tạo được đơn</b>\n\n"
+                f"• User: <code>{user.telegram_id}</code>\n"
+                f"• Mã nạp: <code>{escape(deposit.code if deposit is not None else '—')}</code>\n"
+                f"• Số tiền: <b>{format_usd_tenths(amount)}</b>\n"
+                f"• Lỗi nguồn: <code>{escape(detail[:500])}</code>\n\n"
+                "Kiểm tra Merchant API, certificate SN/secret và whitelist IP VPS."
+            )
+            for admin_id in settings.admin_ids:
+                try:
+                    await bot.send_message(admin_id, admin_text)
+                except Exception:
+                    logger.exception("Could not notify admin %s about Binance Pay failure", admin_id)
             await target.answer(
-                message
+                binance_customer_error_message(user.language)
             )
             return
         amount_usdt_text = format_usd_tenths(amount)

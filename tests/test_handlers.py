@@ -5,11 +5,20 @@ from unittest.mock import AsyncMock
 from aiogram.types import InlineKeyboardMarkup, ReplyKeyboardMarkup, ReplyKeyboardRemove
 
 from app.handlers import (
+    binance_customer_error_message,
     coupon_error_message,
     edit_or_send_text,
     home_text,
     send_home_with_navigation,
 )
+
+
+def test_binance_customer_error_hides_provider_diagnostics() -> None:
+    text = binance_customer_error_message("vi")
+
+    assert text == "Binance Pay đang tạm thời không khả dụng. Vui lòng thử lại sau."
+    assert "400004" not in text
+    assert "160.191.243.91" not in text
 
 
 def test_coupon_errors_explain_the_exact_reason() -> None:
