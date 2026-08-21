@@ -42,11 +42,29 @@ def format_usd_from_vnd(
 
 def format_usd_price_from_vnd(amount: int, vnd_per_usd: int) -> str:
     """Display product prices in USD, always rounded upward to one decimal."""
+    return format_usd_tenths(usd_tenths_from_vnd(amount, vnd_per_usd))
+
+
+def usd_tenths_from_vnd(amount: int, vnd_per_usd: int) -> int:
+    """Convert a display price to USD tenths using upward rounding only."""
     rate = Decimal(max(1, int(vnd_per_usd)))
-    value = (Decimal(max(0, int(amount))) / rate).quantize(
-        Decimal("0.1"), rounding=ROUND_CEILING
+    value = (Decimal(max(0, int(amount))) / rate * Decimal("10")).quantize(
+        Decimal("1"), rounding=ROUND_CEILING
     )
+    return max(0, int(value))
+
+
+def format_usd_tenths(amount_tenths: int) -> str:
+    """Format the integer-tenths USD wallet representation."""
+    value = Decimal(max(0, int(amount_tenths or 0))) / Decimal("10")
     return f"${value:,.1f}"
+
+
+def format_wallet_amount(amount: int | None, currency: str = "VND") -> str:
+    """Format an amount using the wallet's explicit currency."""
+    if str(currency or "VND").upper() == "USD":
+        return format_usd_tenths(amount or 0)
+    return format_vnd(amount or 0)
 
 
 def parse_vnd(value: str) -> int | None:

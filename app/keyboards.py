@@ -470,11 +470,15 @@ def quantity_menu(
     flash_sale_id: int | None = None,
     origin: str | None = None,
     variable_price: bool = False,
+    usd_to_vnd: int | None = None,
 ) -> InlineKeyboardMarkup:
     builder = InlineKeyboardBuilder()
     maximum = min(product.max_quantity, max(0, stock))
     suggestions = [value for value in (1, 2, 5, 10) if value <= maximum]
     display_price = product.price if unit_price is None else unit_price
+    price_label = f"{format_vnd(display_price)}"
+    if usd_to_vnd:
+        price_label += f" ({format_usd_price_from_vnd(display_price, usd_to_vnd)})"
     for quantity in suggestions:
         callback_data = f"buy:{product.id}:{quantity}"
         if flash_sale_id is not None:
@@ -486,6 +490,8 @@ def quantity_menu(
                 else f"{quantity} accounts · view total"
                 if variable_price
                 else f"{quantity} × {format_vnd(display_price)}"
+                if not usd_to_vnd
+                else f"{quantity} × {price_label}"
             ),
             callback_data=callback_data,
         )
@@ -550,13 +556,21 @@ def coupon_quantity_menu(
     stock: int,
     coupon_id: int,
     final_unit_price: int,
+    usd_to_vnd: int | None = None,
 ) -> InlineKeyboardMarkup:
     builder = InlineKeyboardBuilder()
     maximum = min(product.max_quantity if product.allow_quantity else 1, max(0, stock))
     suggestions = [value for value in (1, 2, 5, 10) if value <= maximum]
     for quantity in suggestions:
         builder.button(
-            text=f"{quantity} × {format_vnd(final_unit_price)}",
+            text=(
+                f"{quantity} × {format_vnd(final_unit_price)}"
+                + (
+                    f" ({format_usd_price_from_vnd(final_unit_price, usd_to_vnd)})"
+                    if usd_to_vnd
+                    else ""
+                )
+            ),
             callback_data=f"buycoupon:{product.id}:{quantity}:{coupon_id}",
         )
     builder.adjust(2)
@@ -626,34 +640,63 @@ def deposit_amounts_for_providers(
     usd_to_vnd: int = 27_500,
 ) -> InlineKeyboardMarkup:
     builder = InlineKeyboardBuilder()
-    for amount in (50_000, 100_000, 200_000, 500_000):
+    bank_amounts = (50_000, 100_000, 200_000, 500_000)
+    binance_amounts = (1, 2, 5, 10)
+    if sepay_enabled and binance_enabled:
+        builder.row(
+            InlineKeyboardButton(text="MBBank", callback_data="deposit:column:bank"),
+            InlineKeyboardButton(text="Binance", callback_data="deposit:column:binance"),
+        )
+        for bank_amount, usd_amount in zip(bank_amounts, binance_amounts):
+            builder.row(
+                InlineKeyboardButton(
+                    text=f"🏦 {format_vnd(bank_amount)}",
+                    callback_data=f"deposit:sepay:{bank_amount}",
+                ),
+                InlineKeyboardButton(
+                    text=f"₿ ${usd_amount}",
+                    callback_data=f"deposit:binance:usd:{usd_amount}",
+                ),
+            )
+        builder.row(
+            InlineKeyboardButton(
+                text="🏦 MBBank khác" if language == "vi" else "🏦 Other MBBank",
+                callback_data="deposit:sepay:other",
+            ),
+            InlineKeyboardButton(
+                text="₿ Binance khác" if language == "vi" else "₿ Other Binance",
+                callback_data="deposit:binance:usd:other",
+            ),
+        )
+    else:
+        if sepay_enabled:
+            for amount in bank_amounts:
+                builder.button(
+                    text=f"🏦 {format_vnd(amount)}",
+                    callback_data=f"deposit:sepay:{amount}",
+                )
+        if binance_enabled:
+            for usd_amount in binance_amounts:
+                builder.button(
+                    text=f"₿ ${usd_amount}",
+                    callback_data=f"deposit:binance:usd:{usd_amount}",
+                )
+        builder.adjust(2)
         if sepay_enabled:
             builder.button(
-                text=f"🏦 {format_vnd(amount)}",
-                callback_data=f"deposit:sepay:{amount}",
+                text="🏦 Nhập số tiền khác" if language == "vi" else "🏦 Other bank amount",
+                callback_data="deposit:sepay:other",
             )
-    if binance_enabled:
-        for usd_amount in (1, 2, 5, 10):
+        if binance_enabled:
             builder.button(
-                text=f"₿ ${usd_amount}",
-                callback_data=f"deposit:binance:usd:{usd_amount}",
+                text=(
+                    "₿ Nhập số tiền Binance khác"
+                    if language == "vi"
+                    else "₿ Other Binance amount"
+                ),
+                callback_data="deposit:binance:usd:other",
             )
-    builder.adjust(2)
-    if sepay_enabled:
-        builder.button(
-            text="🏦 Nhập số tiền khác" if language == "vi" else "🏦 Other bank amount",
-            callback_data="deposit:sepay:other",
-        )
-    if binance_enabled:
-        builder.button(
-            text=(
-                "₿ Nhập số tiền Binance khác"
-                if language == "vi"
-                else "₿ Other Binance amount"
-            ),
-            callback_data="deposit:binance:usd:other",
-        )
-    builder.adjust(2)
+        builder.adjust(2)
     builder.row(InlineKeyboardButton(text=tr(language, "back"), callback_data="back:menu"))
     return builder.as_markup()
 

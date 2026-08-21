@@ -6,6 +6,7 @@ from collections.abc import Awaitable, Callable
 from contextlib import AsyncExitStack
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
+from decimal import Decimal, ROUND_HALF_UP
 
 from aiogram.types import User as TelegramUser
 from sqlalchemy import String, case, cast, func, or_, select
@@ -23,7 +24,6 @@ from app.flash_sales import (
     reserve_flash_sale,
     stop_unsafe_flash_sale,
 )
-from app.binance_pay import BinancePayError, usdt_to_vnd
 from app.haji_suppliers import HajiClient, refresh_haji_product
 from app.lehai_suppliers import (
     LeHaiPremiumClient,
@@ -73,7 +73,12 @@ from app.suppliers import (
     refresh_external_product,
     supplier_balance_guard,
 )
-from app.utils import SecretCipher, find_deposit_code, round_vnd_to_thousand
+from app.utils import (
+    SecretCipher,
+    find_deposit_code,
+    round_vnd_to_thousand,
+    usd_tenths_from_vnd,
+)
 from app.wallet_ledger import apply_wallet_change
 
 
@@ -1535,6 +1540,9 @@ class PurchaseResult:
     quantity_discount_type: str | None = None
     quantity_discount_value: int = 0
     flash_sale_id: int | None = None
+    payment_currency: str = "VND"
+    payment_amount: int = 0
+    usd_total_tenths: int = 0
 
     @property
     def order(self) -> Order | None:
@@ -1552,6 +1560,7 @@ class UserActivityStats:
     deposit_count: int
     total_spent: int
     total_deposited: int
+    total_deposited_usd_tenths: int
 
 
 async def user_activity_stats(session: AsyncSession, user_id: int) -> UserActivityStats:
@@ -1607,6 +1616,7 @@ async def user_activity_stats(session: AsyncSession, user_id: int) -> UserActivi
             select(func.coalesce(func.sum(PaymentTransaction.amount), 0)).where(
                 PaymentTransaction.user_id == user_id,
                 PaymentTransaction.credit_status == "credited",
+                PaymentTransaction.currency == "VND",
             )
         )
         or 0
@@ -1617,6 +1627,16 @@ async def user_activity_stats(session: AsyncSession, user_id: int) -> UserActivi
         deposit_count=deposit_count,
         total_spent=total_spent + int(sms_spent),
         total_deposited=total_deposited,
+        total_deposited_usd_tenths=int(
+            await session.scalar(
+                select(func.coalesce(func.sum(PaymentTransaction.amount), 0)).where(
+                    PaymentTransaction.user_id == user_id,
+                    PaymentTransaction.credit_status == "credited",
+                    PaymentTransaction.currency == "USD",
+                )
+            )
+            or 0
+        ),
     )
 
 
@@ -1647,6 +1667,7 @@ async def purchase_product(
     fixed_unit_price: int | None = None,
     wallet_already_charged: bool = False,
     expected_total_amount: int | None = None,
+    usd_to_vnd: int = 27_500,
 ) -> PurchaseResult:
     if wallet_already_charged and preorder_id is None:
         return PurchaseResult(False, "invalid_preorder_payment")
@@ -1696,6 +1717,7 @@ async def purchase_product(
                 fixed_unit_price=fixed_unit_price,
                 wallet_already_charged=wallet_already_charged,
                 expected_total_amount=expected_total_amount,
+                usd_to_vnd=usd_to_vnd,
             )
     return await _purchase_product(
         session_factory,
@@ -1723,6 +1745,7 @@ async def purchase_product(
         fixed_unit_price=fixed_unit_price,
         wallet_already_charged=wallet_already_charged,
         expected_total_amount=expected_total_amount,
+        usd_to_vnd=usd_to_vnd,
     )
 
 
@@ -1753,6 +1776,7 @@ async def _purchase_product(
     fixed_unit_price: int | None,
     wallet_already_charged: bool,
     expected_total_amount: int | None,
+    usd_to_vnd: int,
 ) -> PurchaseResult:
     async with session_factory() as session:
         async with session.begin():
@@ -2117,6 +2141,17 @@ async def _purchase_product(
                 if multi_quote is not None
                 else pricing.discount_per_unit * len(inventory_items)
             )
+            usd_total_tenths = usd_tenths_from_vnd(total_amount, usd_to_vnd)
+            payment_currency = "VND"
+            payment_amount = total_amount
+            if not wallet_already_charged:
+                if int(user.balance or 0) >= total_amount:
+                    payment_currency = "VND"
+                elif int(user.balance_usd_tenths or 0) >= usd_total_tenths:
+                    payment_currency = "USD"
+                    payment_amount = usd_total_tenths
+                else:
+                    payment_currency = ""
             if expected_total_amount is not None and total_amount != expected_total_amount:
                 return PurchaseResult(False, "price_changed", total_amount=total_amount)
             if max_unit_price is not None and highest_unit_price > max_unit_price:
@@ -2131,7 +2166,7 @@ async def _purchase_product(
                     quantity_discount_value=pricing.quantity_discount_value,
                     flash_sale_id=(pricing.flash_sale.id if pricing.flash_sale else None),
                 )
-            if not wallet_already_charged and user.balance < total_amount:
+            if not wallet_already_charged and not payment_currency:
                 return PurchaseResult(
                     False,
                     "insufficient",
@@ -2142,6 +2177,7 @@ async def _purchase_product(
                     quantity_discount_type=pricing.quantity_discount_type,
                     quantity_discount_value=pricing.quantity_discount_value,
                     flash_sale_id=(pricing.flash_sale.id if pricing.flash_sale else None),
+                    usd_total_tenths=usd_total_tenths,
                 )
 
             if product.fulfillment_source in EXTERNAL_FULFILLMENT_SOURCES:
@@ -2197,11 +2233,14 @@ async def _purchase_product(
                         secret_values.append(cipher.decrypt(item.encrypted_secret))
                     if pricing.coupon is not None:
                         pricing.coupon.used_count += 1
+                    for order in orders:
+                        order.payment_currency = payment_currency
+                        order.payment_amount = payment_amount
                     if not wallet_already_charged:
                         apply_wallet_change(
                             session,
                             user,
-                            -total_amount,
+                            -payment_amount,
                             kind="product_purchase",
                             event_key=f"purchase:{batch_code}",
                             reference_type="order",
@@ -2210,14 +2249,18 @@ async def _purchase_product(
                                 f"Mua {quantity} tài khoản {product.name_vi} "
                                 f"qua {sales_channel}"
                             ),
+                            currency=payment_currency,
                         )
                     await award_referral_commission(
                         session,
                         user,
                         shop_order_code=batch_code,
-                        order_amount=total_amount,
+                        order_amount=(
+                            payment_amount if payment_currency == "USD" else total_amount
+                        ),
                         sales_channel=sales_channel,
                         commission_percent=referral_commission_percent,
+                        currency=payment_currency,
                     )
                     consume_flash_sale(pricing.flash_sale, quantity)
                     await release_price_lock_if_inventory_empty(session, product)
@@ -2239,6 +2282,9 @@ async def _purchase_product(
                         quantity_discount_percent=pricing.quantity_discount_percent,
                         quantity_discount_type=pricing.quantity_discount_type,
                         quantity_discount_value=pricing.quantity_discount_value,
+                        payment_currency=payment_currency,
+                        payment_amount=payment_amount,
+                        usd_total_tenths=usd_total_tenths,
                     )
                 await notify_fulfillment_started(
                     on_fulfillment_started,
@@ -2663,11 +2709,14 @@ async def _purchase_product(
                     )
                 if pricing.coupon is not None:
                     pricing.coupon.used_count += 1
+                for order in orders:
+                    order.payment_currency = payment_currency
+                    order.payment_amount = payment_amount
                 if not wallet_already_charged:
                     apply_wallet_change(
                         session,
                         user,
-                        -total_amount,
+                        -payment_amount,
                         kind="product_purchase",
                         event_key=f"purchase:{batch_code}",
                         reference_type="order",
@@ -2675,14 +2724,18 @@ async def _purchase_product(
                         description=(
                             f"Mua {quantity} tài khoản {product.name_vi} qua {sales_channel}"
                         ),
+                        currency=payment_currency,
                     )
                 await award_referral_commission(
                     session,
                     user,
                     shop_order_code=batch_code,
-                    order_amount=total_amount,
+                    order_amount=(
+                        payment_amount if payment_currency == "USD" else total_amount
+                    ),
                     sales_channel=sales_channel,
                     commission_percent=referral_commission_percent,
+                    currency=payment_currency,
                 )
                 consume_flash_sale(pricing.flash_sale, quantity)
                 await release_price_lock_if_inventory_empty(session, product)
@@ -2704,6 +2757,9 @@ async def _purchase_product(
                     quantity_discount_percent=pricing.quantity_discount_percent,
                     quantity_discount_type=pricing.quantity_discount_type,
                     quantity_discount_value=pricing.quantity_discount_value,
+                    payment_currency=payment_currency,
+                    payment_amount=payment_amount,
+                    usd_total_tenths=usd_total_tenths,
                 )
 
             items = local_items
@@ -2714,7 +2770,7 @@ async def _purchase_product(
                 apply_wallet_change(
                     session,
                     user,
-                    -total_amount,
+                    -payment_amount,
                     kind="product_purchase",
                     event_key=f"purchase:{batch_code}",
                     reference_type="order",
@@ -2722,6 +2778,7 @@ async def _purchase_product(
                     description=(
                         f"Mua {quantity} tài khoản {product.name_vi} qua {sales_channel}"
                     ),
+                    currency=payment_currency,
                 )
             orders = []
             secret_values = []
@@ -2766,15 +2823,21 @@ async def _purchase_product(
                 session.add(order)
                 orders.append(order)
                 secret_values.append(cipher.decrypt(item.encrypted_secret))
+            for order in orders:
+                order.payment_currency = payment_currency
+                order.payment_amount = payment_amount
             if pricing.coupon is not None:
                 pricing.coupon.used_count += 1
             await award_referral_commission(
                 session,
                 user,
                 shop_order_code=batch_code,
-                order_amount=total_amount,
+                order_amount=(
+                    payment_amount if payment_currency == "USD" else total_amount
+                ),
                 sales_channel=sales_channel,
                 commission_percent=referral_commission_percent,
+                currency=payment_currency,
             )
             consume_flash_sale(pricing.flash_sale, quantity)
             if preorder_id is not None:
@@ -2795,6 +2858,9 @@ async def _purchase_product(
                 quantity_discount_percent=pricing.quantity_discount_percent,
                 quantity_discount_type=pricing.quantity_discount_type,
                 quantity_discount_value=pricing.quantity_discount_value,
+                payment_currency=payment_currency,
+                payment_amount=payment_amount,
+                usd_total_tenths=usd_total_tenths,
             )
 
 
@@ -2808,6 +2874,7 @@ async def create_deposit(
     amount: int,
     payment_prefix: str = "NAP",
     *,
+    currency: str = "VND",
     payment_kind: str = "wallet",
     product_id: int | None = None,
     quantity: int = 1,
@@ -2863,6 +2930,7 @@ async def create_deposit(
             Deposit.expires_at.is_not(None),
             Deposit.expires_at >= reusable_after,
             Deposit.requested_amount == amount,
+            Deposit.currency == str(currency or "VND").upper(),
             Deposit.payment_kind == payment_kind,
             Deposit.product_id == product_id,
             Deposit.quantity == quantity,
@@ -2916,6 +2984,7 @@ async def create_deposit(
         user_id=user_id,
         code=code,
         requested_amount=amount,
+        currency=str(currency or "VND").upper(),
         payment_kind=payment_kind,
         product_id=product_id,
         quantity=quantity,
@@ -2952,6 +3021,8 @@ class PaymentResult:
     quantity: int = 1
     language: str = "vi"
     balance: int | None = None
+    currency: str = "VND"
+    balance_usd_tenths: int | None = None
     deposit_code: str | None = None
     username: str | None = None
     paid_at: datetime | None = None
@@ -3355,7 +3426,11 @@ async def _process_sepay_payment(
     nce_client: ExternalSupplierClient | None,
     haji_client: HajiClient | None,
     manual_deposit_id: int | None = None,
+    currency: str = "VND",
 ) -> PaymentResult:
+    currency = str(currency or "VND").upper()
+    if currency not in {"VND", "USD"}:
+        return PaymentResult("invalid_currency")
     transfer_type = str(payload.get("transferType") or payload.get("transfer_type") or "").lower()
     if transfer_type and transfer_type not in {"in", "credit", "incoming"}:
         return PaymentResult("ignored_outgoing")
@@ -3388,6 +3463,8 @@ async def _process_sepay_payment(
             )
             if deposit is None:
                 return PaymentResult("deposit_not_found")
+            if str(deposit.currency or "VND").upper() != currency:
+                return PaymentResult("currency_mismatch", deposit_code=deposit.code)
             manual_override = manual_deposit_id is not None and manual_deposit_id == deposit.id
             if manual_deposit_id is not None and not manual_override:
                 return PaymentResult("manual_invalid_request")
@@ -3493,6 +3570,7 @@ async def _process_sepay_payment(
                         user_id=user.telegram_id,
                         provider_tx_id=provider_tx_id,
                         amount=amount,
+                        currency=currency,
                         credit_status=credit_status,
                     )
                 )
@@ -3504,6 +3582,8 @@ async def _process_sepay_payment(
                     quantity=deposit.quantity,
                     language=user.language,
                     balance=user.balance,
+                    currency=currency,
+                    balance_usd_tenths=user.balance_usd_tenths,
                     deposit_code=deposit.code,
                     username=user.username,
                     paid_at=now,
@@ -4238,6 +4318,7 @@ async def _process_sepay_payment(
                             user_id=user.telegram_id,
                             provider_tx_id=provider_tx_id,
                             amount=amount,
+                            currency=currency,
                             credit_status="credited",
                         )
                     )
@@ -4275,6 +4356,7 @@ async def _process_sepay_payment(
                     if is_direct_fallback
                     else f"Nạp tiền vào ví qua mã {deposit.code}"
                 ),
+                currency=currency,
             )
             deposit.status = "paid"
             deposit.paid_amount = amount
@@ -4287,6 +4369,7 @@ async def _process_sepay_payment(
                     user_id=user.telegram_id,
                     provider_tx_id=provider_tx_id,
                     amount=amount,
+                    currency=currency,
                     credit_status="credited",
                 )
             )
@@ -4300,6 +4383,8 @@ async def _process_sepay_payment(
             quantity=deposit.quantity,
             language=language,
             balance=user.balance,
+            currency=currency,
+            balance_usd_tenths=user.balance_usd_tenths,
             deposit_code=deposit.code,
             username=user.username,
             paid_at=deposit.paid_at,
@@ -4320,12 +4405,7 @@ async def process_binance_payment(
     nce_client: ExternalSupplierClient | None = None,
     haji_client: HajiClient | None = None,
 ) -> PaymentResult:
-    """Normalize a successful Binance Pay event into the wallet credit path.
-
-    Binance reports USDT while deposits are recorded in VND. The deposit code
-    is the merchant trade number, and the amount is checked before the shared
-    payment settlement logic is allowed to credit the wallet.
-    """
+    """Credit the independent USD wallet from a successful Binance Pay event."""
     status = str(payload.get("bizStatus") or payload.get("status") or "").upper()
     if status != "PAY_SUCCESS":
         return PaymentResult("binance_payment_not_successful")
@@ -4341,8 +4421,14 @@ async def process_binance_payment(
         return PaymentResult("invalid_binance_currency")
     raw_total = order_amount.get("total")
     try:
-        provider_amount_vnd = usdt_to_vnd(raw_total, usd_to_vnd)
-    except BinancePayError:
+        provider_amount_usd_tenths = int(
+            (Decimal(str(raw_total)) * Decimal("10")).quantize(
+                Decimal("1"), rounding=ROUND_HALF_UP
+            )
+        )
+    except Exception:
+        return PaymentResult("invalid_amount")
+    if provider_amount_usd_tenths <= 0:
         return PaymentResult("invalid_amount")
 
     async with session_factory() as session:
@@ -4353,11 +4439,13 @@ async def process_binance_payment(
             return PaymentResult("deposit_not_found", deposit_code=merchant_trade_no)
         if deposit.payment_kind != "binance":
             return PaymentResult("invalid_payment_kind", deposit_code=deposit.code)
+        if str(deposit.currency or "VND").upper() != "USD":
+            return PaymentResult("currency_mismatch", deposit_code=deposit.code)
         expected_amount = int(deposit.requested_amount)
-        # Amounts are generated to eight decimal places, so a two-VND guard
-        # tolerates decimal serialization without accepting an underpayment.
-        if abs(provider_amount_vnd - expected_amount) > 2:
-            normalized_amount = provider_amount_vnd
+        # Deposits use USD tenths internally, so provider decimal formatting
+        # cannot introduce a VND conversion or floating-point drift.
+        if abs(provider_amount_usd_tenths - expected_amount) > 0:
+            normalized_amount = provider_amount_usd_tenths
         else:
             normalized_amount = expected_amount
 
@@ -4379,6 +4467,7 @@ async def process_binance_payment(
         canboso_client,
         nce_client,
         haji_client,
+        currency="USD",
     )
 
 

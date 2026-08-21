@@ -35,6 +35,7 @@ from app.services import (
     multi_supplier_quote,
     order_bundle,
     process_sepay_payment,
+    process_binance_payment,
     product_checkout_quote,
     product_pricing,
     ProductPricing,
@@ -60,6 +61,48 @@ def test_purchase_quantity_limit_never_exceeds_current_stock() -> None:
     assert purchase_quantity_limit(product, 24) == 24
     assert purchase_quantity_limit(product, 150) == 100
     assert purchase_quantity_limit(product, 0) == 0
+
+
+def test_binance_deposit_credits_usd_wallet_without_vnd_conversion() -> None:
+    async def scenario() -> None:
+        engine, sessions = await make_database()
+        async with sessions() as session:
+            user = User(telegram_id=72001, full_name="USD buyer")
+            session.add(user)
+            await session.commit()
+            deposit = await create_deposit(
+                session,
+                user.telegram_id,
+                10,
+                "BN",
+                payment_kind="binance",
+                currency="USD",
+            )
+            result = await process_binance_payment(
+                sessions,
+                {
+                    "bizStatus": "PAY_SUCCESS",
+                    "merchantTradeNo": deposit.code,
+                    "bizId": "binance-tx-1",
+                    "orderAmount": {"currency": "USDT", "total": "1.00000000"},
+                },
+                "BN",
+                usd_to_vnd=27_500,
+            )
+        async with sessions() as session:
+            stored_user = await session.get(User, user.telegram_id)
+            transaction = await session.scalar(select(PaymentTransaction))
+            assert result.status == "credited"
+            assert result.currency == "USD"
+            assert result.amount == 10
+            assert stored_user is not None
+            assert stored_user.balance == 0
+            assert stored_user.balance_usd_tenths == 10
+            assert transaction is not None
+            assert transaction.currency == "USD"
+        await engine.dispose()
+
+    asyncio.run(scenario())
 
 
 def test_seller_price_uses_each_inventory_cost_and_keeps_normal_price_unchanged() -> None:

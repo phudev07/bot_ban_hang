@@ -15,8 +15,6 @@ from app.autosms import AutoSmsClient
 from app.binance_pay import (
     BinancePayClient,
     BinancePayError,
-    format_usdt_deposit,
-    vnd_to_usdt,
 )
 from app.chat_cleanup import delete_recent_messages
 from app.config import Settings
@@ -114,6 +112,7 @@ from app.utils import (
     SecretCipher,
     build_sepay_qr_url,
     format_usd_price_from_vnd,
+    format_usd_tenths,
     format_vnd,
     parse_vnd,
     safe_customer_html,
@@ -240,7 +239,8 @@ def home_text(user: User, settings: Settings) -> str:
             f"✨ <b>Hello, {escape(user.full_name)}</b>\n\n"
             f"🧾 ID: <code>{user.telegram_id}</code>\n"
             f"👤 Username: {username}\n"
-            f"👛 Available balance: <b>{format_vnd(user.balance)}</b>\n\n"
+            f"👛 VND balance: <b>{format_vnd(user.balance)}</b>\n"
+            f"💵 USD balance: <b>{format_usd_tenths(getattr(user, 'balance_usd_tenths', 0))}</b>\n\n"
             "⚡ <b>Quick access</b>\n"
             "🛒 Quick buy · 💳 Deposit · 🔑 My codes\n"
             "⌨️ The three buttons below the chat are always ready.\n\n"
@@ -251,7 +251,8 @@ def home_text(user: User, settings: Settings) -> str:
         f"✨ <b>Xin chào, {escape(user.full_name)}</b>\n\n"
         f"🧾 ID: <code>{user.telegram_id}</code>\n"
         f"👤 Username: {username}\n"
-        f"👛 Số dư khả dụng: <b>{format_vnd(user.balance)}</b>\n\n"
+        f"👛 Số dư khả dụng: <b>{format_vnd(user.balance)}</b> (VND)\n"
+        f"💵 Ví USD: <b>{format_usd_tenths(getattr(user, 'balance_usd_tenths', 0))}</b>\n\n"
         "⚡ <b>Truy cập nhanh</b>\n"
         "🛒 Mua nhanh · 💳 Nạp tiền · 🔑 Lấy code\n"
         "⌨️ Ba nút dưới ô chat luôn sẵn sàng thao tác.\n\n"
@@ -425,7 +426,8 @@ def create_router(
                 "👤 <b>Your profile</b>\n\n"
                 f"• ID: <code>{user.telegram_id}</code>\n"
                 f"• Username: {username}\n"
-                f"• Balance: <b>{format_vnd(user.balance)}</b>\n"
+                f"• VND balance: <b>{format_vnd(user.balance)}</b>\n"
+                f"• USD balance: <b>{format_usd_tenths(getattr(user, 'balance_usd_tenths', 0))}</b>\n"
                 f"• Joined: {user.created_at:%d/%m/%Y}\n\n"
                 "<b>Activity</b>\n"
                 f"• Purchases: <b>{stats.purchase_count}</b>\n"
@@ -433,12 +435,14 @@ def create_router(
                 f"• Successful deposits: <b>{stats.deposit_count}</b>\n"
                 f"• Total spent: <b>{format_vnd(stats.total_spent)}</b>\n"
                 f"• Total deposited: <b>{format_vnd(stats.total_deposited)}</b>"
+                f"\n• Total deposited USD: <b>{format_usd_tenths(stats.total_deposited_usd_tenths)}</b>"
             )
         return (
             "👤 <b>Hồ sơ của bạn</b>\n\n"
             f"• ID: <code>{user.telegram_id}</code>\n"
             f"• Username: {username}\n"
-            f"• Số dư: <b>{format_vnd(user.balance)}</b>\n"
+            f"• Ví VND: <b>{format_vnd(user.balance)}</b>\n"
+            f"• Ví USD: <b>{format_usd_tenths(getattr(user, 'balance_usd_tenths', 0))}</b>\n"
             f"• Tham gia: {user.created_at:%d/%m/%Y}\n\n"
             "<b>Thống kê hoạt động</b>\n"
             f"• Lượt mua hàng: <b>{stats.purchase_count}</b>\n"
@@ -446,6 +450,7 @@ def create_router(
             f"• Lượt nạp thành công: <b>{stats.deposit_count}</b>\n"
             f"• Tổng tiền đã mua: <b>{format_vnd(stats.total_spent)}</b>\n"
             f"• Tổng tiền đã nạp: <b>{format_vnd(stats.total_deposited)}</b>"
+            f"\n• Tổng tiền đã nạp USD: <b>{format_usd_tenths(stats.total_deposited_usd_tenths)}</b>"
         )
 
     async def send_quick_buy(message: Message, session: AsyncSession) -> None:
@@ -487,6 +492,8 @@ def create_router(
             return
         text = (
             f"💳 <b>Nạp tiền tự động</b>\n\n"
+            f"👛 Ví VND: <b>{format_vnd(user.balance)}</b>\n"
+            f"💵 Ví USD: <b>{format_usd_tenths(getattr(user, 'balance_usd_tenths', 0))}</b>\n\n"
             f"Chọn số tiền muốn nạp. Tối thiểu {format_vnd(settings.min_deposit)}."
             + (
                 f"\n₿ Binance Pay quy đổi: 1 USDT ≈ {format_vnd(settings.binance_pay_usd_to_vnd)}."
@@ -495,6 +502,8 @@ def create_router(
             )
             if user.language == "vi"
             else f"💳 <b>Automatic deposit</b>\n\n"
+            f"👛 VND wallet: <b>{format_vnd(user.balance)}</b>\n"
+            f"💵 USD wallet: <b>{format_usd_tenths(getattr(user, 'balance_usd_tenths', 0))}</b>\n\n"
             f"Choose an amount. Minimum {format_vnd(settings.min_deposit)}."
         )
         await message.answer(
@@ -1662,6 +1671,7 @@ def create_router(
                 supplier_idempotency_key=supplier_request_key,
                 expected_flash_sale_id=expected_flash_sale_id,
                 expected_total_amount=expected_total_amount,
+                usd_to_vnd=settings.binance_pay_usd_to_vnd,
             )
         finally:
             if fulfillment_message is not None:
@@ -1731,6 +1741,7 @@ def create_router(
                         f"{quantity_line_vi}"
                         f"💰 Tổng tiền: <b>{format_vnd(total_amount)}</b>\n"
                         f"👛 Số dư hiện có: <b>{format_vnd(user.balance)}</b>\n\n"
+                        f"💵 Ví USD: <b>{format_usd_tenths(getattr(user, 'balance_usd_tenths', 0))}</b> · cần <b>{format_usd_tenths(result.usd_total_tenths)}</b>\n\n"
                         "Bạn có thể thanh toán QR trực tiếp cho sản phẩm này. "
                         "Số dư hiện có vẫn được giữ nguyên."
                         if user.language == "vi"
@@ -1742,6 +1753,7 @@ def create_router(
                         f"{quantity_line_en}"
                         f"💰 Total: <b>{format_vnd(total_amount)}</b>\n"
                         f"👛 Current balance: <b>{format_vnd(user.balance)}</b>\n\n"
+                        f"💵 USD wallet: <b>{format_usd_tenths(getattr(user, 'balance_usd_tenths', 0))}</b> · required <b>{format_usd_tenths(result.usd_total_tenths)}</b>\n\n"
                         "You can pay for this product directly by QR. "
                         "Your current balance remains unchanged."
                     )
@@ -1776,6 +1788,18 @@ def create_router(
                 total_amount=result.total_amount,
                 language=user.language,
             )
+            if result.payment_currency == "USD":
+                text += (
+                    f"\n\n💵 Đã trừ ví USD: <b>{format_usd_tenths(result.payment_amount)}</b>"
+                    if user.language == "vi"
+                    else f"\n\n💵 Charged from USD wallet: <b>{format_usd_tenths(result.payment_amount)}</b>"
+                )
+            else:
+                text += (
+                    f"\n\n💰 Đã trừ ví VND: <b>{format_vnd(result.payment_amount or result.total_amount)}</b>"
+                    if user.language == "vi"
+                    else f"\n\n💰 Charged from VND wallet: <b>{format_vnd(result.payment_amount or result.total_amount)}</b>"
+                )
             if result.discount_amount:
                 has_quantity_discount = result.quantity_discount_type is not None
                 quantity_label_vi = applied_quantity_discount_text(
@@ -1899,14 +1923,14 @@ def create_router(
             f"📦 Sản phẩm: {product_brand_emoji(name)} <b>{safe_customer_html(name)}</b>\n"
             f"🧮 Số lượng: <b>{quantity}</b>\n"
             f"💰 Chi tiết giá: {breakdown}\n"
-            f"💳 Tổng trừ ví: <b>{format_vnd(quote.total_amount)}</b>\n\n"
+            f"💳 Tổng giá: <b>{format_vnd(quote.total_amount)}</b> ({format_usd_price_from_vnd(quote.total_amount, settings.binance_pay_usd_to_vnd)})\n\n"
             f"{pricing_note_vi}"
             if user.language == "vi"
             else "🧾 <b>Confirm purchase</b>\n\n"
             f"📦 Product: {product_brand_emoji(name)} <b>{safe_customer_html(name)}</b>\n"
             f"🧮 Quantity: <b>{quantity}</b>\n"
             f"💰 Price breakdown: {breakdown}\n"
-            f"💳 Wallet total: <b>{format_vnd(quote.total_amount)}</b>\n\n"
+            f"💳 Total price: <b>{format_vnd(quote.total_amount)}</b> ({format_usd_price_from_vnd(quote.total_amount, settings.binance_pay_usd_to_vnd)})\n\n"
             f"{pricing_note_en}"
         )
         await target.answer(
@@ -2033,6 +2057,7 @@ def create_router(
                 stock,
                 coupon.id,
                 pricing.final_unit_price,
+                settings.binance_pay_usd_to_vnd,
             ),
         )
 
@@ -2120,6 +2145,7 @@ def create_router(
                     variable_price=bool(
                         pricing is not None and pricing.seller_price_id is not None
                     ),
+                    usd_to_vnd=settings.binance_pay_usd_to_vnd,
                 ),
             )
         await callback.answer()
@@ -2674,6 +2700,8 @@ def create_router(
             return
         text = (
             f"💳 <b>Nạp tiền tự động</b>\n\n"
+            f"👛 Ví VND: <b>{format_vnd(user.balance)}</b>\n"
+            f"💵 Ví USD: <b>{format_usd_tenths(getattr(user, 'balance_usd_tenths', 0))}</b>\n\n"
             f"Chọn số tiền muốn nạp. Tối thiểu {format_vnd(settings.min_deposit)}."
             + (
                 f"\n₿ Binance Pay quy đổi: 1 USDT ≈ {format_vnd(settings.binance_pay_usd_to_vnd)}."
@@ -2682,6 +2710,8 @@ def create_router(
             )
             if user.language == "vi"
             else f"💳 <b>Automatic deposit</b>\n\n"
+            f"👛 VND wallet: <b>{format_vnd(user.balance)}</b>\n"
+            f"💵 USD wallet: <b>{format_usd_tenths(getattr(user, 'balance_usd_tenths', 0))}</b>\n\n"
             f"Choose an amount. Minimum {format_vnd(settings.min_deposit)}."
             + (
                 f"\n₿ Binance Pay rate: 1 USDT ≈ {format_vnd(settings.binance_pay_usd_to_vnd)}."
@@ -2699,6 +2729,10 @@ def create_router(
                     usd_to_vnd=settings.binance_pay_usd_to_vnd,
                 ),
             )
+        await callback.answer()
+
+    @router.callback_query(F.data.startswith("deposit:column:"))
+    async def deposit_column_label(callback: CallbackQuery) -> None:
         await callback.answer()
 
     @router.callback_query(F.data.startswith("deposit:"))
@@ -2751,7 +2785,7 @@ def create_router(
             if amount_usd < 1:
                 await callback.answer("Số USD tối thiểu là $1.", show_alert=True)
                 return
-            amount *= settings.binance_pay_usd_to_vnd
+            amount = amount_usd * 10
         await create_and_show_deposit(
             callback.message,
             session,
@@ -2795,7 +2829,7 @@ def create_router(
                     else "Invalid USD amount. Minimum is $1."
                 )
                 return
-            amount = amount_usd * settings.binance_pay_usd_to_vnd
+            amount = amount_usd * 10
         await state.clear()
         await create_and_show_deposit(
             message,
@@ -2817,7 +2851,7 @@ def create_router(
     ) -> None:
         if target is None:
             return
-        if amount < settings.min_deposit:
+        if provider != "binance" and amount < settings.min_deposit:
             await target.answer(f"Số tiền tối thiểu là {format_vnd(settings.min_deposit)}.")
             return
         if provider == "binance":
@@ -2894,11 +2928,9 @@ def create_router(
         if binance_pay_client is None:
             await target.answer("Nạp Binance Pay hiện chưa được bật.")
             return
-        if amount < settings.min_deposit:
+        if amount < 10:
             await target.answer(
-                f"Số tiền tối thiểu là {format_vnd(settings.min_deposit)}."
-                if user.language == "vi"
-                else f"Minimum deposit is {format_vnd(settings.min_deposit)}."
+                "Số USD tối thiểu là $1." if user.language == "vi" else "Minimum deposit is $1."
             )
             return
         deposit = None
@@ -2909,12 +2941,13 @@ def create_router(
                 amount,
                 settings.binance_pay_payment_prefix,
                 payment_kind="binance",
+                currency="USD",
                 expiry_seconds=settings.binance_pay_expiry_seconds,
                 max_pending_deposits=settings.max_pending_deposits_per_user,
             )
             order = await binance_pay_client.create_order(
                 merchant_trade_no=deposit.code,
-                amount_vnd=amount,
+                amount_usd_tenths=amount,
             )
         except PendingDepositLimitReached:
             await target.answer(
@@ -2945,19 +2978,18 @@ def create_router(
                 message
             )
             return
-        amount_usdt = vnd_to_usdt(amount, settings.binance_pay_usd_to_vnd)
-        amount_usdt_text = format_usdt_deposit(amount_usdt)
+        amount_usdt_text = format_usd_tenths(amount)
         text = (
             "₿ <b>Nạp tiền qua Binance Pay</b>\n\n"
-            f"💰 Số tiền ví: <b>{format_vnd(amount)}</b>\n"
-            f"💵 Thanh toán: <b>${amount_usdt_text} USDT</b>\n"
+            f"💵 Số tiền ví USD: <b>{amount_usdt_text}</b>\n"
+            f"💵 Thanh toán: <b>{amount_usdt_text} USDT</b>\n"
             f"🧾 Mã nạp: <code>{escape(deposit.code)}</code>\n\n"
             "Bấm nút bên dưới để thanh toán. Ví chỉ được cộng sau khi Binance xác nhận thành công."
             f"\n\n⏳ Yêu cầu hết hạn sau {settings.binance_pay_expiry_seconds // 60} phút."
             if user.language == "vi"
             else "₿ <b>Deposit with Binance Pay</b>\n\n"
-            f"💰 Wallet amount: <b>{format_vnd(amount)}</b>\n"
-            f"💵 Payment: <b>${amount_usdt_text} USDT</b>\n"
+            f"💵 USD wallet amount: <b>{amount_usdt_text}</b>\n"
+            f"💵 Payment: <b>{amount_usdt_text} USDT</b>\n"
             f"🧾 Deposit code: <code>{escape(deposit.code)}</code>\n\n"
             "Use the button below to pay. Your wallet is credited only after Binance confirms payment."
             f"\n\n⏳ This request expires in {settings.binance_pay_expiry_seconds // 60} minutes."

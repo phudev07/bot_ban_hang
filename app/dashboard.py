@@ -122,6 +122,7 @@ from app.utils import (
     SecretCipher,
     format_usd_from_vnd,
     format_usd_price_from_vnd,
+    format_usd_tenths,
     format_vnd,
     parse_vnd,
 )
@@ -133,6 +134,7 @@ templates = Jinja2Templates(directory=Path(__file__).parent / "templates")
 templates.env.filters["vnd"] = format_vnd
 templates.env.filters["usd_from_vnd"] = format_usd_from_vnd
 templates.env.filters["usd_price_from_vnd"] = format_usd_price_from_vnd
+templates.env.filters["usd_tenths"] = format_usd_tenths
 
 
 LOCAL_TIMEZONE = ZoneInfo("Asia/Bangkok")
@@ -4384,7 +4386,24 @@ def create_dashboard_router(
             deposit_stats = (
                 select(
                     PaymentTransaction.user_id.label("user_id"),
-                    func.coalesce(func.sum(PaymentTransaction.amount), 0).label("deposited"),
+                    func.coalesce(
+                        func.sum(
+                            case(
+                                (PaymentTransaction.currency == "VND", PaymentTransaction.amount),
+                                else_=0,
+                            )
+                        ),
+                        0,
+                    ).label("deposited"),
+                    func.coalesce(
+                        func.sum(
+                            case(
+                                (PaymentTransaction.currency == "USD", PaymentTransaction.amount),
+                                else_=0,
+                            )
+                        ),
+                        0,
+                    ).label("deposited_usd"),
                     func.max(PaymentTransaction.created_at).label("last_deposit_at"),
                 )
                 .join(Deposit, Deposit.id == PaymentTransaction.deposit_id)
@@ -4438,6 +4457,7 @@ def create_dashboard_router(
                     func.coalesce(sms_stats.c.sms_spent, 0),
                     sms_stats.c.last_sms_at,
                     func.coalesce(deposit_stats.c.deposited, 0),
+                    func.coalesce(deposit_stats.c.deposited_usd, 0),
                     deposit_stats.c.last_deposit_at,
                 )
                 .outerjoin(order_stats, order_stats.c.user_id == User.telegram_id)
@@ -4473,6 +4493,7 @@ def create_dashboard_router(
                     "sms_count": int(sms_count),
                     "last_sms_at": last_sms_at,
                     "deposited": int(deposited),
+                    "deposited_usd": int(deposited_usd),
                     "last_deposit_at": last_deposit_at,
                 }
                 for (
@@ -4484,6 +4505,7 @@ def create_dashboard_router(
                     sms_spent,
                     last_sms_at,
                     deposited,
+                    deposited_usd,
                     last_deposit_at,
                 ) in await session.execute(statement)
             ]
@@ -4540,6 +4562,7 @@ def create_dashboard_router(
                 await session.scalar(
                     select(func.coalesce(func.sum(WalletTransaction.amount), 0)).where(
                         WalletTransaction.user_id == user.telegram_id,
+                        WalletTransaction.currency == "VND",
                         WalletTransaction.amount > 0,
                         WalletTransaction.kind != "opening_balance",
                     )
@@ -4551,6 +4574,7 @@ def create_dashboard_router(
                     await session.scalar(
                         select(func.coalesce(func.sum(WalletTransaction.amount), 0)).where(
                             WalletTransaction.user_id == user.telegram_id,
+                            WalletTransaction.currency == "VND",
                             WalletTransaction.amount < 0,
                         )
                     )
@@ -4562,12 +4586,36 @@ def create_dashboard_router(
                     select(WalletTransaction.balance_after)
                     .where(
                         WalletTransaction.user_id == user.telegram_id,
+                        WalletTransaction.currency == "VND",
                         WalletTransaction.kind == "opening_balance",
                     )
                     .order_by(WalletTransaction.id)
                     .limit(1)
                 )
                 or 0
+            )
+            total_credits_usd = int(
+                await session.scalar(
+                    select(func.coalesce(func.sum(WalletTransaction.amount), 0)).where(
+                        WalletTransaction.user_id == user.telegram_id,
+                        WalletTransaction.currency == "USD",
+                        WalletTransaction.amount > 0,
+                        WalletTransaction.kind != "opening_balance",
+                    )
+                )
+                or 0
+            )
+            total_debits_usd = abs(
+                int(
+                    await session.scalar(
+                        select(func.coalesce(func.sum(WalletTransaction.amount), 0)).where(
+                            WalletTransaction.user_id == user.telegram_id,
+                            WalletTransaction.currency == "USD",
+                            WalletTransaction.amount < 0,
+                        )
+                    )
+                    or 0
+                )
             )
             order_count = int(
                 await session.scalar(
@@ -4593,6 +4641,8 @@ def create_dashboard_router(
                 transaction_count=transaction_count,
                 total_credits=total_credits,
                 total_debits=total_debits,
+                total_credits_usd=total_credits_usd,
+                total_debits_usd=total_debits_usd,
                 opening_balance=opening_balance,
                 order_count=order_count,
                 sms_count=sms_count,
@@ -5882,7 +5932,8 @@ def create_dashboard_router(
             received_total = int(
                 await session.scalar(
                     select(func.coalesce(func.sum(PaymentTransaction.amount), 0)).where(
-                        PaymentTransaction.credit_status == "credited"
+                        PaymentTransaction.credit_status == "credited",
+                        PaymentTransaction.currency == "VND",
                     )
                 )
                 or 0
@@ -5892,6 +5943,7 @@ def create_dashboard_router(
                     select(func.coalesce(func.sum(PaymentTransaction.amount), 0)).where(
                         PaymentTransaction.created_at >= periods["today"],
                         PaymentTransaction.credit_status == "credited",
+                        PaymentTransaction.currency == "VND",
                     )
                 )
                 or 0
@@ -5901,7 +5953,8 @@ def create_dashboard_router(
                     select(func.coalesce(func.sum(PaymentTransaction.amount), 0)).where(
                         PaymentTransaction.credit_status.notin_(
                             ("credited", "manual_matched", "expired")
-                        )
+                        ),
+                        PaymentTransaction.currency == "VND",
                     )
                 )
                 or 0
@@ -5925,7 +5978,47 @@ def create_dashboard_router(
             pending_amount = int(
                 await session.scalar(
                     select(func.coalesce(func.sum(Deposit.requested_amount), 0)).where(
-                        Deposit.status == "pending"
+                        Deposit.status == "pending",
+                        Deposit.currency == "VND",
+                    )
+                )
+                or 0
+            )
+            received_total_usd = int(
+                await session.scalar(
+                    select(func.coalesce(func.sum(PaymentTransaction.amount), 0)).where(
+                        PaymentTransaction.credit_status == "credited",
+                        PaymentTransaction.currency == "USD",
+                    )
+                )
+                or 0
+            )
+            received_today_usd = int(
+                await session.scalar(
+                    select(func.coalesce(func.sum(PaymentTransaction.amount), 0)).where(
+                        PaymentTransaction.created_at >= periods["today"],
+                        PaymentTransaction.credit_status == "credited",
+                        PaymentTransaction.currency == "USD",
+                    )
+                )
+                or 0
+            )
+            review_amount_usd = int(
+                await session.scalar(
+                    select(func.coalesce(func.sum(PaymentTransaction.amount), 0)).where(
+                        PaymentTransaction.credit_status.notin_(
+                            ("credited", "manual_matched", "expired")
+                        ),
+                        PaymentTransaction.currency == "USD",
+                    )
+                )
+                or 0
+            )
+            pending_amount_usd = int(
+                await session.scalar(
+                    select(func.coalesce(func.sum(Deposit.requested_amount), 0)).where(
+                        Deposit.status == "pending",
+                        Deposit.currency == "USD",
                     )
                 )
                 or 0
@@ -5948,10 +6041,14 @@ def create_dashboard_router(
                 stats={
                     "received_total": received_total,
                     "received_today": received_today,
+                    "received_total_usd": received_total_usd,
+                    "received_today_usd": received_today_usd,
                     "pending_count": pending_count,
                     "pending_amount": pending_amount,
+                    "pending_amount_usd": pending_amount_usd,
                     "review_count": review_count,
                     "review_amount": review_amount,
+                    "review_amount_usd": review_amount_usd,
                 },
             ),
         )

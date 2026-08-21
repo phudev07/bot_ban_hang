@@ -83,6 +83,48 @@ async def initialize_database(engine, session_factory, seed_demo_data: bool) -> 
         await connection.run_sync(Base.metadata.create_all)
         await connection.execute(
             text(
+                "ALTER TABLE users ADD COLUMN IF NOT EXISTS "
+                "balance_usd_tenths BIGINT NOT NULL DEFAULT 0"
+            )
+        )
+        await connection.execute(
+            text(
+                "ALTER TABLE deposits ADD COLUMN IF NOT EXISTS "
+                "currency VARCHAR(3) NOT NULL DEFAULT 'VND'"
+            )
+        )
+        await connection.execute(
+            text(
+                "ALTER TABLE payment_transactions ADD COLUMN IF NOT EXISTS "
+                "currency VARCHAR(3) NOT NULL DEFAULT 'VND'"
+            )
+        )
+        await connection.execute(
+            text(
+                "ALTER TABLE wallet_transactions ADD COLUMN IF NOT EXISTS "
+                "currency VARCHAR(3) NOT NULL DEFAULT 'VND'"
+            )
+        )
+        await connection.execute(
+            text(
+                "ALTER TABLE orders ADD COLUMN IF NOT EXISTS "
+                "payment_currency VARCHAR(3) NOT NULL DEFAULT 'VND'"
+            )
+        )
+        await connection.execute(
+            text(
+                "ALTER TABLE orders ADD COLUMN IF NOT EXISTS "
+                "payment_amount BIGINT NULL"
+            )
+        )
+        await connection.execute(
+            text(
+                "ALTER TABLE referral_rewards ADD COLUMN IF NOT EXISTS "
+                "currency VARCHAR(3) NOT NULL DEFAULT 'VND'"
+            )
+        )
+        await connection.execute(
+            text(
                 "ALTER TABLE orders ADD COLUMN IF NOT EXISTS "
                 "preorder_id INTEGER NULL REFERENCES preorders(id) ON DELETE SET NULL"
             )

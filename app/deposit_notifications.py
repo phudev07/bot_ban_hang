@@ -5,7 +5,7 @@ from zoneinfo import ZoneInfo
 from aiogram import Bot
 
 from app.services import PaymentResult
-from app.utils import format_vnd, safe_html
+from app.utils import format_wallet_amount, safe_html
 
 
 logger = logging.getLogger(__name__)
@@ -23,7 +23,7 @@ def deposit_notification_text(result: PaymentResult) -> str:
         paid_time = paid_at.astimezone(LOCAL_TIMEZONE).strftime("%d/%m/%Y %H:%M:%S")
     base = (
         "💰 <b>Nạp tiền shop bot</b>\n"
-        f"{username} đã nạp <b>{format_vnd(result.amount)}</b>\n"
+        f"{username} đã nạp <b>{format_wallet_amount(result.amount, result.currency)}</b>\n"
         f"Mã nạp: <code>{safe_html(result.deposit_code or '—')}</code>\n"
         f"Thời gian: <b>{paid_time}</b>"
     )
@@ -37,7 +37,7 @@ def deposit_notification_text(result: PaymentResult) -> str:
     }
     return (
         "🚨 <b>Giao dịch cần kiểm tra</b>\n"
-        f"{username} chuyển <b>{format_vnd(result.amount)}</b>\n"
+        f"{username} chuyển <b>{format_wallet_amount(result.amount, result.currency)}</b>\n"
         f"Mã nạp: <code>{safe_html(result.deposit_code or '—')}</code>\n"
         f"Kết quả: <b>{status_labels.get(result.status, safe_html(result.status))}</b>\n"
         f"Thời gian: <b>{paid_time}</b>"

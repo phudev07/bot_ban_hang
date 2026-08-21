@@ -121,10 +121,20 @@ class BinancePayClient:
         self,
         *,
         merchant_trade_no: str,
-        amount_vnd: int,
+        amount_vnd: int | None = None,
+        amount_usd_tenths: int | None = None,
         goods_name: str = "Nạp tiền ví PHP Tool Shop",
     ) -> BinancePayOrder:
-        amount_usdt = vnd_to_usdt(amount_vnd, self.usd_to_vnd)
+        if amount_usd_tenths is not None:
+            amount_usdt = (
+                Decimal(max(0, int(amount_usd_tenths))) / Decimal("10")
+            ).quantize(Decimal("0.00000001"), rounding=ROUND_HALF_UP)
+        elif amount_vnd is not None:
+            # Kept for compatibility with old callers; new Binance deposits
+            # pass an explicit USD amount and never convert into the VND wallet.
+            amount_usdt = vnd_to_usdt(amount_vnd, self.usd_to_vnd)
+        else:
+            raise BinancePayError("Binance Pay amount is missing")
         if amount_usdt <= 0:
             raise BinancePayError("Deposit amount is too small for Binance Pay")
         body = {

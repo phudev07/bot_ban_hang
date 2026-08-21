@@ -51,6 +51,19 @@ def test_binance_deposit_buttons_use_whole_usd_presets() -> None:
     ]
 
 
+def test_bank_and_binance_deposit_columns_stay_aligned() -> None:
+    keyboard = deposit_amounts_for_providers(
+        "vi",
+        sepay_enabled=True,
+        binance_enabled=True,
+    )
+    assert [button.text for button in keyboard.inline_keyboard[0]] == ["MBBank", "Binance"]
+    assert keyboard.inline_keyboard[1][0].callback_data == "deposit:sepay:50000"
+    assert keyboard.inline_keyboard[1][1].callback_data == "deposit:binance:usd:1"
+    assert keyboard.inline_keyboard[4][0].callback_data == "deposit:sepay:500000"
+    assert keyboard.inline_keyboard[4][1].callback_data == "deposit:binance:usd:10"
+
+
 def test_out_of_stock_product_button_is_red_and_clearly_labelled() -> None:
     available = make_product()
     available.external_stock = 3

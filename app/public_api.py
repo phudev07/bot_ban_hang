@@ -770,6 +770,7 @@ def create_public_api_router(
                 ),
                 expected_flash_sale_id=expected_flash_sale_id,
                 max_unit_price=body.max_unit_price,
+                usd_to_vnd=settings.binance_pay_usd_to_vnd,
             )
         except Exception:
             logger.exception("Shop API order %s needs supplier review after an exception", order_request.id)

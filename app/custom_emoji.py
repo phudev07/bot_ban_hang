@@ -13,6 +13,10 @@ CHATGPT_EMOJI_ID = "5310259124817134249"
 NETFLIX_EMOJI_ID = "5318911503938634641"
 GOOGLE_EMOJI_ID = "6319109310144062723"
 GEMINI_EMOJI_ID = "6212797771372563847"
+BANK_DEPOSIT_EMOJI_ID = "5332455502917949981"
+BINANCE_DEPOSIT_EMOJI_ID = "5197434882321567830"
+MBBANK_COLUMN_EMOJI_ID = "5197216633558426964"
+BINANCE_COLUMN_EMOJI_ID = "5217811903685865303"
 
 EMOJI_IDS = {
     "📣": "5309984423003823246",
@@ -61,7 +65,8 @@ EMOJI_IDS = {
     "🆘": "6319109099690663659",
     "⛔": "6318589958403661297",
     "🔴": "6318565734788112189",
-    "🏦": "6318580380626592466",
+    "🏦": BANK_DEPOSIT_EMOJI_ID,
+    "₿": BINANCE_DEPOSIT_EMOJI_ID,
     "☰": "6318554396074451012",
 }
 
@@ -140,6 +145,10 @@ def animate_html(text: str) -> str:
 
 def button_emoji_id(text: str) -> str | None:
     normalized = " ".join(text.casefold().split())
+    if "mbbank" in normalized:
+        return MBBANK_COLUMN_EMOJI_ID
+    if "binance" in normalized:
+        return BINANCE_COLUMN_EMOJI_ID
     if "🇻🇳" in text or "🇺🇸" in text:
         return EMOJI_IDS["🌐"]
     if any(

@@ -150,6 +150,7 @@ async def award_referral_commission(
     order_amount: int,
     sales_channel: str,
     commission_percent: int,
+    currency: str = "VND",
 ) -> ReferralReward | None:
     if buyer.referred_by_id is None or commission_percent <= 0 or order_amount <= 0:
         return None
@@ -177,6 +178,7 @@ async def award_referral_commission(
         description=(
             f"Hoa hồng giới thiệu từ đơn {shop_order_code} của khách {buyer.telegram_id}"
         ),
+        currency=currency,
     )
     reward = ReferralReward(
         referrer_user_id=referrer.telegram_id,
@@ -184,6 +186,7 @@ async def award_referral_commission(
         shop_order_code=shop_order_code,
         order_amount=order_amount,
         commission_amount=commission,
+        currency=currency,
         sales_channel=sales_channel,
     )
     session.add(reward)

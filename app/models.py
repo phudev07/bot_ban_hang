@@ -25,6 +25,8 @@ class User(Base):
     username: Mapped[str | None] = mapped_column(String(255), nullable=True)
     language: Mapped[str] = mapped_column(String(2), default="vi")
     balance: Mapped[int] = mapped_column(BigInteger, default=0)
+    # USD is stored in tenths so prices such as $1.3 remain exact without floats.
+    balance_usd_tenths: Mapped[int] = mapped_column(BigInteger, default=0, server_default="0")
     is_blocked: Mapped[bool] = mapped_column(Boolean, default=False)
     has_started: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
     referral_code: Mapped[str | None] = mapped_column(String(24), nullable=True, unique=True)
@@ -619,6 +621,8 @@ class Order(Base):
     product_name_en: Mapped[str | None] = mapped_column(String(255), nullable=True)
     inventory_item_id: Mapped[int] = mapped_column(ForeignKey("inventory_items.id"), unique=True)
     amount: Mapped[int] = mapped_column(BigInteger)
+    payment_currency: Mapped[str] = mapped_column(String(3), default="VND", server_default="VND")
+    payment_amount: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
     cost_amount: Mapped[int] = mapped_column(BigInteger, default=0)
     discount_amount: Mapped[int] = mapped_column(BigInteger, default=0)
     discount_code_id: Mapped[int | None] = mapped_column(
@@ -681,6 +685,7 @@ class Deposit(Base):
     user_id: Mapped[int] = mapped_column(ForeignKey("users.telegram_id"), index=True)
     code: Mapped[str] = mapped_column(String(64), unique=True, index=True)
     requested_amount: Mapped[int] = mapped_column(BigInteger)
+    currency: Mapped[str] = mapped_column(String(3), default="VND", server_default="VND", index=True)
     paid_amount: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
     payment_kind: Mapped[str] = mapped_column(String(20), default="wallet", index=True)
     product_id: Mapped[int | None] = mapped_column(
@@ -728,6 +733,7 @@ class PaymentTransaction(Base):
     user_id: Mapped[int] = mapped_column(ForeignKey("users.telegram_id"), index=True)
     provider_tx_id: Mapped[str] = mapped_column(String(255), unique=True, index=True)
     amount: Mapped[int] = mapped_column(BigInteger)
+    currency: Mapped[str] = mapped_column(String(3), default="VND", server_default="VND", index=True)
     credit_status: Mapped[str] = mapped_column(
         String(32), default="credited", server_default="credited", index=True
     )
@@ -759,6 +765,7 @@ class WalletTransaction(Base):
     amount: Mapped[int] = mapped_column(BigInteger)
     balance_before: Mapped[int] = mapped_column(BigInteger)
     balance_after: Mapped[int] = mapped_column(BigInteger)
+    currency: Mapped[str] = mapped_column(String(3), default="VND", server_default="VND", index=True)
     reference_type: Mapped[str] = mapped_column(String(32), default="system")
     reference_id: Mapped[str] = mapped_column(String(128), default="")
     event_key: Mapped[str] = mapped_column(String(191), unique=True, index=True)
@@ -915,6 +922,7 @@ class ReferralReward(Base):
     shop_order_code: Mapped[str] = mapped_column(String(32), unique=True, index=True)
     order_amount: Mapped[int] = mapped_column(BigInteger)
     commission_amount: Mapped[int] = mapped_column(BigInteger)
+    currency: Mapped[str] = mapped_column(String(3), default="VND", server_default="VND", index=True)
     sales_channel: Mapped[str] = mapped_column(String(16), default="telegram", index=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), index=True

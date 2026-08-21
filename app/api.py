@@ -31,7 +31,7 @@ from app.rate_limit import FixedWindowRateLimiter, RateLimitDecision, RateLimitR
 from app.rentsim import RentSimClient
 from app.services import process_binance_payment, process_sepay_payment
 from app.suppliers import ExternalSupplierClient, SumistoreClient
-from app.utils import SecretCipher, format_vnd, verify_sepay_hmac
+from app.utils import SecretCipher, format_usd_tenths, format_vnd, verify_sepay_hmac
 from app.warehouse_api import create_warehouse_api_router
 
 
@@ -700,14 +700,14 @@ def create_api(
         if result.status == "credited" and result.user_id is not None:
             try:
                 balance_line = (
-                    f"\nSố dư mới: <b>{format_vnd(result.balance)}</b>"
-                    if result.balance is not None
+                    f"\nSố dư USD mới: <b>{format_usd_tenths(result.balance_usd_tenths)}</b>"
+                    if result.balance_usd_tenths is not None
                     else ""
                 )
                 await bot.send_message(
                     result.user_id,
                     "✅ <b>Nạp Binance Pay thành công</b>\n"
-                    f"Số tiền ví: <b>{format_vnd(result.amount)}</b>\n"
+                    f"Số tiền ví USD: <b>{format_usd_tenths(result.amount)}</b>\n"
                     f"{balance_line}\n\nSố dư đã được cập nhật, bạn có thể mua hàng ngay.",
                     reply_markup=main_menu(
                         result.language,
