@@ -3081,16 +3081,15 @@ def create_router(
         try:
             # Reserve the ID before querying Binance. This blocks replay even
             # when the first lookup returns not found or the API is unavailable.
-            session.add(
-                PaymentTransaction(
-                    deposit_id=deposit.id,
-                    user_id=user.telegram_id,
-                    provider_tx_id=transaction_id,
-                    amount=0,
-                    currency="USD",
-                    credit_status="submitted",
-                )
+            existing_attempt = PaymentTransaction(
+                deposit_id=deposit.id,
+                user_id=user.telegram_id,
+                provider_tx_id=transaction_id,
+                amount=0,
+                currency="USD",
+                credit_status="submitted",
             )
+            session.add(existing_attempt)
             await session.commit()
         except IntegrityError:
             await session.rollback()
