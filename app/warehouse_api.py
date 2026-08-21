@@ -321,6 +321,7 @@ def create_warehouse_api_router(
                 error_map = {
                     "COST_INVALID": (400, "COST_INVALID", "cost_amount is invalid"),
                     "ITEMS_EMPTY": (400, "ITEMS_EMPTY", "No inventory items were supplied"),
+                    "IMPORT_NOTE_TOO_LONG": (400, "IMPORT_NOTE_TOO_LONG", "Import note is too long"),
                     "PRODUCT_INVALID": (404, "PRODUCT_NOT_FOUND", "Product is not available for warehouse import"),
                     "PRODUCT_HIDDEN": (409, "PRODUCT_HIDDEN", "Product is hidden"),
                     "IMPORT_NOTE_NOT_FOUND": (404, "IMPORT_NOTE_NOT_FOUND", "Import note does not exist"),

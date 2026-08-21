@@ -171,6 +171,26 @@ def test_warehouse_import_is_authenticated_idempotent_and_deduplicated(tmp_path:
         assert client.post(path, content=body, headers=replay_headers).status_code == 200
         assert client.post(path, content=body, headers=replay_headers).status_code == 409
 
+        negative_payload = {**payload, "cost_amount": "-1.000"}
+        negative_body = json.dumps(
+            negative_payload,
+            separators=(",", ":"),
+            ensure_ascii=False,
+        ).encode()
+        negative = client.post(
+            path,
+            content=negative_body,
+            headers=signed_headers(
+                secret,
+                "POST",
+                path,
+                negative_body,
+                idempotency_key="AUTO-IMPORT-NEGATIVE",
+            ),
+        )
+        assert negative.status_code == 400
+        assert negative.json()["detail"]["code"] == "COST_INVALID"
+
     async def verify_database():
         async with sessions() as session:
             items = list(await session.scalars(InventoryItem.__table__.select()))
@@ -179,5 +199,5 @@ def test_warehouse_import_is_authenticated_idempotent_and_deduplicated(tmp_path:
 
     item_count, request_count = asyncio.run(verify_database())
     assert item_count == 2
-    assert request_count == 2
+    assert request_count == 3
     asyncio.run(engine.dispose())

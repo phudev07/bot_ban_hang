@@ -67,7 +67,10 @@ async def import_inventory(
     queuing intentionally live here so every import surface has identical rules.
     """
     items = normalize_inventory_items(raw_items)
-    parsed_cost = parse_vnd(str(cost_amount))
+    raw_cost = str(cost_amount).strip()
+    if raw_cost.startswith("-"):
+        raise InventoryImportError("COST_INVALID")
+    parsed_cost = parse_vnd(raw_cost)
     if parsed_cost is None or parsed_cost < 0:
         raise InventoryImportError("COST_INVALID")
     if not items:
