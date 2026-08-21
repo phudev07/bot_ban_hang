@@ -2985,9 +2985,10 @@ def create_router(
                     await bot.send_message(admin_id, admin_text)
                 except Exception:
                     logger.exception("Could not notify admin %s about Binance Pay failure", admin_id)
-            await target.answer(
-                binance_customer_error_message(user.language)
-            )
+            # The admin may also be the test user. Avoid sending the generic
+            # customer error to that same chat after the detailed admin alert.
+            if user.telegram_id not in settings.admin_ids:
+                await target.answer(binance_customer_error_message(user.language))
             return
         amount_usdt_text = format_usd_tenths(amount)
         text = (
