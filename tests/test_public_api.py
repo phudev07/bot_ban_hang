@@ -342,7 +342,7 @@ def test_codex_guide_and_zip_download_are_public_but_raw_exe_is_not(tmp_path) ->
         assert "Custom-Codex-Ubuntu-x86_64.AppImage" in ubuntu.headers["content-disposition"]
         import_page = client.get("/codex-api/import-gpt-9router")
         assert import_page.status_code == 200
-        assert "Import GPT vào" in import_page.text
+        assert "Tool Import GPT vào" in import_page.text
         assert "python3 import_to_9router_macos.py" in import_page.text
         windows_tool = client.get("/codex-api/download/import-gpt-9router/windows")
         assert windows_tool.status_code == 200
