@@ -286,6 +286,8 @@ def test_codex_guide_and_zip_download_are_public_but_raw_exe_is_not(tmp_path) ->
     import_windows_zip_path.write_bytes(b"PK\x03\x04test-windows-bundle")
     import_linux_zip_path = tmp_path / "import_to_9router_linux.zip"
     import_linux_zip_path.write_bytes(b"PK\x03\x04test-linux-bundle")
+    import_macos_zip_path = tmp_path / "import_to_9router_macos.zip"
+    import_macos_zip_path.write_bytes(b"PK\x03\x04test-macos-bundle")
     settings = Settings(
         _env_file=None,
         bot_token="123456:ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghi",
@@ -298,6 +300,7 @@ def test_codex_guide_and_zip_download_are_public_but_raw_exe_is_not(tmp_path) ->
         gpt_import_9router_linux_path=str(import_linux_path),
         gpt_import_9router_windows_zip_path=str(import_windows_zip_path),
         gpt_import_9router_linux_zip_path=str(import_linux_zip_path),
+        gpt_import_9router_macos_zip_path=str(import_macos_zip_path),
     )
     engine = create_async_engine("sqlite+aiosqlite:///:memory:")
     sessions = async_sessionmaker(engine, expire_on_commit=False)
@@ -340,6 +343,7 @@ def test_codex_guide_and_zip_download_are_public_but_raw_exe_is_not(tmp_path) ->
         import_page = client.get("/codex-api/import-gpt-9router")
         assert import_page.status_code == 200
         assert "Import GPT vào" in import_page.text
+        assert "python3 import_to_9router_macos.py" in import_page.text
         windows_tool = client.get("/codex-api/download/import-gpt-9router/windows")
         assert windows_tool.status_code == 200
         assert windows_tool.headers["content-type"].startswith("application/zip")
@@ -348,6 +352,12 @@ def test_codex_guide_and_zip_download_are_public_but_raw_exe_is_not(tmp_path) ->
         assert linux_tool.status_code == 200
         assert linux_tool.headers["content-type"].startswith("application/zip")
         assert "import_to_9router_linux.zip" in linux_tool.headers["content-disposition"]
+        assert 'href="/codex-api/download/import-gpt-9router/macos"' in import_page.text
+        assert "macOS" in import_page.text
+        macos_tool = client.get("/codex-api/download/import-gpt-9router/macos")
+        assert macos_tool.status_code == 200
+        assert macos_tool.headers["content-type"].startswith("application/zip")
+        assert "import_to_9router_macos.zip" in macos_tool.headers["content-disposition"]
         assert client.get("/codex-api/custom-codex.exe").status_code == 404
 
     asyncio.run(engine.dispose())

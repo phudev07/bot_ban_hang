@@ -247,6 +247,7 @@ def create_public_api_docs_router(settings: Settings) -> APIRouter:
             {
                 "windows_url": "/codex-api/download/import-gpt-9router/windows",
                 "linux_url": "/codex-api/download/import-gpt-9router/linux",
+                "macos_url": "/codex-api/download/import-gpt-9router/macos",
             },
         )
         response.headers["Cache-Control"] = "public, max-age=300"
@@ -273,6 +274,18 @@ def create_public_api_docs_router(settings: Settings) -> APIRouter:
             bundle,
             media_type="application/zip",
             filename="import_to_9router_linux.zip",
+            headers={"Cache-Control": "public, max-age=300", "X-Content-Type-Options": "nosniff"},
+        )
+
+    @router.get("/codex-api/download/import-gpt-9router/macos", response_class=FileResponse)
+    async def download_gpt_import_macos() -> FileResponse:
+        bundle = Path(settings.gpt_import_9router_macos_zip_path)
+        if not bundle.is_file():
+            raise HTTPException(status_code=404, detail="macOS import tool ZIP is temporarily unavailable")
+        return FileResponse(
+            bundle,
+            media_type="application/zip",
+            filename="import_to_9router_macos.zip",
             headers={"Cache-Control": "public, max-age=300", "X-Content-Type-Options": "nosniff"},
         )
 

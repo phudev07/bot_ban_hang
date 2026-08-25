@@ -165,6 +165,7 @@ class Settings(BaseSettings):
     gpt_import_9router_linux_path: str = "/app/downloads/import_to_9router.py"
     gpt_import_9router_windows_zip_path: str = "/app/downloads/import_to_9router_windows.zip"
     gpt_import_9router_linux_zip_path: str = "/app/downloads/import_to_9router_linux.zip"
+    gpt_import_9router_macos_zip_path: str = "/app/downloads/import_to_9router_macos.zip"
     referral_commission_percent: int = 2
 
     inventory_encryption_key: SecretStr

@@ -220,6 +220,18 @@ ssh -i "$HOME\.ssh\codex_vps" root@160.191.243.91 `
   "install -d -m 755 /opt/telegram-sepay-shop/downloads && install -m 644 /tmp/Custom-Codex-Portable.zip /opt/telegram-sepay-shop/downloads/Custom-Codex-Portable.zip && rm -f /tmp/Custom-Codex-Portable.zip"
 ```
 
+The GPT-to-9Router import bundles are also served from the read-only `downloads` volume.
+Upload the macOS bundle when its script changes:
+
+```powershell
+scp -q -i "$HOME\.ssh\codex_vps" `
+  downloads\import_to_9router_macos.zip `
+  root@160.191.243.91:/tmp/import_to_9router_macos.zip
+
+ssh -i "$HOME\.ssh\codex_vps" root@160.191.243.91 `
+  "install -d -m 755 /opt/telegram-sepay-shop/downloads && install -m 644 /tmp/import_to_9router_macos.zip /opt/telegram-sepay-shop/downloads/import_to_9router_macos.zip && rm -f /tmp/import_to_9router_macos.zip"
+```
+
 ## 8. Verify a deployment
 
 Check the marker, containers, internal health, and recent errors:
