@@ -89,6 +89,12 @@ async def initialize_database(engine, session_factory, seed_demo_data: bool) -> 
         )
         await connection.execute(
             text(
+                "ALTER TABLE users ADD COLUMN IF NOT EXISTS "
+                "last_activity_at TIMESTAMPTZ NULL"
+            )
+        )
+        await connection.execute(
+            text(
                 "ALTER TABLE deposits ADD COLUMN IF NOT EXISTS "
                 "currency VARCHAR(3) NOT NULL DEFAULT 'VND'"
             )

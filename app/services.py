@@ -650,6 +650,9 @@ async def ensure_user(
     else:
         user.full_name = telegram_user.full_name
         user.username = telegram_user.username
+    # Keep a bot-specific activity timestamp even when profile fields did not
+    # change, so Admin can identify recently active customers reliably.
+    user.last_activity_at = datetime.now(UTC)
     await ensure_referral_code(session, user)
     return user
 

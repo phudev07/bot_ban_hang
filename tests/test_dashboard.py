@@ -1156,6 +1156,11 @@ def test_admin_core_ledgers_paginate_all_rows(tmp_path) -> None:
         assert "PagedUser-000" not in wallet_users_page.text
         assert "trên tổng <strong>204</strong> khách hàng" in wallet_users_page.text
         assert "Tổng số dư trong bộ lọc: <strong>20.910đ</strong>" in wallet_users_page.text
+        wallet_first_page = client.get("/admin/users?status=wallet&page=1")
+        assert wallet_first_page.text.index("PagedUser-204") < wallet_first_page.text.index(
+            "PagedUser-203"
+        )
+        assert "Hoạt động gần nhất:" in wallet_first_page.text
 
         spent_users_page = client.get("/admin/users?status=spent")
         assert spent_users_page.status_code == 200

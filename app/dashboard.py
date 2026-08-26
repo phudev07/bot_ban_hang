@@ -4444,6 +4444,11 @@ def create_dashboard_router(
             total_spent = func.coalesce(order_stats.c.spent, 0) + func.coalesce(
                 sms_stats.c.sms_spent, 0
             )
+            last_activity = func.coalesce(
+                User.last_activity_at,
+                User.updated_at,
+                User.created_at,
+            )
             if status == "blocked":
                 user_conditions.append(User.is_blocked.is_(True))
             elif status == "started":
@@ -4486,6 +4491,7 @@ def create_dashboard_router(
                     func.coalesce(deposit_stats.c.deposited, 0),
                     func.coalesce(deposit_stats.c.deposited_usd, 0),
                     deposit_stats.c.last_deposit_at,
+                    last_activity,
                 )
                 .outerjoin(order_stats, order_stats.c.user_id == User.telegram_id)
                 .outerjoin(sms_stats, sms_stats.c.user_id == User.telegram_id)
@@ -4509,6 +4515,12 @@ def create_dashboard_router(
                     sms_stats.c.last_sms_at.desc(),
                     User.created_at.desc(),
                 )
+            elif status == "wallet":
+                statement = statement.order_by(
+                    User.balance.desc(),
+                    last_activity.desc(),
+                    User.created_at.desc(),
+                )
             else:
                 statement = statement.order_by(User.created_at.desc())
             user_rows = [
@@ -4522,6 +4534,7 @@ def create_dashboard_router(
                     "deposited": int(deposited),
                     "deposited_usd": int(deposited_usd),
                     "last_deposit_at": last_deposit_at,
+                    "last_activity_at": last_activity_at,
                 }
                 for (
                     user,
@@ -4534,6 +4547,7 @@ def create_dashboard_router(
                     deposited,
                     deposited_usd,
                     last_deposit_at,
+                    last_activity_at,
                 ) in await session.execute(statement)
             ]
         return templates.TemplateResponse(
