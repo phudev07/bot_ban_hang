@@ -78,6 +78,7 @@ from app.rentsim import RentSimClient
 from app.services import (
     approve_direct_purchase_deposit,
     approve_wallet_deposit,
+    active_products,
     available_stock,
     buy_supplier_product,
     cancel_direct_purchase_deposit,
@@ -804,6 +805,15 @@ def create_dashboard_router(
     router = APIRouter()
     route_cache: dict[tuple[str, ...], tuple[float, SupplierRouteFetch]] = {}
     route_cache_locks: dict[tuple[str, ...], asyncio.Lock] = {}
+
+    async def codex_menu_enabled() -> bool:
+        if haji_client is None:
+            return False
+        async with session_factory() as session:
+            return any(
+                (product.supplier_product_id or "").startswith("apicodex_")
+                for product in await active_products(session)
+            )
 
     async def multi_source_route_fetch(
         product: Product,
@@ -6278,7 +6288,7 @@ def create_dashboard_router(
                     reply_markup=main_menu(
                         result.language,
                         sms_enabled=(rentsim_client is not None or autosms_client is not None),
-                        codex_enabled=haji_client is not None,
+                        codex_enabled=await codex_menu_enabled(),
                     ),
                 )
             except Exception:
