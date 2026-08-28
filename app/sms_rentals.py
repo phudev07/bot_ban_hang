@@ -15,6 +15,11 @@ from app.wallet_ledger import apply_wallet_change
 
 ACTIVE_SMS_STATUSES = ("requesting", "pending", "unknown")
 
+# RentSim occasionally answers the rent endpoint with a transient HTTP 500 even
+# though it did not create an order. Retry that exact case with bounded backoff;
+# other provider errors keep their existing refund/reconciliation behavior.
+RENTSIM_HTTP_500_RETRY_DELAYS = (0.25, 0.5, 1.0)
+
 SMS_SOURCE_BY_PROVIDER = {"autosms": "1", "rentsim": "855"}
 SMS_COUNTRY_VI = {"autosms": "+1 American", "rentsim": "+855 Cambodia"}
 SMS_COUNTRY_EN = {"autosms": "+1 American", "rentsim": "+855 Cambodia"}
@@ -125,6 +130,23 @@ def sms_country_name(provider: str, language: str) -> str:
 def _is_ambiguous_rent_error(client: SmsProviderClient, code: str) -> bool:
     checker = getattr(client, "rent_error_is_ambiguous", None)
     return bool(checker(code)) if checker is not None else code == "INVALID_RESPONSE"
+
+
+async def _rent_with_transient_retry(client: SmsProviderClient):
+    """Rent once, retrying only RentSim's known non-ambiguous HTTP 500 error."""
+    for attempt, delay in enumerate((0.0, *RENTSIM_HTTP_500_RETRY_DELAYS)):
+        if delay:
+            await asyncio.sleep(delay)
+        try:
+            return await client.rent()
+        except RentSimError as exc:
+            should_retry = (
+                client.provider == "rentsim"
+                and exc.code == "PROVIDER_HTTP_500"
+                and attempt < len(RENTSIM_HTTP_500_RETRY_DELAYS)
+            )
+            if not should_retry:
+                raise
 
 
 async def sms_availability(
@@ -394,7 +416,7 @@ async def _rent_sms_number_unlocked(
                 balance_after_charge = user.balance
 
         try:
-            provider_rental = await client.rent()
+            provider_rental = await _rent_with_transient_retry(client)
         except RentSimError as exc:
             ambiguous_result = _is_ambiguous_rent_error(client, exc.code)
             provider_error_refunded = (

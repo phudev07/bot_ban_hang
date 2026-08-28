@@ -1,5 +1,6 @@
 import asyncio
 from datetime import UTC, datetime, timedelta
+from unittest.mock import patch
 
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
@@ -32,6 +33,7 @@ class FakeRentSim:
         self.rent_count = 0
         self.otp_status = "pending"
         self.rent_error: str | None = None
+        self.rent_errors: list[str] = []
         self.balance_after = 49_000
         self.snapshot_price = 1_000
         self.rental_price = 0
@@ -56,6 +58,8 @@ class FakeRentSim:
     async def rent(self) -> RentSimRental:
         self.rent_count += 1
         await asyncio.sleep(0.01)
+        if self.rent_errors:
+            raise RentSimError(self.rent_errors.pop(0))
         if self.rent_error:
             raise RentSimError(self.rent_error)
         return RentSimRental(
@@ -548,12 +552,13 @@ def test_http_500_without_provider_order_refunds_and_allows_retry() -> None:
             session.add(User(telegram_id=3061, full_name="Buyer", balance=5_000))
             await session.commit()
 
-        failed = await rent_sms_number(
-            sessions,
-            3061,
-            client,  # type: ignore[arg-type]
-            now=started,
-        )
+        with patch("app.sms_rentals.RENTSIM_HTTP_500_RETRY_DELAYS", (0.0, 0.0, 0.0)):
+            failed = await rent_sms_number(
+                sessions,
+                3061,
+                client,  # type: ignore[arg-type]
+                now=started,
+            )
         assert failed.ok is False
         assert failed.message == "provider_error_refunded"
         assert failed.status == "refunded"
@@ -568,7 +573,7 @@ def test_http_500_without_provider_order_refunds_and_allows_retry() -> None:
             now=started + timedelta(seconds=1),
         )
         assert cooldown.ok is False and cooldown.message == "cooldown"
-        assert client.rent_count == 1
+        assert client.rent_count == 4
 
         retried = await rent_sms_number(
             sessions,
@@ -578,12 +583,43 @@ def test_http_500_without_provider_order_refunds_and_allows_retry() -> None:
         )
         assert retried.ok is True
         assert retried.status == "pending"
-        assert client.rent_count == 2
+        assert client.rent_count == 5
         async with sessions() as session:
             user = await session.get(User, 3061)
             rentals = list(await session.scalars(select(SmsRental).order_by(SmsRental.id)))
             assert user is not None and user.balance == 3_000
             assert [rental.status for rental in rentals] == ["refunded", "pending"]
+        await engine.dispose()
+
+    asyncio.run(scenario())
+
+
+def test_http_500_retries_then_returns_one_provider_rental() -> None:
+    async def scenario() -> None:
+        engine, sessions = await make_database()
+        client = FakeRentSim()
+        client.rent_errors = ["PROVIDER_HTTP_500", "PROVIDER_HTTP_500"]
+        async with sessions() as session:
+            session.add(User(telegram_id=3060, full_name="Buyer", balance=5_000))
+            await session.commit()
+
+        with patch("app.sms_rentals.RENTSIM_HTTP_500_RETRY_DELAYS", (0.0, 0.0, 0.0)):
+            result = await rent_sms_number(
+                sessions,
+                3060,
+                client,  # type: ignore[arg-type]
+            )
+
+        assert result.ok is True
+        assert result.status == "pending"
+        assert client.rent_count == 3
+        async with sessions() as session:
+            user = await session.get(User, 3060)
+            rentals = list(await session.scalars(select(SmsRental)))
+            transactions = list(await session.scalars(select(WalletTransaction)))
+            assert user is not None and user.balance == 3_000
+            assert len(rentals) == 1 and rentals[0].status == "pending"
+            assert [item.kind for item in transactions] == ["sms_rental"]
         await engine.dispose()
 
     asyncio.run(scenario())
@@ -603,14 +639,15 @@ def test_simultaneous_http_500_rentals_refund_each_user_once() -> None:
             )
             await session.commit()
 
-        first, second = await asyncio.gather(
-            rent_sms_number(sessions, 3062, client),  # type: ignore[arg-type]
-            rent_sms_number(sessions, 3063, client),  # type: ignore[arg-type]
-        )
+        with patch("app.sms_rentals.RENTSIM_HTTP_500_RETRY_DELAYS", (0.0, 0.0, 0.0)):
+            first, second = await asyncio.gather(
+                rent_sms_number(sessions, 3062, client),  # type: ignore[arg-type]
+                rent_sms_number(sessions, 3063, client),  # type: ignore[arg-type]
+            )
         assert first.status == "refunded" and second.status == "refunded"
         assert first.message == "provider_error_refunded"
         assert second.message == "provider_error_refunded"
-        assert client.rent_count == 2
+        assert client.rent_count == 8
         async with sessions() as session:
             users = list(await session.scalars(select(User).order_by(User.telegram_id)))
             rentals = list(await session.scalars(select(SmsRental).order_by(SmsRental.id)))
