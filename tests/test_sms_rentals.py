@@ -21,6 +21,7 @@ from app.sms_rentals import (
     poll_pending_sms_rentals,
     refund_sms_rental,
     rent_sms_number,
+    sms_availability,
 )
 
 
@@ -95,6 +96,19 @@ async def make_database():
     async with engine.begin() as connection:
         await connection.run_sync(Base.metadata.create_all)
     return engine, async_sessionmaker(engine, expire_on_commit=False)
+
+
+def test_sms_price_uses_800_vnd_markup_when_source_cost_is_1200() -> None:
+    async def scenario() -> None:
+        client = FakeRentSim(provider="rentsim")
+        client.snapshot_price = 1_200
+
+        availability = await sms_availability(client, markup=800, force=True)
+
+        assert availability.unit_cost == 1_200
+        assert availability.sale_price == 2_000
+
+    asyncio.run(scenario())
 
 
 def test_sms_rental_charges_wallet_enforces_cooldown_and_unlocks_after_otp() -> None:

@@ -170,7 +170,7 @@ def test_enabled_rentsim_requires_key_and_uses_cambodia_chatgpt_defaults() -> No
     )
     assert settings.rentsim_server_id == "kh2"
     assert settings.rentsim_service_id == "chatgpt"
-    assert settings.rentsim_markup == 1_000
+    assert settings.rentsim_markup == 800
     assert settings.rentsim_fallback_price == 1_000
     assert settings.rentsim_cooldown_seconds == 60
     assert settings.rentsim_request_recovery_seconds == 120
@@ -187,7 +187,7 @@ def test_enabled_autosms_requires_key_and_uses_us_chatgpt_defaults() -> None:
     assert settings.autosms_base_url == "https://autosms.site"
     assert settings.autosms_country_id == "us"
     assert settings.autosms_service_id == "chatgpt"
-    assert settings.autosms_markup == 1_000
+    assert settings.autosms_markup == 800
     assert settings.autosms_fallback_price == 1_000
     assert settings.autosms_cooldown_seconds == 60
 
