@@ -2,7 +2,7 @@ import asyncio
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
-from aiogram.types import InlineKeyboardMarkup, ReplyKeyboardMarkup, ReplyKeyboardRemove
+from aiogram.types import InlineKeyboardMarkup, ReplyKeyboardMarkup
 
 from app.handlers import (
     binance_customer_error_message,
@@ -114,12 +114,10 @@ def test_start_home_keeps_quick_actions_and_shows_main_menu() -> None:
             codex_enabled=True,
         )
 
-        assert message.answer.await_count == 3
-        remove_call, quick_call, menu_call = message.answer.await_args_list
-        assert isinstance(remove_call.kwargs["reply_markup"], ReplyKeyboardRemove)
+        assert message.answer.await_count == 2
+        quick_call, menu_call = message.answer.await_args_list
         assert isinstance(quick_call.kwargs["reply_markup"], ReplyKeyboardMarkup)
         assert isinstance(menu_call.kwargs["reply_markup"], InlineKeyboardMarkup)
-        message.answer.return_value.delete.assert_awaited_once()
         menu_callbacks = {
             button.callback_data
             for row in menu_call.kwargs["reply_markup"].inline_keyboard

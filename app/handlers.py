@@ -10,7 +10,7 @@ from aiogram.filters import Command, CommandStart
 from aiogram.filters.command import CommandObject
 from aiogram.filters.exception import ExceptionMessageFilter, ExceptionTypeFilter
 from aiogram.fsm.context import FSMContext
-from aiogram.types import CallbackQuery, ErrorEvent, Message, ReplyKeyboardRemove
+from aiogram.types import CallbackQuery, ErrorEvent, Message
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from sqlalchemy.exc import IntegrityError
@@ -334,6 +334,14 @@ async def edit_or_send_text(message: Message, text: str, **kwargs) -> Message:
     return await message.edit_text(text, **kwargs)
 
 
+async def send_callback_error(callback: CallbackQuery, text: str) -> None:
+    """Keep an already-acknowledged callback responsive while showing its error."""
+    if callback.message is not None:
+        await callback.message.answer(f"⚠️ {text}")
+    else:
+        await callback.answer(text, show_alert=True)
+
+
 async def send_home_with_navigation(
     message: Message,
     user: User,
@@ -347,21 +355,10 @@ async def send_home_with_navigation(
         if user.language == "vi"
         else "⌨️ <b>Quick actions are ready</b>"
     )
-    refresh_message = await message.answer(
-        "🔄 Đang làm mới bàn phím…"
-        if user.language == "vi"
-        else "🔄 Refreshing keyboard…",
-        reply_markup=ReplyKeyboardRemove(),
-    )
-    await asyncio.sleep(0.15)
     await message.answer(
         quick_access_text,
         reply_markup=quick_access_keyboard(user.language),
     )
-    try:
-        await refresh_message.delete()
-    except TelegramBadRequest:
-        pass
     await message.answer(
         home_text(user, settings),
         reply_markup=main_menu(
@@ -402,6 +399,24 @@ def create_router(
     }
     sms_enabled = bool(sms_sources)
     binance_pay_enabled = binance_pay_client is not None
+    menu_products_cache: tuple[float, list[Product]] | None = None
+    menu_products_cache_lock = asyncio.Lock()
+
+    async def menu_products(session: AsyncSession) -> list[Product]:
+        """Cache only catalog data used for menus; checkout always rechecks stock."""
+        nonlocal menu_products_cache
+        now = asyncio.get_running_loop().time()
+        cached = menu_products_cache
+        if cached is not None and now - cached[0] < 3:
+            return cached[1]
+        async with menu_products_cache_lock:
+            now = asyncio.get_running_loop().time()
+            cached = menu_products_cache
+            if cached is not None and now - cached[0] < 3:
+                return cached[1]
+            products = await active_products(session)
+            menu_products_cache = (now, products)
+            return products
 
     async def codex_menu_enabled(session: AsyncSession) -> bool:
         """Show the Codex menu only while at least one Codex product is visible."""
@@ -409,7 +424,7 @@ def create_router(
             return False
         return any(
             (product.supplier_product_id or "").startswith("apicodex_")
-            for product in await active_products(session)
+            for product in await menu_products(session)
         )
 
     def sms_source_settings(source_key: str) -> tuple[int, int, int]:
@@ -518,7 +533,7 @@ def create_router(
 
     async def send_quick_buy(message: Message, session: AsyncSession) -> None:
         user = await get_or_create_user(message, session)
-        products = await active_products(session)
+        products = await menu_products(session)
         flash_prices = await active_flash_sale_prices(
             session, [product.id for product in products]
         )
@@ -846,7 +861,7 @@ def create_router(
     async def quick_buy(callback: CallbackQuery, session: AsyncSession) -> None:
         await callback.answer()
         user = await get_or_create_user(callback, session)
-        products = await active_products(session)
+        products = await menu_products(session)
         flash_prices = await active_flash_sale_prices(
             session, [product.id for product in products]
         )
@@ -878,7 +893,7 @@ def create_router(
         user = await get_or_create_user(callback, session)
         products = [
             product
-            for product in await active_products(session)
+            for product in await menu_products(session)
             if product.fulfillment_source == "haji"
             and (product.supplier_product_id or "").startswith("apicodex_")
         ]
@@ -1256,7 +1271,7 @@ def create_router(
     ) -> None:
         await callback.answer()
         user = await get_or_create_user(callback, session)
-        products = await active_products(session)
+        products = await menu_products(session)
         def is_gg18m(product: Product) -> bool:
             name = f"{product.name_vi} {product.name_en}".lower()
             return "18m" in name and any(
@@ -2179,6 +2194,8 @@ def create_router(
                 show_alert=True,
             )
             return
+        # Acknowledge before the stock/pricing reads so Telegram stops showing a spinner.
+        await callback.answer()
         stock = await available_stock(session, product.id)
         pricing = await product_pricing(
             session,
@@ -2187,11 +2204,11 @@ def create_router(
             expected_flash_sale_id=expected_flash_sale_id,
         )
         if pricing is None and expected_flash_sale_id is not None:
-            await callback.answer(
+            await send_callback_error(
+                callback,
                 "Suất Flash Sale vừa hết hoặc giá vốn đã tăng."
                 if user.language == "vi"
                 else "The Flash Sale allocation ended or supplier cost increased.",
-                show_alert=True,
             )
             return
         display_price = pricing.final_unit_price if pricing is not None else product.price
@@ -2210,11 +2227,11 @@ def create_router(
                         origin=origin,
                     )
                 )
-            await callback.answer(
+            await send_callback_error(
+                callback,
                 "Sản phẩm đã hết hàng."
                 if user.language == "vi"
                 else "This product is out of stock.",
-                show_alert=True,
             )
             return
         text = (
@@ -2256,7 +2273,6 @@ def create_router(
                     usd_to_vnd=settings.binance_pay_usd_to_vnd,
                 ),
             )
-        await callback.answer()
 
     @router.callback_query(F.data.startswith("customqty:"))
     async def custom_purchase_quantity(
@@ -2279,13 +2295,15 @@ def create_router(
                 show_alert=True,
             )
             return
+        # Acknowledge before the remaining database reads and message edit.
+        await callback.answer()
         stock = await available_stock(session, product.id)
         if stock <= 0:
-            await callback.answer(
+            await send_callback_error(
+                callback,
                 "Sản phẩm đã hết hàng."
                 if user.language == "vi"
                 else "This product is out of stock.",
-                show_alert=True,
             )
             return
         pricing = await product_pricing(
@@ -2295,11 +2313,11 @@ def create_router(
             expected_flash_sale_id=expected_flash_sale_id,
         )
         if pricing is None and expected_flash_sale_id is not None:
-            await callback.answer(
+            await send_callback_error(
+                callback,
                 "Suất Flash Sale vừa hết hoặc giá vốn đã tăng."
                 if user.language == "vi"
                 else "The Flash Sale allocation ended or supplier cost increased.",
-                show_alert=True,
             )
             return
         flash_limit = (
@@ -2321,7 +2339,6 @@ def create_router(
         )
         if callback.message:
             await callback.message.edit_text(prompt, reply_markup=back_menu(user.language))
-        await callback.answer()
 
     @router.message(PurchaseStates.waiting_for_quantity)
     async def receive_purchase_quantity(
@@ -2491,6 +2508,11 @@ def create_router(
                 show_alert=True,
             )
             return
+        await callback.answer(
+            "Đang kiểm tra đơn hàng..."
+            if user.language == "vi"
+            else "Checking your order..."
+        )
         if callback.message and await show_seller_purchase_confirmation(
             callback.message,
             user,
@@ -2499,13 +2521,7 @@ def create_router(
             session,
             expected_flash_sale_id=expected_flash_sale_id,
         ):
-            await callback.answer()
             return
-        await callback.answer(
-            "Đang xử lý đơn hàng..."
-            if user.language == "vi"
-            else "Processing your order..."
-        )
         if callback.message:
             await complete_product_purchase(
                 callback.message,
@@ -2639,6 +2655,10 @@ def create_router(
             )
             return
 
+        await callback.answer(
+            "Đang tạo mã QR..." if user.language == "vi" else "Creating QR payment..."
+        )
+
         try:
             pricing = await product_pricing(
                 session,
@@ -2650,25 +2670,25 @@ def create_router(
                 raise_coupon_error=True,
             )
         except CouponValidationError as exc:
-            await callback.answer(
+            await send_callback_error(
+                callback,
                 coupon_error_message(exc.code, user.language),
-                show_alert=True,
             )
             return
         if pricing is None:
             if expected_flash_sale_id is not None:
-                await callback.answer(
+                await send_callback_error(
+                    callback,
                     "Suất Flash Sale vừa hết hoặc giá vốn đã tăng."
                     if user.language == "vi"
                     else "The Flash Sale allocation ended or supplier cost increased.",
-                    show_alert=True,
                 )
                 return
-            await callback.answer(
+            await send_callback_error(
+                callback,
                 "Mã giảm giá không còn hiệu lực."
                 if user.language == "vi"
                 else "This discount code is no longer valid.",
-                show_alert=True,
             )
             return
         checkout_quote = await product_checkout_quote(
@@ -2683,11 +2703,11 @@ def create_router(
             haji_client=haji_client,
         )
         if not checkout_quote.available:
-            await callback.answer(
+            await send_callback_error(
+                callback,
                 "Nguồn hàng vừa thay đổi, vui lòng thử lại."
                 if user.language == "vi"
                 else "Stock just changed. Please try again.",
-                show_alert=True,
             )
             return
         pricing = checkout_quote.pricing
@@ -2701,11 +2721,11 @@ def create_router(
                 for allocation in supplier_quote.allocations
             )
         ):
-            await callback.answer(
+            await send_callback_error(
+                callback,
                 "Giá vốn phần hàng còn lại cao hơn giá Flash Sale."
                 if user.language == "vi"
                 else "The source cost for the remaining items is higher than the Flash Sale price.",
-                show_alert=True,
             )
             return
         total_amount = checkout_quote.total_amount
@@ -2730,29 +2750,29 @@ def create_router(
                 max_pending_deposits=settings.max_pending_deposits_per_user,
             )
         except PendingDepositLimitReached:
-            await callback.answer(
+            await send_callback_error(
+                callback,
                 "Bạn đang có quá nhiều QR chờ thanh toán. Hãy dùng QR cũ hoặc chờ hết hạn."
                 if user.language == "vi"
                 else "You have too many pending QR payments. Use an existing QR or wait for one to expire.",
-                show_alert=True,
             )
             return
         except FlashSaleUnavailable:
             await session.rollback()
-            await callback.answer(
+            await send_callback_error(
+                callback,
                 "Suất Flash Sale vừa hết. Vui lòng mở lại sản phẩm để xem giá hiện tại."
                 if user.language == "vi"
                 else "The Flash Sale allocation ended. Reopen the product to see the current price.",
-                show_alert=True,
             )
             return
         except ValueError:
             await session.rollback()
-            await callback.answer(
+            await send_callback_error(
+                callback,
                 "Giá seller vừa thay đổi. Vui lòng mở lại sản phẩm để lấy giá mới."
                 if user.language == "vi"
                 else "Seller pricing just changed. Please reopen the product.",
-                show_alert=True,
             )
             return
         qr_url = build_sepay_qr_url(
@@ -2866,7 +2886,6 @@ def create_router(
                 sent.chat.id,
                 sent.message_id,
             )
-        await callback.answer()
 
     @router.callback_query(F.data == "menu:deposit")
     async def deposit_menu(callback: CallbackQuery, session: AsyncSession) -> None:
