@@ -395,7 +395,6 @@ def create_router(
     codex_docs_url = (
         f"{settings.shop_api_base_url.rstrip('/').removesuffix('/v1')}/codex-api"
     )
-    codex_enabled = haji_client is not None
     sms_sources = {
         key: value
         for key, value in (("1", autosms_client), ("855", rentsim_client))
@@ -403,6 +402,15 @@ def create_router(
     }
     sms_enabled = bool(sms_sources)
     binance_pay_enabled = binance_pay_client is not None
+
+    async def codex_menu_enabled(session: AsyncSession) -> bool:
+        """Show the Codex menu only while at least one Codex product is visible."""
+        if haji_client is None:
+            return False
+        return any(
+            (product.supplier_product_id or "").startswith("apicodex_")
+            for product in await active_products(session)
+        )
 
     def sms_source_settings(source_key: str) -> tuple[int, int, int]:
         if source_key == "1":
@@ -648,7 +656,7 @@ def create_router(
             user,
             settings,
             sms_enabled=sms_enabled,
-            codex_enabled=codex_enabled,
+            codex_enabled=await codex_menu_enabled(session),
         )
 
     @router.message(Command("muanhanh"))
@@ -681,7 +689,7 @@ def create_router(
             reply_markup=main_menu(
                 user.language,
                 sms_enabled=sms_enabled,
-                codex_enabled=codex_enabled,
+                codex_enabled=await codex_menu_enabled(session),
             ),
             disable_web_page_preview=True,
         )
@@ -777,7 +785,7 @@ def create_router(
                 reply_markup=main_menu(
                     user.language,
                     sms_enabled=sms_enabled,
-                    codex_enabled=codex_enabled,
+                    codex_enabled=await codex_menu_enabled(session),
                 ),
                 disable_web_page_preview=True,
             )
@@ -3718,7 +3726,7 @@ def create_router(
                 reply_markup=main_menu(
                     user.language,
                     sms_enabled=sms_enabled,
-                    codex_enabled=codex_enabled,
+                    codex_enabled=await codex_menu_enabled(session),
                 ),
                 disable_web_page_preview=True,
             )
@@ -3746,7 +3754,7 @@ def create_router(
                 reply_markup=main_menu(
                     user.language,
                     sms_enabled=sms_enabled,
-                    codex_enabled=codex_enabled,
+                    codex_enabled=await codex_menu_enabled(session),
                 ),
                 disable_web_page_preview=True,
             )
