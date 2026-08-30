@@ -526,6 +526,38 @@ def test_quick_buy_uses_available_inventory_for_local_product_stock() -> None:
     asyncio.run(scenario())
 
 
+def test_quick_buy_includes_haji_claude_service_products() -> None:
+    async def scenario() -> None:
+        engine, sessions = await make_database()
+        async with sessions() as session:
+            category = Category(name_vi="API CODEX & CLAUDE", name_en="CODEX & CLAUDE API")
+            session.add(category)
+            await session.flush()
+            session.add(
+                Product(
+                    category_id=category.id,
+                    name_vi="Claude Team Standard 1 tháng",
+                    name_en="Claude Team Standard 1 month",
+                    price=450_000,
+                    product_type="service",
+                    fulfillment_source="haji",
+                    supplier_product_id="claude_addteam1x25",
+                    external_stock=2,
+                )
+            )
+            await session.commit()
+
+        async with sessions() as session:
+            products = await active_products(session)
+            assert [product.supplier_product_id for product in products] == [
+                "claude_addteam1x25"
+            ]
+            assert products[0]._menu_stock == 2
+        await engine.dispose()
+
+    asyncio.run(scenario())
+
+
 class FakeSupplier:
     def __init__(self, *, balance: int = 100_000, stock: int = 100) -> None:
         self.balance = balance

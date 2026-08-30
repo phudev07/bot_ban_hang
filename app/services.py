@@ -10,7 +10,7 @@ from datetime import UTC, datetime, timedelta
 from decimal import Decimal, ROUND_HALF_UP
 
 from aiogram.types import User as TelegramUser
-from sqlalchemy import String, case, cast, func, or_, select
+from sqlalchemy import String, and_, case, cast, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from sqlalchemy.orm import selectinload
 
@@ -4712,6 +4712,13 @@ async def active_products(session: AsyncSession, category_id: int | None = None)
         Product.name_vi.ilike("%gg %"),
         Product.name_en.ilike("%google%"),
     )
+    menu_product_type = or_(
+        Product.product_type == "account",
+        and_(
+            Product.fulfillment_source == "haji",
+            Product.supplier_product_id.ilike("claude\\_%", escape="\\"),
+        ),
+    )
     statement = (
         select(Product, menu_stock.label("menu_stock"))
         .join(Category, Category.id == Product.category_id)
@@ -4721,7 +4728,7 @@ async def active_products(session: AsyncSession, category_id: int | None = None)
             Category.active.is_(True),
             Category.archived_at.is_(None),
             Product.fulfillment_source.in_(SELLABLE_FULFILLMENT_SOURCES),
-            Product.product_type == "account",
+            menu_product_type,
         )
         .order_by(
             case(
