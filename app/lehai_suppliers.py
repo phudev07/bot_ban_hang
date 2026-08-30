@@ -684,7 +684,11 @@ async def ensure_lehai_products(
         product_ids = (
             configured_product_ids
             if settings.lehai_enabled
-            else ((JIO_18M_PRODUCT_ID,) if settings.canboso_enabled else ())
+            else (
+                (JIO_18M_PRODUCT_ID,)
+                if settings.canboso_enabled or settings.haji_enabled
+                else ()
+            )
         )
         configured_ids = set(product_ids)
         existing_products = list(
@@ -777,6 +781,7 @@ async def refresh_lehai_product(
     *,
     sumistore_client: ExternalSupplierClient | None = None,
     canboso_client: ExternalSupplierClient | None = None,
+    haji_client: ExternalSupplierClient | None = None,
     route_fetch: SupplierRouteFetch | None = None,
 ) -> int:
     if product.fulfillment_source != "lehai" or not product.supplier_product_id:
@@ -805,16 +810,28 @@ async def refresh_lehai_product(
         product.supplier_synced_at = datetime.now(UTC)
         await session.flush()
         return product.external_stock
+    has_secondary_supplier = (
+        route_fetch is not None
+        or (
+            canboso_client is not None
+            and "canboso" in enabled_providers
+        )
+        or (
+            haji_client is not None
+            and "haji" in enabled_providers
+        )
+    )
     if is_multi_supplier_product(
         product.fulfillment_source,
         product.supplier_product_id,
-    ) and canboso_client is not None and "canboso" in enabled_providers:
+    ) and has_secondary_supplier:
         fetched = route_fetch or await fetch_product_supplier_routes(
             product.fulfillment_source,
             product.supplier_product_id,
             sumistore_client,
             client,
             canboso_client,
+            haji_client=haji_client,
             enabled_providers=enabled_providers,
         )
         for failure in fetched.failures:
@@ -875,6 +892,26 @@ async def refresh_lehai_product(
             and canboso_route.snapshot.effective_stock > 0
             and supplier_stock > previous_supplier_stock
         )
+        haji_route = next(
+            (route for route in fetched.routes if route.provider == "haji"),
+            None,
+        )
+        haji_state: ProductSupplierState | None = None
+        if haji_route is not None:
+            haji_state = await _track_secondary_supplier_state(
+                session,
+                product,
+                provider="haji",
+                owner_balance=haji_route.snapshot.owner_balance,
+                effective_stock=haji_route.snapshot.effective_stock,
+            )
+        haji_topup_ready = bool(
+            haji_state is not None
+            and haji_state.topup_pending
+            and haji_route is not None
+            and haji_route.snapshot.effective_stock > 0
+            and supplier_stock > previous_supplier_stock
+        )
         primary_route = next(
             (route for route in fetched.routes if route.provider == "lehai"),
             None,
@@ -916,12 +953,22 @@ async def refresh_lehai_product(
             if route.snapshot.effective_stock > 0 and route.snapshot.unit_price > 0
         )
         if priced_routes:
-            cheapest_route = min(priced_routes, key=supplier_route_sort_key)
+            # Keep the shop's public GG 18M price anchored to Canboso while
+            # it has stock.  The route planner may still fulfill from a
+            # cheaper Haji/Le Hai route, preserving the extra margin.
+            canboso_priced_route = next(
+                (route for route in priced_routes if route.provider == "canboso"),
+                None,
+            )
+            price_route = canboso_priced_route or min(
+                priced_routes,
+                key=supplier_route_sort_key,
+            )
             await apply_supplier_price(
                 session,
                 product,
-                cheapest_route.snapshot.unit_price,
-                alert_provider=cheapest_route.provider,
+                price_route.snapshot.unit_price,
+                alert_provider=price_route.provider,
             )
         product.external_stock = supplier_stock + recovered_stock
         await apply_supplier_stock(
@@ -931,6 +978,7 @@ async def refresh_lehai_product(
             notify_on_increase=(
                 product.notify_stock_without_balance_topup
                 or canboso_topup_ready
+                or haji_topup_ready
                 or (
                     balance_increased
                     and not refund_increase
@@ -941,6 +989,8 @@ async def refresh_lehai_product(
             alert_provider=(
                 "canboso"
                 if canboso_topup_ready
+                else "haji"
+                if haji_topup_ready
                 else min(priced_routes, key=supplier_route_sort_key).provider
                 if priced_routes
                 else None
@@ -948,6 +998,8 @@ async def refresh_lehai_product(
         )
         if canboso_topup_ready and canboso_state is not None:
             canboso_state.topup_pending = False
+        if haji_topup_ready and haji_state is not None:
+            haji_state.topup_pending = False
         if route_topup_to_gpt:
             await session.execute(
                 update(ProductStockAlert)
@@ -1090,6 +1142,7 @@ async def sync_lehai_products(
     client: LeHaiPremiumClient | None,
     sumistore_client: ExternalSupplierClient | None = None,
     canboso_client: ExternalSupplierClient | None = None,
+    haji_client: ExternalSupplierClient | None = None,
 ) -> None:
     async with session_factory() as session:
         product_ids = list(
@@ -1121,4 +1174,5 @@ async def sync_lehai_products(
                 client,
                 sumistore_client=sumistore_client,
                 canboso_client=canboso_client,
+                haji_client=haji_client,
             )

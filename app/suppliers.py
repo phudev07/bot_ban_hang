@@ -33,7 +33,10 @@ SUPPLIER_ALTERNATIVE_PRODUCTS: dict[
     tuple[str, str], tuple[tuple[str, str], ...]
 ] = {
     ("sumistore", "SP-GEF55PBV"): (("lehai", "gpt_bh48_1m"),),
-    ("lehai", "cdk_ggpro_18m"): (("canboso", "gg18m"),),
+    ("lehai", "cdk_ggpro_18m"): (
+        ("canboso", "gg18m"),
+        ("haji", "link_gemini_18moth"),
+    ),
 }
 DEFINITIVE_PRODUCT_UNAVAILABLE_CODES = {
     "PRODUCT_NOT_FOUND",
@@ -259,7 +262,8 @@ def enabled_supplier_providers(product: Product) -> frozenset[str]:
 
 
 def supplier_route_sort_key(route: SupplierRoute) -> tuple[int, int, str]:
-    # Equal-cost GPT prefers Sumi; equal-cost GG 18M prefers Canboso over Le Hai.
+    # Equal-cost GPT prefers Sumi; equal-cost GG 18M keeps the existing
+    # Canboso-over-Le Hai priority, with Haji used as the next tie-breaker.
     provider_priority = {
         "sumistore": 0,
         "canboso": 1,

@@ -1214,6 +1214,7 @@ async def lehai_sync_worker(
     interval_seconds: int,
     sumistore_client: SumistoreClient | None = None,
     canboso_client: ExternalSupplierClient | None = None,
+    haji_client: HajiClient | None = None,
 ) -> None:
     while True:
         try:
@@ -1222,6 +1223,7 @@ async def lehai_sync_worker(
                 client,
                 sumistore_client,
                 canboso_client,
+                haji_client,
             )
         except Exception:
             logging.getLogger(__name__).exception(
@@ -1755,12 +1757,21 @@ async def main() -> None:
             lehai_sync_worker(
                 session_factory,
                 lehai_client,
-                min(settings.lehai_sync_seconds, settings.canboso_sync_seconds),
+                min(
+                    settings.lehai_sync_seconds,
+                    settings.canboso_sync_seconds,
+                    settings.haji_sync_seconds,
+                ),
                 supplier_client,
                 canboso_client,
+                haji_client,
             )
         )
-        if lehai_client is not None or canboso_client is not None
+        if (
+            lehai_client is not None
+            or canboso_client is not None
+            or haji_client is not None
+        )
         else None
     )
     lehai_audit_task = (

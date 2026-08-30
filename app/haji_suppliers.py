@@ -36,7 +36,14 @@ HAJI_CODEX_PRODUCT_NAMES = {
         "Codex API 100M Tokens · 24 hours",
     ),
 }
-HAJI_SUPPORTED_KINDS = frozenset({"netflix", "gpt_gcash", "gpt_k12", "codex"})
+# Link Gemini 18M is fulfilled through the canonical Le Hai product so the
+# customer sees one listing while the route planner can choose the cheapest
+# enabled supplier.  Keep the Haji catalog kind for route discovery, but do
+# not expose it as a second standalone product.
+HAJI_ROUTE_ONLY_PRODUCT_IDS = frozenset({"link_gemini_18moth"})
+HAJI_SUPPORTED_KINDS = frozenset(
+    {"netflix", "gpt_gcash", "gpt_k12", "codex", "gemini_18m"}
+)
 
 
 @dataclass(frozen=True)
@@ -70,6 +77,8 @@ def _safe_int(value: object) -> int:
 def haji_product_kind(value: object) -> str | None:
     normalized = _normalized(value).replace("_", " ").replace("-", " ")
     normalized = re.sub(r"\s+", " ", normalized).strip()
+    if "gemini" in normalized and re.search(r"\b18m(?:oth|onth)?\b", normalized):
+        return "gemini_18m"
     if "codex" in normalized and re.search(r"\b(?:10|50|100)\s*m\b", normalized):
         return "codex"
     if "netflix" in normalized:
@@ -90,6 +99,8 @@ def haji_product_markup(product_id: str, default_markup: int) -> int:
 
 
 def haji_product_names(source: HajiProduct) -> tuple[str, str]:
+    if source.product_id in HAJI_ROUTE_ONLY_PRODUCT_IDS:
+        return "Link GG Pro Jio 18M", "Google Pro Jio 18M Link"
     return HAJI_CODEX_PRODUCT_NAMES.get(source.product_id, (source.name, source.name))
 
 
@@ -435,10 +446,17 @@ async def ensure_haji_products(
         )
         if client is None:
             for product in existing:
+                if product.supplier_product_id in HAJI_ROUTE_ONLY_PRODUCT_IDS:
+                    product.active = False
                 product.external_stock = 0
             await session.commit()
             return
         if catalog_failed:
+            for product in existing:
+                if product.supplier_product_id in HAJI_ROUTE_ONLY_PRODUCT_IDS:
+                    product.active = False
+                    product.external_stock = 0
+            await session.commit()
             return
 
         gpt_category, netflix_category, codex_category = await _ensure_categories(session)
@@ -449,10 +467,18 @@ async def ensure_haji_products(
         }
         live_ids = {product.product_id for product in products}
         for product in existing:
+            if product.supplier_product_id in HAJI_ROUTE_ONLY_PRODUCT_IDS:
+                # This catalog item is an alternative route for the canonical
+                # Le Hai Gemini listing, never a separate customer product.
+                product.active = False
+                product.external_stock = 0
+                continue
             if product.supplier_product_id not in live_ids:
                 product.external_stock = 0
 
         for source in products:
+            if source.product_id in HAJI_ROUTE_ONLY_PRODUCT_IDS:
+                continue
             category = (
                 netflix_category
                 if source.kind == "netflix"

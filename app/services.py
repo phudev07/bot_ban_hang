@@ -26,6 +26,7 @@ from app.flash_sales import (
 )
 from app.haji_suppliers import HajiClient, refresh_haji_product
 from app.lehai_suppliers import (
+    JIO_18M_PRODUCT_ID,
     LeHaiPremiumClient,
     refresh_lehai_product,
     restore_recent_sale_purchase_backoff,
@@ -603,6 +604,7 @@ async def refresh_product_from_supplier(
             lehai_client,
             sumistore_client=sumistore_client,
             canboso_client=canboso_client,
+            haji_client=haji_client,
         )
     if product.fulfillment_source == "canboso" and canboso_client is not None:
         snapshot = await canboso_client.fetch_snapshot(product.supplier_product_id or "")
@@ -877,6 +879,14 @@ class ProductCheckoutQuote:
 
 def supplier_sale_price(product: Product, supplier_price: int, provider: str) -> int:
     if product.price_lock_enabled:
+        return int(product.price)
+    if (
+        provider == "haji"
+        and product.fulfillment_source == "lehai"
+        and product.supplier_product_id == JIO_18M_PRODUCT_ID
+    ):
+        # Haji is a cheaper fallback route, but GG 18M keeps the public price
+        # established by the Canboso route so the saving remains shop margin.
         return int(product.price)
     sale_price = int(supplier_price) + max(0, int(product.supplier_markup))
     return round_vnd_to_thousand(sale_price) if provider == "canboso" else sale_price
@@ -1937,6 +1947,7 @@ async def _purchase_product(
                                 lehai_client,
                                 sumistore_client=supplier_client,
                                 canboso_client=canboso_client,
+                                haji_client=haji_client,
                                 route_fetch=multi_route_fetch,
                             )
                         else:
@@ -3853,6 +3864,7 @@ async def _process_sepay_payment(
                                             lehai_client,
                                             sumistore_client=supplier_client,
                                             canboso_client=canboso_client,
+                                            haji_client=haji_client,
                                             route_fetch=multi_route_fetch,
                                         )
                                     else:

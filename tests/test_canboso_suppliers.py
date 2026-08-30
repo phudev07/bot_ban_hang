@@ -322,6 +322,60 @@ def test_gg18m_purchase_prefers_cheaper_canboso_source() -> None:
     asyncio.run(scenario())
 
 
+def test_gg18m_haji_fallback_keeps_canboso_public_price() -> None:
+    async def scenario() -> None:
+        engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+        async with engine.begin() as connection:
+            await connection.run_sync(Base.metadata.create_all)
+        sessions = async_sessionmaker(engine, expire_on_commit=False)
+        cipher = SecretCipher(Fernet.generate_key().decode())
+        lehai = RoutedSupplier("lehai", price=20_000, stock=10)
+        canboso = RoutedSupplier("canboso", price=11_000, stock=10)
+        haji = RoutedSupplier("haji", price=9_000, stock=10)
+        async with sessions() as session:
+            category = Category(name_vi="Gemini", name_en="Gemini")
+            session.add(category)
+            await session.flush()
+            product = Product(
+                category_id=category.id,
+                name_vi="Link GG Pro Jio 18M",
+                name_en="Google Pro Jio 18M",
+                price=25_000,
+                allow_quantity=True,
+                max_quantity=100,
+                fulfillment_source="lehai",
+                supplier_product_id="cdk_ggpro_18m",
+                supplier_markup=5_000,
+                lehai_api_enabled=True,
+                canboso_api_enabled=True,
+            )
+            user = User(telegram_id=234567, full_name="Buyer", balance=100_000)
+            session.add_all([product, user])
+            await session.commit()
+
+        result = await purchase_product(
+            sessions,
+            user.telegram_id,
+            product.id,
+            cipher,
+            1,
+            lehai_client=lehai,  # type: ignore[arg-type]
+            canboso_client=canboso,  # type: ignore[arg-type]
+            haji_client=haji,  # type: ignore[arg-type]
+            supplier_idempotency_key="gg18m-haji-cheapest-source",
+        )
+
+        assert result.ok is True
+        assert result.total_amount == 16_000
+        assert haji.buy_calls[0][:2] == ("link_gemini_18moth", 1)
+        assert canboso.buy_calls == []
+        assert result.orders[0].supplier_provider == "haji"
+        assert result.orders[0].amount == 16_000
+        await engine.dispose()
+
+    asyncio.run(scenario())
+
+
 def test_gg18m_purchase_falls_back_to_lehai_when_canboso_has_no_stock() -> None:
     async def scenario() -> None:
         engine = create_async_engine("sqlite+aiosqlite:///:memory:")
