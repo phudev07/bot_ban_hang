@@ -59,6 +59,7 @@ CODEX_GATEWAY_URL = "https://aixingialaire.shop/cdx/v1"
 CODEX_9ROUTER_URL = "http://localhost:20128/dashboard/cli-tools/codex"
 CODEX_SCREENSHOT_PATH = Path(__file__).parent / "static" / "codex-9router.png"
 CODEX_GUIDE_ASSET_PATHS = {
+    "config.png": Path(__file__).parent / "static" / "codex-9router-config.png",
     "providers.png": Path(__file__).parent / "static" / "codex-9router-providers.png",
     "add-provider.png": Path(__file__).parent / "static" / "codex-9router-add-provider.png",
     "provider-fields.png": Path(__file__).parent / "static" / "codex-9router-provider-fields.png",
