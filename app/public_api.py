@@ -55,7 +55,6 @@ from app.utils import (
 
 templates = Jinja2Templates(directory=Path(__file__).parent / "templates")
 logger = logging.getLogger(__name__)
-CODEX_ACTIVATION_URL = "https://api.maxdonchal.bond/"
 CODEX_GATEWAY_URL = "https://aixingialaire.shop/cdx/v1"
 CODEX_9ROUTER_URL = "http://localhost:20128/dashboard/cli-tools/codex"
 CODEX_SCREENSHOT_PATH = Path(__file__).parent / "static" / "codex-9router.png"
@@ -193,7 +192,6 @@ def create_public_api_docs_router(settings: Settings) -> APIRouter:
             request,
             "codex_api_guide.html",
             {
-                "activation_url": CODEX_ACTIVATION_URL,
                 "gateway_url": CODEX_GATEWAY_URL,
                 "router_url": CODEX_9ROUTER_URL,
                 "models": CODEX_MODELS,

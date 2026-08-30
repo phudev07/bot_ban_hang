@@ -180,13 +180,16 @@
     }
     .button:hover { filter: brightness(1.12); transform: translateY(-1px); }
     .link-box, .code-box {
+      display: block;
       margin-top: 14px;
       padding: 11px 13px;
       border: 1px solid var(--line);
       border-radius: 10px;
       background: #020707;
     }
-    .link-box a, .code-box code { color: var(--lime); overflow-wrap: anywhere; }
+    .link-box a, .link-box code, .code-box code { color: var(--lime); overflow-wrap: anywhere; }
+    .link-box a { display: inline-block; max-width: 100%; line-height: 1.5; }
+    .link-box:hover { border-color: var(--cyan); }
     .code-box { position: relative; padding-right: 90px; }
     .code-box pre { margin: 0; color: #d8fff5; font-size: 12px; line-height: 1.7; white-space: pre-wrap; }
     .copy {
@@ -283,35 +286,25 @@
 <body>
   <div class="layout">
     <aside class="sidebar" aria-label="Mục lục hướng dẫn">
-      <a class="brand" href="#activate">
+      <a class="brand" href="#provider">
         <span class="brand-mark">PT</span>
         <div><strong>PHP TOOL SHOP</strong><small>Codex Gateway</small></div>
       </a>
       <p class="toc-label">Thiết lập 9Router</p>
       <nav class="toc">
-        <a href="#activate"><b>01</b>Kích hoạt key</a>
-        <a href="#provider"><b>02</b>Tạo provider</a>
-        <a href="#key"><b>03</b>Thêm API key</a>
-        <a href="#config"><b>04</b>config.toml</a>
+        <a href="#provider"><b>01</b>Tạo provider</a>
+        <a href="#key"><b>02</b>Thêm API key</a>
+        <a href="#config"><b>03</b>config.toml</a>
       </nav>
       <p class="support">Bot mua hàng<br><strong>@phptool_bot</strong></p>
     </aside>
 
     <main>
-      <section class="section" id="activate">
-        <span class="eyebrow">Codex Gateway · PHP TOOL Shop</span>
-        <h1>Kích hoạt key và kết nối <em>Codex Desktop</em></h1>
-        <p class="lead">Làm theo đúng thứ tự bên dưới để dùng key với gateway mới qua 9Router. Không cần cấu hình trong CLI.</p>
-        <a class="button" href="{{ activation_url }}" target="_blank" rel="noreferrer">Mở trang kích hoạt key ↗</a>
-        <div class="link-box"><strong>Key sau khi kích hoạt</strong><br><code>sk-xxxxxxxxxxxxxxxx</code></div>
-        <p class="note">Không gửi key <code>sk-</code> cho người khác. Thời hạn gói bắt đầu tính từ lúc kích hoạt.</p>
-      </section>
-
       <section class="section" id="provider">
-        <span class="eyebrow">Phần 02 · 03 · 04 · 05</span>
-        <h2>Tạo kết nối <em>OpenAI Compatible</em></h2>
-        <p class="lead">Mở 9Router, tạo provider mới, kiểm tra kết nối rồi thêm key API vào provider vừa tạo.</p>
-        <a class="link-box" href="{{ router_url }}" target="_blank" rel="noreferrer">{{ router_url }}</a>
+        <span class="eyebrow">Phần 01 · 02 · 03 · 04 · 05</span>
+        <h1>Kết nối <em>Codex Desktop</em> qua 9Router</h1>
+        <p class="lead">Làm theo đúng thứ tự bên dưới để tạo provider, thêm API key và kết nối gateway mới.</p>
+        <div class="link-box"><strong>9Router Providers</strong><br><a href="{{ router_url }}" target="_blank" rel="noreferrer">{{ router_url }}</a></div>
 
         <article class="step">
           <span class="step-number">B1</span>

@@ -315,10 +315,9 @@ def test_codex_guide_and_zip_download_are_public_but_raw_exe_is_not(tmp_path) ->
     with TestClient(app, base_url="https://testserver") as client:
         guide = client.get("/codex-api")
         assert guide.status_code == 200
-        assert "https://api.maxdonchal.bond/" in guide.text
+        assert "https://api.maxdonchal.bond/" not in guide.text
         assert "http://localhost:20128/dashboard/cli-tools/codex" in guide.text
         assert "https://aixingialaire.shop/cdx/v1" in guide.text
-        assert "Kích hoạt key" in guide.text
         assert "Tạo provider" in guide.text
         assert "Add OpenAI Compatible" in guide.text
         assert "Responses API" in guide.text
@@ -326,7 +325,8 @@ def test_codex_guide_and_zip_download_are_public_but_raw_exe_is_not(tmp_path) ->
         assert "requires_openai_auth = false" in guide.text
         assert "B1" in guide.text and "B2" in guide.text and "B3" in guide.text
         assert "B4" in guide.text and "B5" in guide.text
-        assert "Không cần cấu hình trong CLI" in guide.text
+        assert "Kết nối" in guide.text and "Codex Desktop" in guide.text and "qua 9Router" in guide.text
+        assert "9Router Providers" in guide.text
         assert "Custom Codex" not in guide.text
         assert "chmod +x" not in guide.text
         assert 'href="/codex-api/download"' not in guide.text
