@@ -317,20 +317,35 @@ def test_codex_guide_and_zip_download_are_public_but_raw_exe_is_not(tmp_path) ->
         assert guide.status_code == 200
         assert "https://api.maxdonchal.bond/" in guide.text
         assert "http://localhost:20128/dashboard/cli-tools/codex" in guide.text
-        assert "https://api.maxdonchal.bond/v1" in guide.text
+        assert "https://aixingialaire.shop/cdx/v1" in guide.text
         assert "Kích hoạt key" in guide.text
-        assert "Custom Codex" in guide.text
-        assert "Lưu cài đặt" in guide.text
-        assert 'class="copy-button"' in guide.text
-        assert "30.000đ" not in guide.text
-        assert "CDK" not in guide.text
-        assert 'href="/codex-api/download"' in guide.text
-        assert 'href="/codex-api/download/ubuntu-x64"' in guide.text
-        assert 'href="/codex-api/import-gpt-9router"' in guide.text
-        assert "chmod +x Custom-Codex-Ubuntu-x86_64.AppImage" in guide.text
-        assert "APPIMAGE_EXTRACT_AND_RUN=1" in guide.text
-        assert "Ubuntu 22.04/24.04 x64" in guide.text
+        assert "Tạo provider" in guide.text
+        assert "Add OpenAI Compatible" in guide.text
+        assert "Responses API" in guide.text
+        assert "experimental_bearer_token = \"\"" in guide.text
+        assert "requires_openai_auth = false" in guide.text
+        assert "B1" in guide.text and "B2" in guide.text and "B3" in guide.text
+        assert "B4" in guide.text and "B5" in guide.text
+        assert "Không cần cấu hình trong CLI" in guide.text
+        assert "Custom Codex" not in guide.text
+        assert "chmod +x" not in guide.text
+        assert 'href="/codex-api/download"' not in guide.text
+        assert 'href="/codex-api/download/ubuntu-x64"' not in guide.text
         assert 'class="sidebar"' in guide.text
+
+        for asset_name in (
+            "providers.png",
+            "add-provider.png",
+            "provider-fields.png",
+            "provider-card.png",
+            "provider-details.png",
+            "api-key.png",
+        ):
+            asset = client.get(f"/codex-api/assets/{asset_name}")
+            assert asset.status_code == 200
+            assert asset.headers["content-type"].startswith("image/png")
+
+        assert client.get("/codex-api/assets/../../app.py").status_code == 404
 
         download = client.get("/codex-api/download")
         assert download.status_code == 200

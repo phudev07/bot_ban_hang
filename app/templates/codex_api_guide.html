@@ -3,48 +3,44 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <meta name="description" content="Hướng dẫn kích hoạt key API Codex và sử dụng bằng 9Router hoặc Custom Codex.">
-  <title>Hướng dẫn API Codex · PHP TOOL Shop</title>
+  <meta name="description" content="Hướng dẫn kích hoạt key và kết nối Codex Gateway với 9Router.">
+  <title>PHP TOOL Shop · Codex Gateway</title>
   <style>
     :root {
-      --void: #030809;
-      --panel: #071315;
-      --panel-2: #0a1b1e;
-      --line: rgba(60, 255, 218, .22);
-      --cyan: #3cffda;
-      --cyan-soft: rgba(60, 255, 218, .1);
-      --acid: #d8ff4f;
-      --text: #eafffa;
-      --muted: #8ba8a3;
-      --danger: #ff765f;
-      --shadow: 0 0 0 1px rgba(60, 255, 218, .06), 0 26px 80px rgba(0, 0, 0, .42);
+      --bg: #050708;
+      --panel: rgba(13, 19, 21, .94);
+      --panel-soft: rgba(16, 28, 29, .78);
+      --line: rgba(76, 255, 220, .2);
+      --cyan: #4cffdc;
+      --lime: #d9ff63;
+      --text: #effff9;
+      --muted: #91aaa4;
+      --orange: #ff835f;
+      --shadow: 0 20px 70px rgba(0, 0, 0, .42);
     }
 
     * { box-sizing: border-box; }
-    html { scroll-behavior: smooth; scroll-padding-top: 24px; }
+    html { scroll-behavior: smooth; scroll-padding-top: 22px; }
     body {
       margin: 0;
       color: var(--text);
       background:
-        radial-gradient(circle at 82% 8%, rgba(60, 255, 218, .11), transparent 30rem),
-        radial-gradient(circle at 5% 88%, rgba(216, 255, 79, .08), transparent 26rem),
-        linear-gradient(rgba(60, 255, 218, .035) 1px, transparent 1px),
-        linear-gradient(90deg, rgba(60, 255, 218, .035) 1px, transparent 1px),
-        var(--void);
+        radial-gradient(circle at 80% 0%, rgba(76, 255, 220, .12), transparent 32rem),
+        radial-gradient(circle at 0% 90%, rgba(217, 255, 99, .08), transparent 28rem),
+        linear-gradient(rgba(76, 255, 220, .035) 1px, transparent 1px),
+        linear-gradient(90deg, rgba(76, 255, 220, .035) 1px, transparent 1px),
+        var(--bg);
       background-size: auto, auto, 38px 38px, 38px 38px, auto;
-      font-family: "Segoe UI", "Trebuchet MS", sans-serif;
-      font-size: 14px;
-      line-height: 1.55;
+      font: 14px/1.6 "Segoe UI", Tahoma, sans-serif;
     }
     a { color: inherit; }
-    code { font-family: "Cascadia Code", Consolas, monospace; }
+    code, pre { font-family: "Cascadia Code", Consolas, monospace; }
 
-    .shell {
+    .layout {
       display: grid;
-      grid-template-columns: 230px minmax(0, 900px);
-      justify-content: center;
+      grid-template-columns: 220px minmax(0, 900px);
       gap: 18px;
-      width: min(1180px, calc(100% - 28px));
+      width: min(1160px, calc(100% - 28px));
       margin: 0 auto;
       padding: 18px 0 48px;
     }
@@ -52,271 +48,214 @@
       position: sticky;
       top: 14px;
       align-self: start;
-      padding: 16px;
+      padding: 15px;
       border: 1px solid var(--line);
-      border-radius: 17px;
-      background: rgba(7, 19, 21, .9);
+      border-radius: 16px;
+      background: var(--panel);
       box-shadow: var(--shadow);
-      backdrop-filter: blur(16px);
+      backdrop-filter: blur(14px);
     }
     .brand {
       display: flex;
       align-items: center;
       gap: 9px;
-      margin-bottom: 21px;
+      margin-bottom: 20px;
       text-decoration: none;
     }
     .brand-mark {
       display: grid;
-      width: 36px;
-      height: 36px;
+      width: 34px;
+      height: 34px;
       place-items: center;
       border: 1px solid var(--cyan);
-      border-radius: 10px;
-      color: var(--void);
+      border-radius: 9px;
+      color: #02100d;
       background: var(--cyan);
+      font-size: 12px;
       font-weight: 950;
-      box-shadow: 0 0 24px rgba(60, 255, 218, .28);
+      box-shadow: 0 0 24px rgba(76, 255, 220, .25);
     }
     .brand strong, .brand small { display: block; }
-    .brand strong { font-size: 13px; letter-spacing: .08em; }
+    .brand strong { font-size: 12px; letter-spacing: .08em; }
     .brand small { color: var(--muted); font-size: 10px; }
-    .nav-label {
-      margin: 0 0 10px;
+    .toc-label {
+      margin: 0 0 9px;
       color: var(--muted);
       font-size: 10px;
       font-weight: 800;
-      letter-spacing: .16em;
+      letter-spacing: .14em;
       text-transform: uppercase;
     }
-    .nav { display: grid; gap: 6px; }
-    .nav a {
+    .toc { display: grid; gap: 5px; }
+    .toc a {
       display: grid;
-      grid-template-columns: 29px 1fr;
+      grid-template-columns: 27px 1fr;
       align-items: center;
       gap: 8px;
-      padding: 7px 8px;
+      padding: 7px;
       border: 1px solid transparent;
-      border-radius: 10px;
-      color: #bcd2ce;
+      border-radius: 9px;
+      color: #c4d7d2;
       font-size: 12px;
-      font-weight: 750;
+      font-weight: 700;
       text-decoration: none;
     }
-    .nav a:hover {
-      color: var(--text);
-      border-color: var(--line);
-      background: var(--cyan-soft);
-    }
-    .nav b {
+    .toc a:hover { border-color: var(--line); background: rgba(76, 255, 220, .08); color: var(--text); }
+    .toc b {
       display: grid;
-      height: 29px;
+      height: 27px;
       place-items: center;
       border: 1px solid var(--line);
-      border-radius: 8px;
+      border-radius: 7px;
       color: var(--cyan);
       font: 800 10px/1 "Cascadia Code", Consolas, monospace;
     }
     .support {
-      margin: 20px 0 0;
-      padding-top: 14px;
+      margin: 19px 0 0;
+      padding-top: 13px;
       border-top: 1px solid var(--line);
       color: var(--muted);
       font-size: 11px;
     }
     .support strong { color: var(--cyan); }
 
-    .content { display: grid; gap: 15px; min-width: 0; }
+    main { display: grid; gap: 14px; min-width: 0; }
     .section {
       position: relative;
       overflow: hidden;
-      padding: clamp(22px, 3vw, 30px);
+      padding: clamp(21px, 3vw, 29px);
       border: 1px solid var(--line);
-      border-radius: 18px;
-      background: linear-gradient(145deg, rgba(10, 27, 30, .96), rgba(5, 14, 16, .97));
+      border-radius: 17px;
+      background: linear-gradient(145deg, var(--panel-soft), rgba(5, 12, 13, .96));
       box-shadow: var(--shadow);
     }
     .section::before {
       position: absolute;
       top: 0;
       left: 0;
-      width: 160px;
+      width: 150px;
       height: 3px;
       background: linear-gradient(90deg, var(--cyan), transparent);
       content: "";
     }
-    .kicker {
+    .eyebrow {
       display: inline-flex;
       align-items: center;
       gap: 7px;
-      margin-bottom: 11px;
+      margin-bottom: 9px;
       color: var(--cyan);
-      font: 850 10px/1 "Cascadia Code", Consolas, monospace;
-      letter-spacing: .15em;
+      font: 800 10px/1 "Cascadia Code", Consolas, monospace;
+      letter-spacing: .14em;
       text-transform: uppercase;
     }
-    .kicker::before {
+    .eyebrow::before {
       width: 7px;
       height: 7px;
       border-radius: 50%;
-      background: var(--acid);
-      box-shadow: 0 0 14px var(--acid);
+      background: var(--lime);
+      box-shadow: 0 0 13px var(--lime);
       content: "";
     }
-    h1, h2 { margin: 0; letter-spacing: -.045em; }
-    h1 { max-width: 780px; font-size: clamp(27px, 3.5vw, 38px); line-height: 1.08; }
-    h2 { font-size: clamp(24px, 3vw, 32px); line-height: 1.1; }
-    h1 em, h2 em { color: var(--acid); font-style: normal; }
-    .lead {
-      max-width: 820px;
-      margin: 12px 0 0;
-      color: #bad0cc;
-      font-size: clamp(14px, 1.25vw, 16px);
-    }
+    h1, h2, h3 { margin: 0; letter-spacing: -.035em; }
+    h1 { max-width: 760px; font-size: clamp(26px, 3.4vw, 39px); line-height: 1.08; }
+    h2 { font-size: clamp(22px, 2.8vw, 30px); line-height: 1.12; }
+    h3 { margin-top: 22px; color: var(--cyan); font-size: 15px; }
+    h1 em, h2 em { color: var(--lime); font-style: normal; }
+    .lead { max-width: 790px; margin: 11px 0 0; color: #bad0ca; font-size: 14px; }
     .button {
       display: inline-flex;
       align-items: center;
       justify-content: center;
-      min-height: 40px;
-      margin-top: 16px;
-      padding: 8px 14px;
+      min-height: 38px;
+      margin-top: 15px;
+      padding: 7px 13px;
       border: 1px solid var(--cyan);
-      border-radius: 10px;
-      color: #00110e;
+      border-radius: 9px;
+      color: #01110e;
       background: var(--cyan);
-      font-size: 13px;
+      font-size: 12px;
       font-weight: 900;
       text-decoration: none;
-      box-shadow: 0 0 28px rgba(60, 255, 218, .18);
+      box-shadow: 0 0 25px rgba(76, 255, 220, .15);
     }
     .button:hover { filter: brightness(1.12); transform: translateY(-1px); }
-    .button.alt { border-color: var(--acid); background: var(--acid); }
-    .downloads { display: flex; flex-wrap: wrap; gap: 9px; margin-top: 16px; }
-    .downloads .button { margin-top: 0; }
-    .platform-guide { margin-top: 18px; }
-    .platform-guide h3 { margin: 0 0 10px; color: var(--cyan); font-size: 14px; }
-    .command-box {
-      display: grid;
-      gap: 5px;
-      margin-top: 10px;
+    .link-box, .code-box {
+      margin-top: 14px;
       padding: 11px 13px;
-      border: 1px solid var(--line);
-      border-radius: 11px;
-      background: #020707;
-    }
-    .command-box code { color: var(--acid); font-size: 12px; overflow-wrap: anywhere; }
-    .key-box {
-      display: grid;
-      grid-template-columns: auto 1fr;
-      gap: 13px;
-      align-items: center;
-      margin-top: 18px;
-      padding: 13px;
-      border: 1px solid var(--line);
-      border-radius: 13px;
-      background: rgba(0, 0, 0, .26);
-    }
-    .key-box span {
-      color: var(--muted);
-      font-size: 11px;
-      font-weight: 800;
-      letter-spacing: .12em;
-      text-transform: uppercase;
-    }
-    .key-box code { color: var(--acid); font-size: clamp(14px, 1.6vw, 18px); overflow-wrap: anywhere; }
-    .note {
-      margin: 14px 0 0;
-      padding-left: 12px;
-      border-left: 3px solid var(--danger);
-      color: #d7aaa2;
-      font-size: 12px;
-    }
-    .access-link {
-      display: block;
-      margin-top: 16px;
-      padding: 12px 14px;
-      border: 1px solid var(--line);
-      border-radius: 11px;
-      color: var(--cyan);
-      background: #020707;
-      font: 750 clamp(12px, 1.4vw, 15px)/1.45 "Cascadia Code", Consolas, monospace;
-      overflow-wrap: anywhere;
-      text-decoration: none;
-    }
-    .endpoint-label {
-      margin: 15px 0 6px;
-      color: var(--muted);
-      font-size: 10px;
-      font-weight: 800;
-      letter-spacing: .1em;
-      text-transform: uppercase;
-    }
-    .endpoint-box {
-      display: flex;
-      align-items: center;
-      gap: 9px;
-      padding: 9px 10px 9px 12px;
       border: 1px solid var(--line);
       border-radius: 10px;
       background: #020707;
     }
-    .endpoint-box code {
-      flex: 1;
-      min-width: 0;
-      color: var(--acid);
-      font-size: clamp(12px, 1.4vw, 14px);
-      overflow-wrap: anywhere;
-    }
-    .copy-button {
-      flex: none;
-      min-height: 32px;
-      padding: 6px 10px;
+    .link-box a, .code-box code { color: var(--lime); overflow-wrap: anywhere; }
+    .code-box { position: relative; padding-right: 90px; }
+    .code-box pre { margin: 0; color: #d8fff5; font-size: 12px; line-height: 1.7; white-space: pre-wrap; }
+    .copy {
+      position: absolute;
+      top: 9px;
+      right: 9px;
+      min-height: 29px;
+      padding: 5px 9px;
       border: 1px solid var(--cyan);
-      border-radius: 8px;
+      border-radius: 7px;
       color: var(--cyan);
-      background: var(--cyan-soft);
+      background: rgba(76, 255, 220, .08);
       font: 800 11px/1 "Segoe UI", sans-serif;
       cursor: pointer;
     }
-    .copy-button:hover { background: rgba(60, 255, 218, .18); }
+    .copy:hover { background: rgba(76, 255, 220, .18); }
+    .note {
+      margin: 13px 0 0;
+      padding: 9px 11px;
+      border-left: 3px solid var(--orange);
+      color: #d8b0a6;
+      background: rgba(255, 131, 95, .05);
+      font-size: 12px;
+    }
+    .step {
+      display: grid;
+      grid-template-columns: 38px minmax(0, 1fr);
+      gap: 12px;
+      align-items: start;
+      margin-top: 20px;
+    }
+    .step-number {
+      display: grid;
+      width: 38px;
+      height: 38px;
+      place-items: center;
+      border: 1px solid var(--cyan);
+      border-radius: 10px;
+      color: var(--bg);
+      background: var(--cyan);
+      font: 900 12px/1 "Cascadia Code", Consolas, monospace;
+    }
+    .step h3 { margin: 0; color: var(--text); font-size: 16px; letter-spacing: -.02em; }
+    .step p { margin: 4px 0 0; color: var(--muted); font-size: 13px; }
     .screenshot {
       display: block;
       width: 100%;
-      margin-top: 14px;
+      max-height: 520px;
+      margin-top: 12px;
+      object-fit: contain;
+      object-position: left top;
       border: 1px solid var(--line);
-      border-radius: 13px;
-      box-shadow: 0 22px 60px rgba(0, 0, 0, .42);
+      border-radius: 11px;
+      background: #141414;
+      box-shadow: 0 16px 45px rgba(0, 0, 0, .35);
     }
-    .steps {
-      display: grid;
-      grid-template-columns: repeat(3, 1fr);
-      gap: 10px;
-      margin-top: 18px;
-    }
-    .step {
-      min-width: 0;
-      padding: 13px;
-      border: 1px solid var(--line);
-      border-radius: 12px;
-      background: rgba(0, 0, 0, .24);
-    }
-    .step b {
-      display: block;
-      margin-bottom: 7px;
-      color: var(--acid);
-      font: 900 11px/1 "Cascadia Code", Consolas, monospace;
-      letter-spacing: .08em;
-    }
-    .step strong { display: block; font-size: 14px; }
-    .step p { margin: 5px 0 0; color: var(--muted); font-size: 12px; }
+    .two-images { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-top: 12px; }
+    .two-images .screenshot { margin-top: 0; }
+    .check-list { display: grid; gap: 7px; margin: 15px 0 0; padding: 0; list-style: none; }
+    .check-list li { color: #c7ddd8; font-size: 13px; }
+    .check-list li::before { margin-right: 8px; color: var(--lime); content: "✓"; font-weight: 900; }
+    footer { padding: 4px 2px; color: var(--muted); font-size: 11px; text-align: center; }
 
-    @media (max-width: 900px) {
-      body { font-size: 13px; }
-      .shell { display: block; width: min(100% - 16px, 1040px); padding-top: 8px; }
+    @media (max-width: 850px) {
+      .layout { display: block; width: min(100% - 16px, 900px); padding-top: 8px; }
       .sidebar {
         position: sticky;
         top: 8px;
-        z-index: 20;
+        z-index: 10;
         display: flex;
         align-items: center;
         gap: 8px;
@@ -325,90 +264,134 @@
         border-radius: 12px;
       }
       .brand { flex: none; margin: 0; }
-      .brand-mark { width: 32px; height: 32px; }
-      .brand div, .nav-label, .support { display: none; }
-      .nav { display: flex; flex: 1; gap: 4px; overflow-x: auto; scrollbar-width: none; }
-      .nav::-webkit-scrollbar { display: none; }
-      .nav a { flex: 0 0 auto; grid-template-columns: 27px auto; padding: 5px 7px; font-size: 11px; }
-      .nav b { height: 27px; }
-      .content { gap: 10px; }
-      .section { padding: 20px 14px; border-radius: 15px; }
-      .key-box { grid-template-columns: 1fr; gap: 4px; }
-      .steps { grid-template-columns: 1fr; }
+      .brand-mark { width: 31px; height: 31px; }
+      .brand div, .toc-label, .support { display: none; }
+      .toc { display: flex; flex: 1; gap: 4px; overflow-x: auto; scrollbar-width: none; }
+      .toc::-webkit-scrollbar { display: none; }
+      .toc a { flex: 0 0 auto; grid-template-columns: 25px auto; padding: 5px 6px; font-size: 11px; }
+      .toc b { height: 25px; }
+      .section { padding: 19px 14px; border-radius: 14px; }
+      .two-images { grid-template-columns: 1fr; }
+      .step { grid-template-columns: 31px minmax(0, 1fr); gap: 9px; }
+      .step-number { width: 31px; height: 31px; border-radius: 8px; font-size: 10px; }
+      .code-box { padding-right: 13px; padding-top: 44px; }
+      .copy { top: 9px; left: 9px; right: auto; }
       .button { width: 100%; }
-      .downloads { display: grid; }
-      .endpoint-box { align-items: stretch; flex-direction: column; }
-      .copy-button { width: 100%; }
     }
   </style>
 </head>
 <body>
-  <div class="shell">
+  <div class="layout">
     <aside class="sidebar" aria-label="Mục lục hướng dẫn">
       <a class="brand" href="#activate">
         <span class="brand-mark">PT</span>
-        <div><strong>PHP TOOL SHOP</strong><small>Codex access guide</small></div>
+        <div><strong>PHP TOOL SHOP</strong><small>Codex Gateway</small></div>
       </a>
-      <p class="nav-label">Ba bước sử dụng</p>
-      <nav class="nav">
+      <p class="toc-label">Thiết lập 9Router</p>
+      <nav class="toc">
         <a href="#activate"><b>01</b>Kích hoạt key</a>
-        <a href="#router"><b>02</b>Dùng 9Router</a>
-        <a href="#portable"><b>03</b>Custom Codex</a>
+        <a href="#provider"><b>02</b>Tạo provider</a>
+        <a href="#key"><b>03</b>Thêm API key</a>
+        <a href="#config"><b>04</b>config.toml</a>
       </nav>
-      <p class="support">Hỗ trợ mua hàng<br><strong>@phptool_bot</strong></p>
+      <p class="support">Bot mua hàng<br><strong>@phptool_bot</strong></p>
     </aside>
 
-    <main class="content">
+    <main>
       <section class="section" id="activate">
-        <span class="kicker">Phần 01</span>
-        <h1>Kích hoạt <em>key</em></h1>
-        <p class="lead">Copy key bot đã giao, mở trang kích hoạt rồi dán key vào. Sau khi kích hoạt thành công, hệ thống trả về key API bắt đầu bằng <code>sk-</code>.</p>
+        <span class="eyebrow">Codex Gateway · PHP TOOL Shop</span>
+        <h1>Kích hoạt key và kết nối <em>Codex Desktop</em></h1>
+        <p class="lead">Làm theo đúng thứ tự bên dưới để dùng key với gateway mới qua 9Router. Không cần cấu hình trong CLI.</p>
         <a class="button" href="{{ activation_url }}" target="_blank" rel="noreferrer">Mở trang kích hoạt key ↗</a>
-        <div class="key-box"><span>Key API nhận được</span><code>sk-xxxxxxxxxxxxxxxx</code></div>
-        <p class="note">Giữ kín key <code>sk-</code>. Thời hạn gói bắt đầu tính ngay khi kích hoạt thành công.</p>
+        <div class="link-box"><strong>Key sau khi kích hoạt</strong><br><code>sk-xxxxxxxxxxxxxxxx</code></div>
+        <p class="note">Không gửi key <code>sk-</code> cho người khác. Thời hạn gói bắt đầu tính từ lúc kích hoạt.</p>
       </section>
 
-      <section class="section" id="router">
-        <span class="kicker">Phần 02</span>
-        <h2>Dùng key trong <em>9Router</em></h2>
-        <p class="lead">Nếu máy đã có 9Router, mở đường dẫn dưới đây và thiết lập đúng như hình.</p>
-        <a class="access-link" href="{{ router_url }}" target="_blank" rel="noreferrer">{{ router_url }}</a>
-        <p class="endpoint-label">URL máy chủ API</p>
-        <div class="endpoint-box">
-          <code id="gateway-url">{{ gateway_url }}</code>
-          <button class="copy-button" type="button" data-copy="{{ gateway_url }}">Sao chép</button>
-        </div>
-        <img class="screenshot" src="/codex-api/assets/9router.png" alt="Thiết lập key API Codex trong 9Router" loading="lazy">
-      </section>
+      <section class="section" id="provider">
+        <span class="eyebrow">Phần 02 · 03 · 04 · 05</span>
+        <h2>Tạo kết nối <em>OpenAI Compatible</em></h2>
+        <p class="lead">Mở 9Router, tạo provider mới, kiểm tra kết nối rồi thêm key API vào provider vừa tạo.</p>
+        <a class="link-box" href="{{ router_url }}" target="_blank" rel="noreferrer">{{ router_url }}</a>
 
-      <section class="section" id="portable">
-        <span class="kicker">Phần 03</span>
-        <h2><em>Custom Codex</em> chạy ngay</h2>
-        <p class="lead">Chọn đúng hệ điều hành. Bản Windows và Ubuntu đều mang sẵn engine, không cần cài Node.js hoặc Codex CLI.</p>
-  <div class="downloads">
-          <a class="button alt" href="/codex-api/download">Windows x64 (.zip)</a>
-          <a class="button" href="/codex-api/download/ubuntu-x64">Ubuntu x64 (.AppImage)</a>
-        </div>
-        <div class="steps">
-          <article class="step"><b>01</b><strong>Tải đúng bản</strong><p>Windows dùng ZIP; Ubuntu 22.04/24.04 x64 dùng AppImage.</p></article>
-          <article class="step"><b>02</b><strong>Mở Custom Codex</strong><p>Windows chạy <code>custom-codex.exe</code>. Ubuntu cấp quyền rồi chạy AppImage.</p></article>
-          <article class="step"><b>03</b><strong>Cài đặt API</strong><p>Vào Cài đặt, dán key <code>sk-</code>, chọn model cần chạy rồi bấm <b>Lưu cài đặt</b>.</p></article>
-        </div>
-        <div class="platform-guide">
-          <h3>Chạy trên Ubuntu</h3>
-          <p class="lead">Mở Terminal tại thư mục vừa tải file, chạy lần lượt hai lệnh:</p>
-          <div class="command-box">
-            <code>chmod +x Custom-Codex-Ubuntu-x86_64.AppImage</code>
-            <code>./Custom-Codex-Ubuntu-x86_64.AppImage</code>
+        <article class="step">
+          <span class="step-number">B1</span>
+          <div>
+            <h3>Mở Providers và chọn Add OpenAI Compatible</h3>
+            <p>Truy cập trang Providers trong 9Router, sau đó bấm nút thêm OpenAI tương thích.</p>
+            <img class="screenshot" src="/codex-api/assets/providers.png" alt="Danh sách Custom Providers trong 9Router" loading="lazy">
           </div>
-          <p class="note">Nếu Ubuntu báo thiếu FUSE, chạy trực tiếp bằng lệnh <code>APPIMAGE_EXTRACT_AND_RUN=1 ./Custom-Codex-Ubuntu-x86_64.AppImage</code>.</p>
-          <p class="note">App tiếp tục dùng lịch sử trong <code>~/.codex</code> nhưng không ghi đè <code>config.toml</code> hoặc <code>auth.json</code> của Codex chính.</p>
-        </div>
+        </article>
+
+        <article class="step">
+          <span class="step-number">B2</span>
+          <div>
+            <h3>Nhập thông số provider</h3>
+            <p>Tên tự đặt, Prefix là <code>cx</code>, API Type chọn <b>Responses API</b>, Base URL dùng gateway bên dưới. Sau đó bấm <b>Check</b> rồi <b>Create</b>.</p>
+            <div class="code-box"><code id="gateway-url">{{ gateway_url }}</code><button class="copy" type="button" data-copy="{{ gateway_url }}">Sao chép URL</button></div>
+            <div class="two-images">
+              <img class="screenshot" src="/codex-api/assets/add-provider.png" alt="Form Add OpenAI Compatible" loading="lazy">
+              <img class="screenshot" src="/codex-api/assets/provider-fields.png" alt="Các trường Base URL và API key" loading="lazy">
+            </div>
+          </div>
+        </article>
+
+        <article class="step">
+          <span class="step-number">B3</span>
+          <div>
+            <h3>Mở provider vừa tạo</h3>
+            <p>Provider mới sẽ xuất hiện trong danh sách. Bấm vào thẻ provider đó để mở chi tiết.</p>
+            <div class="two-images">
+              <img class="screenshot" src="/codex-api/assets/provider-card.png" alt="Provider mới trong danh sách" loading="lazy">
+              <img class="screenshot" src="/codex-api/assets/provider-details.png" alt="Chi tiết OpenAI Compatible provider" loading="lazy">
+            </div>
+          </div>
+        </article>
+
+        <article class="step" id="key">
+          <span class="step-number">B4</span>
+          <div>
+            <h3>Thêm API key</h3>
+            <p>Bấm <b>Add API Key</b>, nhập tên key và dán key <code>sk-</code>.</p>
+            <img class="screenshot" src="/codex-api/assets/api-key.png" alt="Form thêm API key vào provider" loading="lazy">
+          </div>
+        </article>
+
+        <article class="step">
+          <span class="step-number">B5</span>
+          <div>
+            <h3>Check key và lưu</h3>
+            <p>Nhập Default Model đúng model muốn dùng, bấm <b>Check</b>. Khi kiểm tra thành công, lưu lại kết nối.</p>
+          </div>
+        </article>
       </section>
+
+      <section class="section" id="config">
+        <span class="eyebrow">Phần 06 · Bắt buộc</span>
+        <h2>Cập nhật <em>config.toml</em></h2>
+        <p class="lead">Sau khi tạo provider và thêm key, mở file cấu hình Codex trên máy rồi thêm cấu hình dưới đây. Đặt model mặc định ở dòng đầu nếu muốn.</p>
+        <div class="code-box">
+          <button class="copy" type="button" data-copy='model = "cx/gpt-5.6-sol"&#10;model_provider = "9router"&#10;&#10;[model_providers.9router]&#10;name = "9Router"&#10;base_url = "http://localhost:20128/v1"&#10;experimental_bearer_token = ""&#10;wire_api = "responses"&#10;requires_openai_auth = false'>Sao chép</button>
+          <pre>model = "cx/gpt-5.6-sol"
+model_provider = "9router"
+
+[model_providers.9router]
+name = "9Router"
+base_url = "http://localhost:20128/v1"
+experimental_bearer_token = ""
+wire_api = "responses"
+requires_openai_auth = false</pre>
+        </div>
+        <ul class="check-list">
+          <li>Windows: <code>C:\Users\Tên máy của bạn\.codex\config.toml</code></li>
+          <li>Ubuntu: <code>~/.codex/config.toml</code></li>
+          <li>Prefix model phải là <code>cx/</code>, ví dụ <code>cx/gpt-5.6-sol</code>.</li>
+          <li>Đóng và mở lại Codex Desktop sau khi lưu file để nhận cấu hình mới.</li>
+        </ul>
+        <p class="note">Không xóa thư mục <code>~/.codex</code> hoặc file lịch sử cũ. Chỉ thêm/cập nhật block provider trong <code>config.toml</code>.</p>
+      </section>
+
+      <footer>PHP TOOL Shop · Bot mua hàng <strong>@phptool_bot</strong></footer>
     </main>
-  </div>
-  <div class="downloads">
-    <a class="button alt" href="/codex-api/import-gpt-9router">🧰 Tool import GPT → 9Router</a>
   </div>
   <script>
     async function copyText(value) {
@@ -434,7 +417,7 @@
           await copyText(button.dataset.copy);
           button.textContent = "Đã sao chép";
         } catch {
-          button.textContent = "Hãy copy thủ công";
+          button.textContent = "Copy thủ công";
         }
         window.setTimeout(() => { button.textContent = original; }, 1800);
       });

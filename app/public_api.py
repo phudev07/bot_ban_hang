@@ -56,9 +56,17 @@ from app.utils import (
 templates = Jinja2Templates(directory=Path(__file__).parent / "templates")
 logger = logging.getLogger(__name__)
 CODEX_ACTIVATION_URL = "https://api.maxdonchal.bond/"
-CODEX_GATEWAY_URL = "https://api.maxdonchal.bond/v1"
+CODEX_GATEWAY_URL = "https://aixingialaire.shop/cdx/v1"
 CODEX_9ROUTER_URL = "http://localhost:20128/dashboard/cli-tools/codex"
 CODEX_SCREENSHOT_PATH = Path(__file__).parent / "static" / "codex-9router.png"
+CODEX_GUIDE_ASSET_PATHS = {
+    "providers.png": Path(__file__).parent / "static" / "codex-9router-providers.png",
+    "add-provider.png": Path(__file__).parent / "static" / "codex-9router-add-provider.png",
+    "provider-fields.png": Path(__file__).parent / "static" / "codex-9router-provider-fields.png",
+    "provider-card.png": Path(__file__).parent / "static" / "codex-9router-provider-card.png",
+    "provider-details.png": Path(__file__).parent / "static" / "codex-9router-provider-details.png",
+    "api-key.png": Path(__file__).parent / "static" / "codex-9router-api-key.png",
+}
 CODEX_MODELS = (
     "cx/gpt-5.6",
     "cx/gpt-5.6-sol",
@@ -200,6 +208,17 @@ def create_public_api_docs_router(settings: Settings) -> APIRouter:
             raise HTTPException(status_code=404, detail="Guide image is unavailable")
         return FileResponse(
             CODEX_SCREENSHOT_PATH,
+            media_type="image/png",
+            headers={"Cache-Control": "public, max-age=86400, immutable"},
+        )
+
+    @router.get("/codex-api/assets/{asset_name}", response_class=FileResponse)
+    async def codex_guide_asset(asset_name: str) -> FileResponse:
+        asset_path = CODEX_GUIDE_ASSET_PATHS.get(asset_name)
+        if asset_path is None or not asset_path.is_file():
+            raise HTTPException(status_code=404, detail="Guide image is unavailable")
+        return FileResponse(
+            asset_path,
             media_type="image/png",
             headers={"Cache-Control": "public, max-age=86400, immutable"},
         )
