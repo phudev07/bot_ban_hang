@@ -203,7 +203,7 @@ def test_direct_payment_progress_is_deleted_before_final_status(tmp_path, monkey
 
     assert response.status_code == 200
     assert bot.events[0][0] == "send"
-    assert "đang xử lý add email" in str(bot.events[0][2])
+    assert "Đang lấy hàng" in str(bot.events[0][2])
     assert bot.events[1] == ("delete", 123456, 1)
     assert bot.events[2][0] == "send"
     assert "cộng vào số dư" in str(bot.events[2][2])

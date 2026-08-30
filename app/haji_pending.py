@@ -11,22 +11,25 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.delivery import delivery_keyboard, delivery_text
-from app.flash_sales import complete_deposit_flash_sale
+from app.flash_sales import complete_deposit_flash_sale, release_deposit_flash_sale
 from app.haji_suppliers import HajiClient
 from app.models import (
     Deposit,
     InventoryItem,
     Order,
+    PaymentTransaction,
     Product,
     SupplierBalanceTransaction,
     SupplierPurchaseAttempt,
     User,
+    WalletTransaction,
 )
 from app.partner_services import award_referral_commission
 from app.supplier_audit import record_supplier_purchase
 from app.suppliers import SupplierError
 from app.utils import SecretCipher
 from app.price_alerts import release_price_lock_if_inventory_empty
+from app.wallet_ledger import apply_wallet_change
 
 
 logger = logging.getLogger(__name__)
@@ -45,6 +48,17 @@ class HajiPendingCompletion:
     secrets: tuple[str, ...]
 
 
+@dataclass(frozen=True)
+class HajiPendingFailure:
+    """A supplier order that failed after payment was accepted."""
+
+    user_id: int
+    language: str
+    amount: int
+    balance: int
+    deposit_code: str
+
+
 def _is_terminal(status: str) -> bool:
     return status in {"done", "fulfilled", "success", "completed"}
 
@@ -55,7 +69,7 @@ async def settle_haji_attempt(
     cipher: SecretCipher,
     attempt_id: int,
     referral_commission_percent: int = 2,
-) -> HajiPendingCompletion | None:
+) -> HajiPendingCompletion | HajiPendingFailure | None:
     async with session_factory() as read_session:
         attempt = await read_session.get(SupplierPurchaseAttempt, attempt_id)
         if (
@@ -82,11 +96,78 @@ async def settle_haji_attempt(
                         .where(SupplierPurchaseAttempt.id == attempt_id)
                         .with_for_update()
                     )
-                    if attempt is not None and attempt.status == "processing":
+                    if attempt is None or attempt.status != "processing":
+                        return None
+                    deposit = await session.scalar(
+                        select(Deposit)
+                        .where(Deposit.id == attempt.deposit_id)
+                        .with_for_update()
+                    )
+                    if deposit is None:
                         attempt.status = "failed"
                         attempt.error_code = "SUPPLIER_ORDER_FAILED"
                         attempt.error_detail = remote.status
                         attempt.completed_at = datetime.now(UTC)
+                        return None
+                    user = await session.scalar(
+                        select(User)
+                        .where(User.telegram_id == deposit.user_id)
+                        .with_for_update()
+                    )
+                    if user is None:
+                        attempt.status = "failed"
+                        attempt.error_code = "SUPPLIER_ORDER_FAILED"
+                        attempt.error_detail = remote.status
+                        attempt.completed_at = datetime.now(UTC)
+                        return None
+
+                    now = datetime.now(UTC)
+                    # Keep the payment settled, but return the shop amount to
+                    # the wallet exactly once when the supplier cannot fulfill.
+                    refund_key = f"direct-purchase-refund:{deposit.id}"
+                    refund_exists = await session.scalar(
+                        select(WalletTransaction.id).where(
+                            WalletTransaction.event_key == refund_key
+                        )
+                    )
+                    if refund_exists is None:
+                        apply_wallet_change(
+                            session,
+                            user,
+                            int(deposit.requested_amount),
+                            kind="direct_purchase_refund",
+                            event_key=refund_key,
+                            reference_type="deposit",
+                            reference_id=deposit.code,
+                            description=(
+                                f"Hoàn tiền mua trực tiếp {deposit.code}: "
+                                "nhà cung cấp không hoàn tất đơn Claude"
+                            ),
+                            currency=str(deposit.currency or "VND").upper(),
+                        )
+                    payment = await session.scalar(
+                        select(PaymentTransaction)
+                        .where(PaymentTransaction.deposit_id == deposit.id)
+                        .order_by(PaymentTransaction.id.desc())
+                        .with_for_update()
+                    )
+                    if payment is not None and payment.credit_status == "credited":
+                        # This is an external payment record, not a wallet top-up.
+                        # Keep it auditable while marking the supplier refund path.
+                        payment.credit_status = "refunded"
+                    await release_deposit_flash_sale(session, deposit)
+                    deposit.failure_reason = "supplier_order_failed"
+                    attempt.status = "failed"
+                    attempt.error_code = "SUPPLIER_ORDER_FAILED"
+                    attempt.error_detail = remote.status
+                    attempt.completed_at = now
+                    return HajiPendingFailure(
+                        user_id=user.telegram_id,
+                        language=user.language,
+                        amount=int(deposit.requested_amount),
+                        balance=int(user.balance),
+                        deposit_code=deposit.code,
+                    )
         return None
     if not remote.items or len(remote.items) != remote.quantity:
         return None
@@ -272,31 +353,46 @@ async def haji_pending_worker(
                 if completed is None:
                     continue
                 try:
-                    await bot.send_message(
-                        completed.user_id,
-                        delivery_text(
-                            shop_order_code=completed.shop_order_code,
-                            product_name=(
-                                completed.product_name_en
-                                if completed.language == "en"
-                                else completed.product_name_vi
+                    if isinstance(completed, HajiPendingFailure):
+                        await bot.send_message(
+                            completed.user_id,
+                            (
+                                "⚠️ <b>Không thể hoàn tất đơn Claude</b>\n"
+                                "Nhà cung cấp không hoàn tất việc thêm email vào team.\n"
+                                f"Đã hoàn lại <b>{completed.amount:,}đ</b> vào ví của bạn."
+                                f"\nMã nạp: <code>{completed.deposit_code}</code>"
+                                if completed.language == "vi"
+                                else "⚠️ <b>Claude order could not be completed</b>\n"
+                                "The supplier could not add your email to the team.\n"
+                                f"<b>{completed.amount:,} VND</b> was returned to your wallet."
+                                f"\nDeposit code: <code>{completed.deposit_code}</code>"
                             ),
-                            secrets=list(completed.secrets),
-                            total_amount=completed.amount,
-                            language=completed.language,
-                            paid_by_qr=True,
-                        ),
-                        reply_markup=delivery_keyboard(
-                            primary_order_id=min(completed.order_ids),
-                            secrets=list(completed.secrets),
-                            language=completed.language,
-                        ),
-                    )
+                        )
+                    else:
+                        await bot.send_message(
+                            completed.user_id,
+                            delivery_text(
+                                shop_order_code=completed.shop_order_code,
+                                product_name=(
+                                    completed.product_name_en
+                                    if completed.language == "en"
+                                    else completed.product_name_vi
+                                ),
+                                secrets=list(completed.secrets),
+                                total_amount=completed.amount,
+                                language=completed.language,
+                                paid_by_qr=True,
+                            ),
+                            reply_markup=delivery_keyboard(
+                                primary_order_id=min(completed.order_ids),
+                                secrets=list(completed.secrets),
+                                language=completed.language,
+                            ),
+                        )
                 except Exception:
                     logger.exception(
-                        "Could not notify user %s about completed Haji Claude order %s",
+                        "Could not notify user %s about Haji Claude fulfillment",
                         completed.user_id,
-                        completed.shop_order_code,
                     )
         except Exception:
             logger.exception("Could not reconcile pending Haji manual orders")

@@ -10,6 +10,7 @@ from fastapi import FastAPI, Header, HTTPException, Request
 from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from redis.asyncio import Redis
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from starlette.middleware.sessions import SessionMiddleware
 
@@ -24,12 +25,12 @@ from app.delivery import delivery_files, delivery_keyboard, delivery_text
 from app.haji_suppliers import HajiClient
 from app.keyboards import main_menu
 from app.lehai_suppliers import LeHaiPremiumClient
-from app.models import ApiRequestAudit
+from app.models import ApiRequestAudit, Deposit, Product
 from app.public_api import client_ip, create_public_api_docs_router, create_public_api_router
 from app.product_tutorials import send_purchase_tutorials
 from app.rate_limit import FixedWindowRateLimiter, RateLimitDecision, RateLimitRule
 from app.rentsim import RentSimClient
-from app.services import process_binance_payment, process_sepay_payment
+from app.services import PaymentResult, process_binance_payment, process_sepay_payment
 from app.suppliers import ExternalSupplierClient, SumistoreClient
 from app.utils import SecretCipher, format_usd_tenths, format_vnd, verify_sepay_hmac
 from app.warehouse_api import create_warehouse_api_router
@@ -389,6 +390,26 @@ def create_api(
 
         async def show_fulfillment_started(user_id: int, language: str) -> None:
             nonlocal fulfillment_message
+            # The callback is shared by all direct-QR suppliers. Only Haji's
+            # manual Claude SKU should mention team provisioning; instant
+            # products keep the generic fulfillment wording.
+            async with session_factory() as session:
+                pending_product = await session.scalar(
+                    select(Product)
+                    .join(Deposit, Deposit.product_id == Product.id)
+                    .where(
+                        Deposit.user_id == user_id,
+                        Deposit.payment_kind == "direct_purchase",
+                        Deposit.status == "pending",
+                    )
+                    .order_by(Deposit.id.desc())
+                    .limit(1)
+                )
+            is_manual_claude = bool(
+                pending_product is not None
+                and pending_product.fulfillment_source == "haji"
+                and (pending_product.supplier_product_id or "").startswith("claude_")
+            )
             try:
                 message = await bot.send_message(
                     user_id,
@@ -396,10 +417,16 @@ def create_api(
                         "✅ <b>Thanh toán thành công</b>\n"
                         "⏳ Hệ thống đang xử lý add email của bạn vào team.\n"
                         "Vui lòng chờ, khi hoàn tất bot sẽ gửi thông báo cho bạn."
+                        if is_manual_claude and language == "vi"
+                        else "✅ <b>Thanh toán thành công</b>\n"
+                        "⏳ Đang lấy hàng, bạn vui lòng chờ trong giây lát..."
                         if language == "vi"
                         else "✅ <b>Payment successful</b>\n"
                         "⏳ The system is adding your email to the team.\n"
                         "Please wait; you will be notified when it is complete."
+                        if is_manual_claude
+                        else "✅ <b>Payment successful</b>\n"
+                        "⏳ Getting your product, please wait a moment."
                     ),
                 )
             except Exception:
@@ -409,6 +436,7 @@ def create_api(
             if message_id is not None:
                 fulfillment_message = (user_id, int(message_id))
 
+        result: PaymentResult | None = None
         try:
             result = await process_sepay_payment(
                 session_factory,
@@ -424,7 +452,9 @@ def create_api(
                 haji_client=haji_client,
             )
         finally:
-            if fulfillment_message is not None and result.status != "direct_purchase_pending":
+            if fulfillment_message is not None and (
+                result is None or result.status != "direct_purchase_pending"
+            ):
                 chat_id, message_id = fulfillment_message
                 try:
                     await bot.delete_message(chat_id, message_id)

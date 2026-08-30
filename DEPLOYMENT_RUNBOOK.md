@@ -129,7 +129,11 @@ and binds port 8080 only to localhost. Caddy is the public reverse proxy.
   not call Le Hai. The circuit is restored from recent failure logs after an app restart.
 - The optional "notify stock without source top-up" switch has a per-product 10-minute
   notification cooldown and sends only the latest stock increase.
-- Direct QR purchases that cannot be fulfilled are credited to the customer's wallet.
+- Direct QR Claude team purchases are marked paid immediately and kept pending while
+  Haji finishes adding the email. The customer receives the team result when complete;
+  if Haji reports a terminal failure, the exact paid amount is refunded to the wallet
+  once with an idempotent ledger event. Other direct QR purchases keep the normal
+  delivery-or-wallet-fallback behavior.
 - Main-bot messages and keyboards use the custom emoji IDs in `app/custom_emoji.py`.
   The brand pack is `vietshare_brands_by_phptool_bot`; do not delete it because ChatGPT,
   Netflix, and Google logo IDs are referenced by production messages.

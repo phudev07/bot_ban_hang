@@ -6003,7 +6003,7 @@ def create_dashboard_router(
                 await session.scalar(
                     select(func.coalesce(func.sum(PaymentTransaction.amount), 0)).where(
                         PaymentTransaction.credit_status.notin_(
-                            ("credited", "manual_matched", "expired")
+                            ("credited", "manual_matched", "expired", "refunded")
                         ),
                         PaymentTransaction.currency == "VND",
                     )
@@ -6014,7 +6014,7 @@ def create_dashboard_router(
                 await session.scalar(
                     select(func.count(PaymentTransaction.id)).where(
                         PaymentTransaction.credit_status.notin_(
-                            ("credited", "manual_matched", "expired")
+                            ("credited", "manual_matched", "expired", "refunded")
                         )
                     )
                 )
@@ -6058,7 +6058,7 @@ def create_dashboard_router(
                 await session.scalar(
                     select(func.coalesce(func.sum(PaymentTransaction.amount), 0)).where(
                         PaymentTransaction.credit_status.notin_(
-                            ("credited", "manual_matched", "expired")
+                            ("credited", "manual_matched", "expired", "refunded")
                         ),
                         PaymentTransaction.currency == "USD",
                     )
