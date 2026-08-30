@@ -99,9 +99,18 @@ SUMISTORE_PRODUCT_SEEDS: dict[str, dict[str, object]] = {
 
 
 class SupplierError(RuntimeError):
-    def __init__(self, code: str, message: str = "") -> None:
+    def __init__(
+        self,
+        code: str,
+        message: str = "",
+        *,
+        supplier_order_code: str | None = None,
+    ) -> None:
         super().__init__(message or code)
         self.code = code
+        # Preserve a provider order that was accepted even when its response
+        # timed out, so a worker can reconcile it without creating a duplicate.
+        self.supplier_order_code = supplier_order_code
 
 
 @dataclass(frozen=True)

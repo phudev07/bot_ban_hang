@@ -27,7 +27,13 @@ def deposit_notification_text(result: PaymentResult) -> str:
         f"Mã nạp: <code>{safe_html(result.deposit_code or '—')}</code>\n"
         f"Thời gian: <b>{paid_time}</b>"
     )
-    if result.status in {"credited", "direct_purchase_completed", "direct_purchase_fallback"}:
+    if result.status == "direct_purchase_pending":
+        return base + "\nTrạng thái: hệ thống đang xử lý add email vào team."
+    if result.status in {
+        "credited",
+        "direct_purchase_completed",
+        "direct_purchase_fallback",
+    }:
         return base
     status_labels = {
         "expired_payment": "Đến sau thời hạn 5 phút - không cộng tiền",

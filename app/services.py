@@ -156,6 +156,8 @@ async def buy_supplier_product(
     idempotency_key: str | None = None,
     shop_product_id: int | None = None,
     supplier_emails: tuple[str, ...] | None = None,
+    deposit_id: int | None = None,
+    defer_manual: bool = False,
 ) -> SupplierPurchase:
     provider = getattr(client, "provider", "sumistore")
     request_key = idempotency_key or f"shop-{secrets.token_hex(16)}"
@@ -197,12 +199,14 @@ async def buy_supplier_product(
             quantity=quantity,
             status="processing",
             started_at=started_at,
+            deposit_id=deposit_id,
         )
         session.add(attempt)
     else:
         attempt.product_id = product_db_id or attempt.product_id
         attempt.supplier_product_id = product_id
         attempt.quantity = quantity
+        attempt.deposit_id = deposit_id or attempt.deposit_id
         attempt.status = "processing"
         attempt.error_code = None
         attempt.error_detail = None
@@ -217,12 +221,14 @@ async def buy_supplier_product(
             quantity,
             idempotency_key=request_key,
             supplier_emails=supplier_emails,
+            defer_manual=defer_manual,
         )
     except SupplierError as exc:
-        attempt.status = "failed"
-        attempt.error_code = exc.code
+        attempt.status = "processing" if exc.supplier_order_code else "failed"
+        attempt.error_code = "SUPPLIER_PENDING" if exc.supplier_order_code else exc.code
         attempt.error_detail = str(exc)[:500]
-        attempt.completed_at = datetime.now(UTC)
+        attempt.supplier_order_code = exc.supplier_order_code or attempt.supplier_order_code
+        attempt.completed_at = None if exc.supplier_order_code else datetime.now(UTC)
         await session.flush()
         raise
     attempt.status = "succeeded"
@@ -301,6 +307,8 @@ async def execute_supplier_route_plan(
     request_key: str,
     cipher: SecretCipher,
     supplier_emails: tuple[str, ...] | None = None,
+    deposit_id: int | None = None,
+    defer_manual: bool = False,
 ) -> tuple[tuple[SupplierPurchase, int], ...]:
     completed: list[tuple[SupplierPurchase, int]] = []
     email_offset = 0
@@ -326,6 +334,8 @@ async def execute_supplier_route_plan(
                 ),
                 shop_product_id=product.id,
                 supplier_emails=route_emails,
+                deposit_id=deposit_id,
+                defer_manual=defer_manual,
             )
             unit_cost = max(
                 0,
@@ -371,6 +381,7 @@ async def _execute_supplier_purchase(
     *,
     idempotency_key: str | None = None,
     supplier_emails: tuple[str, ...] | None = None,
+    defer_manual: bool = False,
 ) -> SupplierPurchase:
     provider = getattr(client, "provider", "sumistore")
     started_at = datetime.now(UTC)
@@ -383,6 +394,7 @@ async def _execute_supplier_purchase(
                 quantity,
                 idempotency_key=idempotency_key,
                 emails=supplier_emails,
+                defer_manual=defer_manual,
             )
         return await client.buy(product_id, quantity, idempotency_key=idempotency_key)
     except SupplierError as exc:
@@ -3102,6 +3114,7 @@ class PaymentResult:
     deposit_code: str | None = None
     username: str | None = None
     paid_at: datetime | None = None
+    supplier_order_code: str | None = None
 
 
 @dataclass(frozen=True)
@@ -3750,6 +3763,11 @@ async def _process_sepay_payment(
                 items: list[InventoryItem] = []
                 supplier_purchase_made = False
                 deposit_supplier_emails: tuple[str, ...] = ()
+                supplier_purchase_parts: tuple[
+                    tuple[SupplierPurchase, int], ...
+                ] = ()
+                pending_supplier_error: SupplierError | None = None
+                single_supplier_sale_price: int | None = None
                 raw_supplier_emails = str(getattr(deposit, "supplier_emails", "") or "")
                 if raw_supplier_emails:
                     try:
@@ -3762,10 +3780,6 @@ async def _process_sepay_payment(
                             for email in parsed_supplier_emails
                             if str(email).strip()
                         )
-                supplier_purchase_parts: tuple[
-                    tuple[SupplierPurchase, int], ...
-                ] = ()
-                single_supplier_sale_price: int | None = None
                 item_sale_prices: dict[int, int] = {}
                 item_discounts: dict[int, int] = {}
                 if (
@@ -4094,6 +4108,13 @@ async def _process_sepay_payment(
                                                 request_key=f"qr-{deposit.code}",
                                                 cipher=cipher,
                                                 supplier_emails=deposit_supplier_emails,
+                                                deposit_id=deposit.id,
+                                                defer_manual=(
+                                                    product.fulfillment_source == "haji"
+                                                    and (product.supplier_product_id or "").startswith(
+                                                        "claude_"
+                                                    )
+                                                ),
                                             )
                                         )
                                     elif multi_route_fetch is not None:
@@ -4107,6 +4128,13 @@ async def _process_sepay_payment(
                                             idempotency_key=f"qr-{deposit.code}",
                                             shop_product_id=product.id,
                                             supplier_emails=deposit_supplier_emails,
+                                            deposit_id=deposit.id,
+                                            defer_manual=(
+                                                product.fulfillment_source == "haji"
+                                                and (product.supplier_product_id or "").startswith(
+                                                    "claude_"
+                                                )
+                                            ),
                                         )
                                         supplier_purchase_parts = (
                                             (
@@ -4119,7 +4147,8 @@ async def _process_sepay_payment(
                                                 ),
                                             ),
                                         )
-                                except SupplierError:
+                                except SupplierError as supplier_error:
+                                    pending_supplier_error = supplier_error
                                     if not multi_plan:
                                         product.external_stock = recovered_stock
                                         purchase_is_blocked = getattr(
@@ -4360,6 +4389,55 @@ async def _process_sepay_payment(
                                     items = []
                                 else:
                                     item_sale_prices.update(local_prices)
+                if (
+                    pending_supplier_error is not None
+                    and pending_supplier_error.supplier_order_code
+                    and product is not None
+                    and product.fulfillment_source == "haji"
+                    and (product.supplier_product_id or "").startswith("claude_")
+                ):
+                    # A Claude add-team order is accepted before the supplier
+                    # finishes processing it. Keep the paid QR request and
+                    # supplier attempt pending instead of crediting the amount
+                    # back to the customer's wallet.
+                    now = datetime.now(UTC)
+                    deposit.status = "paid"
+                    deposit.paid_amount = amount
+                    deposit.paid_at = now
+                    deposit.failed_at = None
+                    deposit.failure_reason = None
+                    if existing is None:
+                        session.add(
+                            PaymentTransaction(
+                                deposit_id=deposit.id,
+                                user_id=user.telegram_id,
+                                provider_tx_id=provider_tx_id,
+                                amount=amount,
+                                currency=currency,
+                                credit_status="credited",
+                            )
+                        )
+                    else:
+                        existing.amount = amount
+                        existing.currency = currency
+                        existing.credit_status = "credited"
+                    await session.flush()
+                    return PaymentResult(
+                        "direct_purchase_pending",
+                        user.telegram_id,
+                        amount,
+                        product_id=product.id,
+                        supplier_product_id=product.supplier_product_id,
+                        product_name_vi=product.name_vi,
+                        product_name_en=product.name_en,
+                        quantity=deposit.quantity,
+                        language=user.language,
+                        deposit_code=deposit.code,
+                        username=user.username,
+                        paid_at=now,
+                        supplier_order_code=pending_supplier_error.supplier_order_code,
+                    )
+
                 if product is not None and len(items) == deposit.quantity:
                     batch_code = f"B{secrets.token_hex(5).upper()}"
                     orders = []

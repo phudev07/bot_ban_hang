@@ -68,6 +68,16 @@ class HajiProduct:
     requires_emails: bool = False
 
 
+@dataclass(frozen=True)
+class HajiOrderStatus:
+    order_code: str
+    product_id: str
+    quantity: int
+    status: str
+    unit_price: int
+    items: tuple[str, ...]
+
+
 def _plain_text(value: object) -> str:
     return " ".join(str(value or "").replace("\r", " ").replace("\n", " ").split())
 
@@ -342,6 +352,7 @@ class HajiClient:
         *,
         idempotency_key: str | None = None,
         emails: tuple[str, ...] | None = None,
+        defer_manual: bool = False,
     ) -> SupplierPurchase:
         if not 1 <= quantity <= 100:
             raise SupplierError("INVALID_QUANTITY")
@@ -378,6 +389,11 @@ class HajiClient:
         if status in {"processing", "pending"}:
             if not order_code:
                 raise SupplierError("SUPPLIER_DELIVERY_INCOMPLETE")
+            if defer_manual and product is not None and product.requires_emails:
+                raise SupplierError(
+                    "SUPPLIER_PENDING",
+                    supplier_order_code=f"HAJI-{order_code}",
+                )
             deadline = time.monotonic() + self.manual_timeout_seconds
             while time.monotonic() < deadline:
                 await asyncio.sleep(self.manual_poll_seconds)
@@ -398,7 +414,10 @@ class HajiClient:
                     accounts = current_items
                     break
             else:
-                raise SupplierError("SUPPLIER_UNAVAILABLE")
+                raise SupplierError(
+                    "SUPPLIER_UNAVAILABLE",
+                    supplier_order_code=f"HAJI-{order_code}",
+                )
         if not order_code or len(accounts) != quantity or unit_price <= 0:
             raise SupplierError("SUPPLIER_DELIVERY_INCOMPLETE")
         self.invalidate_snapshot_cache()
@@ -408,6 +427,23 @@ class HajiClient:
             accounts=accounts,
             product_id=product_id,
             provider=self.provider,
+        )
+
+    async def check_order(self, order_code: str) -> HajiOrderStatus:
+        """Read a previously accepted order without submitting a new one."""
+        raw_code = _plain_text(order_code)
+        if raw_code.startswith("HAJI-"):
+            raw_code = raw_code[5:]
+        if not raw_code:
+            raise SupplierError("SUPPLIER_ORDER_MISSING")
+        data = await self._get(f"/api/v2/orders/{raw_code}")
+        return HajiOrderStatus(
+            order_code=f"HAJI-{raw_code}",
+            product_id=_plain_text(data.get("product_id")),
+            quantity=max(0, _safe_int(data.get("quantity"))),
+            status=_plain_text(data.get("status")).lower(),
+            unit_price=max(0, _safe_int(data.get("unit_price"))),
+            items=_delivery_items(data),
         )
 
 

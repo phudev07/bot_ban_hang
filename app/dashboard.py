@@ -6165,6 +6165,7 @@ def create_dashboard_router(
         successful_direct = is_direct_purchase and result.status in {
             "direct_purchase_completed",
             "direct_purchase_fallback",
+            "direct_purchase_pending",
         }
         successful_wallet = not is_direct_purchase and result.status == "approved"
         if not successful_direct and not successful_wallet:
@@ -6201,6 +6202,10 @@ def create_dashboard_router(
             message = (
                 f"Đã duyệt QR {result.deposit_code}; không đủ hàng nên đã hoàn "
                 f"{format_vnd(result.amount)} vào ví. Số dư mới {format_vnd(result.balance or 0)}."
+            )
+        elif result.status == "direct_purchase_pending":
+            message = (
+                f"Đã nhận thanh toán QR {result.deposit_code}; hệ thống đang xử lý add email vào team."
             )
         else:
             message = (
@@ -6275,6 +6280,19 @@ def create_dashboard_router(
             except Exception:
                 logger.exception(
                     "Could not deliver manually approved direct purchase to user %s",
+                    result.user_id,
+                )
+        if bot is not None and result.user_id is not None and result.status == "direct_purchase_pending":
+            try:
+                await bot.send_message(
+                    result.user_id,
+                    "✅ <b>Thanh toán thành công</b>\n\n"
+                    "⏳ Hệ thống đang xử lý add email của bạn vào team.\n"
+                    "Vui lòng chờ, khi hoàn tất bot sẽ gửi thông báo cho bạn.",
+                )
+            except Exception:
+                logger.exception(
+                    "Could not notify user %s about pending Claude purchase",
                     result.user_id,
                 )
         if bot is not None and result.user_id is not None and result.status == "direct_purchase_fallback":

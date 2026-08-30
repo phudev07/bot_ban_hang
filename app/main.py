@@ -34,6 +34,7 @@ from app.haji_suppliers import (
     ensure_haji_products,
     sync_haji_products,
 )
+from app.haji_pending import haji_pending_worker
 from app.keyboards import sms_waiting_menu
 from app.lehai_suppliers import (
     LeHaiPremiumClient,
@@ -778,6 +779,24 @@ async def initialize_database(engine, session_factory, seed_demo_data: bool) -> 
         )
         await connection.execute(
             text("ALTER TABLE orders ADD COLUMN IF NOT EXISTS supplier_order_code VARCHAR(64) NULL")
+        )
+        await connection.execute(
+            text(
+                "ALTER TABLE supplier_purchase_attempts ADD COLUMN IF NOT EXISTS "
+                "deposit_id INTEGER NULL REFERENCES deposits(id) ON DELETE SET NULL"
+            )
+        )
+        await connection.execute(
+            text(
+                "ALTER TABLE supplier_purchase_attempts ADD COLUMN IF NOT EXISTS "
+                "notification_sent_at TIMESTAMPTZ NULL"
+            )
+        )
+        await connection.execute(
+            text(
+                "CREATE INDEX IF NOT EXISTS ix_supplier_purchase_attempts_deposit_id "
+                "ON supplier_purchase_attempts (deposit_id)"
+            )
         )
         await connection.execute(
             text(
@@ -1837,6 +1856,20 @@ async def main() -> None:
         if haji_client is not None
         else None
     )
+    haji_pending_task = (
+        asyncio.create_task(
+            haji_pending_worker(
+                session_factory,
+                haji_client,
+                cipher,
+                bot,
+                interval_seconds=10,
+                referral_commission_percent=settings.referral_commission_percent,
+            )
+        )
+        if haji_client is not None
+        else None
+    )
     rentsim_task = (
         asyncio.create_task(
             sms_otp_worker(
@@ -1930,6 +1963,10 @@ async def main() -> None:
             haji_audit_task.cancel()
             with contextlib.suppress(asyncio.CancelledError):
                 await haji_audit_task
+        if haji_pending_task is not None:
+            haji_pending_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await haji_pending_task
         if rentsim_task is not None:
             rentsim_task.cancel()
             with contextlib.suppress(asyncio.CancelledError):

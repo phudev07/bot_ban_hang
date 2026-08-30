@@ -1793,9 +1793,9 @@ def create_router(
             if fulfillment_message is not None:
                 return
             fulfillment_message = await target.answer(
-                "⏳ <b>Đang lấy hàng...</b>\nBạn vui lòng chờ trong giây lát."
+                "⏳ <b>Hệ thống đang xử lý đơn hàng...</b>\nBạn vui lòng chờ trong giây lát."
                 if language == "vi"
-                else "⏳ <b>Getting your product...</b>\nPlease wait a moment."
+                else "⏳ <b>The system is processing your order...</b>\nPlease wait a moment."
             )
 
         fulfillment_source = await session.scalar(

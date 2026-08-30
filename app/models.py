@@ -1040,6 +1040,12 @@ class SupplierPurchaseAttempt(Base):
     supplier_order_code: Mapped[str | None] = mapped_column(
         String(64), nullable=True, index=True
     )
+    deposit_id: Mapped[int | None] = mapped_column(
+        ForeignKey("deposits.id", ondelete="SET NULL"), nullable=True, index=True
+    )
+    notification_sent_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
     started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
     completed_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True

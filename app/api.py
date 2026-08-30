@@ -394,10 +394,12 @@ def create_api(
                     user_id,
                     (
                         "✅ <b>Thanh toán thành công</b>\n"
-                        "⏳ Đang lấy hàng, bạn vui lòng chờ trong giây lát..."
+                        "⏳ Hệ thống đang xử lý add email của bạn vào team.\n"
+                        "Vui lòng chờ, khi hoàn tất bot sẽ gửi thông báo cho bạn."
                         if language == "vi"
                         else "✅ <b>Payment successful</b>\n"
-                        "⏳ Getting your product, please wait a moment..."
+                        "⏳ The system is adding your email to the team.\n"
+                        "Please wait; you will be notified when it is complete."
                     ),
                 )
             except Exception:
@@ -422,7 +424,7 @@ def create_api(
                 haji_client=haji_client,
             )
         finally:
-            if fulfillment_message is not None:
+            if fulfillment_message is not None and result.status != "direct_purchase_pending":
                 chat_id, message_id = fulfillment_message
                 try:
                     await bot.delete_message(chat_id, message_id)
@@ -451,6 +453,7 @@ def create_api(
                 "credited",
                 "direct_purchase_completed",
                 "direct_purchase_fallback",
+                "direct_purchase_pending",
                 "expired_payment",
                 "amount_mismatch",
                 "already_paid_payment",
