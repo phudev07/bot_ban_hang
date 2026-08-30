@@ -27,6 +27,7 @@ HAJI_CODEX_PRODUCT_MARKUPS = {
     "apicodex_10m_1day": 5_000,
     "apicodex_50m_1day": 15_000,
     "apicodex_100m_1day": 15_000,
+    "claude_addteam1x25": 50_000,
 }
 HAJI_CODEX_PRODUCT_NAMES = {
     "apicodex_10m_1day": ("API Codex 10M Token · 24 giờ", "Codex API 10M Tokens · 24 hours"),
@@ -605,6 +606,16 @@ async def ensure_haji_products(
                     )
                 )
                 continue
+            if (
+                source.kind == "claude"
+                and product.supplier_price is not None
+                and int(product.price)
+                == int(product.supplier_price) + max(0, int(product.supplier_markup))
+            ):
+                # Move automatically priced Claude rows to the requested markup;
+                # preserve an explicit admin price override.
+                product.supplier_markup = markup_value
+                product.price = source.unit_price + markup_value
             # Supplier catalog data initializes new rows only. Existing product
             # presentation and visibility belong to the admin and must survive syncs.
         await session.commit()

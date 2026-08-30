@@ -528,7 +528,7 @@ def test_haji_claude_product_is_created_in_codex_category() -> None:
                 )
             ).one()
             assert product.name_vi == "Claude Team Standard 1 tháng"
-            assert product.price == 405_000
+            assert product.price == 450_000
             assert product.product_type == "service"
             assert product.allow_quantity is True and product.max_quantity == 100
             assert product.external_stock == 0
