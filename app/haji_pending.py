@@ -27,7 +27,7 @@ from app.models import (
 from app.partner_services import award_referral_commission
 from app.supplier_audit import record_supplier_purchase
 from app.suppliers import SupplierError
-from app.utils import SecretCipher
+from app.utils import SecretCipher, format_vnd
 from app.price_alerts import release_price_lock_if_inventory_empty
 from app.wallet_ledger import apply_wallet_change
 
@@ -359,12 +359,12 @@ async def haji_pending_worker(
                             (
                                 "⚠️ <b>Không thể hoàn tất đơn Claude</b>\n"
                                 "Nhà cung cấp không hoàn tất việc thêm email vào team.\n"
-                                f"Đã hoàn lại <b>{completed.amount:,}đ</b> vào ví của bạn."
+                                f"Đã hoàn lại <b>{format_vnd(completed.amount)}</b> vào ví của bạn."
                                 f"\nMã nạp: <code>{completed.deposit_code}</code>"
                                 if completed.language == "vi"
                                 else "⚠️ <b>Claude order could not be completed</b>\n"
                                 "The supplier could not add your email to the team.\n"
-                                f"<b>{completed.amount:,} VND</b> was returned to your wallet."
+                                f"<b>{format_vnd(completed.amount)}</b> was returned to your wallet."
                                 f"\nDeposit code: <code>{completed.deposit_code}</code>"
                             ),
                         )
