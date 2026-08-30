@@ -5392,6 +5392,29 @@ def create_dashboard_router(
                 .order_by(Order.id.desc())
             )
             orders = group_order_rows(rows)
+            pending_claude = [
+                {
+                    "attempt": attempt,
+                    "deposit": deposit,
+                    "product": product,
+                    "user": user,
+                }
+                for attempt, deposit, product, user in await session.execute(
+                    select(SupplierPurchaseAttempt, Deposit, Product, User)
+                    .join(Deposit, Deposit.id == SupplierPurchaseAttempt.deposit_id)
+                    .join(Product, Product.id == Deposit.product_id)
+                    .join(User, User.telegram_id == Deposit.user_id)
+                    .where(
+                        SupplierPurchaseAttempt.provider == "haji",
+                        SupplierPurchaseAttempt.status == "processing",
+                        SupplierPurchaseAttempt.supplier_product_id.like("claude_%"),
+                        Deposit.payment_kind == "direct_purchase",
+                        Deposit.status == "paid",
+                    )
+                    .order_by(SupplierPurchaseAttempt.id.desc())
+                    .limit(ADMIN_PAGE_SIZE)
+                )
+            ]
             reward_keys = (
                 select(order_group_key())
                 .select_from(Order)
@@ -5420,6 +5443,7 @@ def create_dashboard_router(
                 "Đơn hàng",
                 "orders",
                 orders=orders,
+                pending_claude=pending_claude,
                 query=q,
                 status=status,
                 source=source,

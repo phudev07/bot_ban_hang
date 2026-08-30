@@ -23,6 +23,25 @@
   </form>
 </section>
 
+{% if pending_claude %}
+<section class="panel">
+  <div class="panel-head"><div><span>CLAUDE TEAM QUEUE</span><h2>Claude đã thanh toán · đang add team</h2></div><small>Đơn sẽ chuyển xuống danh sách hoàn tất sau khi Haji trả kết quả</small></div>
+  <div class="table-wrap"><table><thead><tr><th>Attempt / Mã nạp</th><th>Khách hàng</th><th>Sản phẩm</th><th>Email</th><th>Nhà cung cấp</th><th>Trạng thái</th><th>Thời gian</th></tr></thead><tbody>
+  {% for row in pending_claude %}
+  <tr>
+    <td><strong>Attempt #{{ row.attempt.id }}</strong><small>Mã nạp <code>{{ row.deposit.code }}</code><br>Mã Haji <code>{{ row.attempt.supplier_order_code or '—' }}</code></small></td>
+    <td><strong>{{ row.user.full_name }}</strong><small>@{{ row.user.username or '—' }} · {{ row.user.telegram_id }}</small></td>
+    <td>{{ row.product.name_vi }}<small>{{ row.attempt.quantity }} tài khoản</small></td>
+    <td><code>{{ row.deposit.supplier_emails or '—' }}</code></td>
+    <td><span class="status wait">Haji</span></td>
+    <td><span class="status wait">Đang xử lý</span><small>{{ row.attempt.error_code or 'SUPPLIER_PENDING' }}</small></td>
+    <td>{{ row.attempt.started_at|localtime }}</td>
+  </tr>
+  {% endfor %}
+  </tbody></table></div>
+</section>
+{% endif %}
+
 <section class="panel">
   <div class="panel-head"><div><span>FULFILLMENT DESK</span><h2>Đơn hàng và hỗ trợ</h2></div><small>100 đơn mỗi trang</small></div>
   <div class="table-wrap"><table><thead><tr><th>Mã đơn</th><th>Khách hàng</th><th>Sản phẩm</th><th>Nguồn / Kênh</th><th>Doanh thu</th><th>Giá vốn</th><th>Lợi nhuận gộp</th><th>Giảm giá</th><th>Trạng thái</th><th>Thời gian tạo</th><th></th></tr></thead><tbody>
