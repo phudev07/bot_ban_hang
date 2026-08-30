@@ -952,15 +952,29 @@ async def refresh_lehai_product(
             for route in fetched.routes
             if route.snapshot.effective_stock > 0 and route.snapshot.unit_price > 0
         )
-        if priced_routes:
+        canboso_price_route = next(
+            (
+                route
+                for route in fetched.routes
+                if route.provider == "canboso"
+                and route.snapshot.unit_price > 0
+                and (
+                    route.snapshot.effective_stock > 0
+                    or any(
+                        available_route.provider == "haji"
+                        and available_route.snapshot.effective_stock > 0
+                        for available_route in fetched.routes
+                    )
+                )
+            ),
+            None,
+        )
+        if priced_routes or canboso_price_route is not None:
             # Keep the shop's public GG 18M price anchored to Canboso while
-            # it has stock.  The route planner may still fulfill from a
-            # cheaper Haji/Le Hai route, preserving the extra margin.
-            canboso_priced_route = next(
-                (route for route in priced_routes if route.provider == "canboso"),
-                None,
-            )
-            price_route = canboso_priced_route or min(
+            # Haji is available, even if Canboso itself is temporarily empty.
+            # The route planner may still fulfill from a cheaper Haji/Le Hai
+            # route, preserving the extra margin.
+            price_route = canboso_price_route or min(
                 priced_routes,
                 key=supplier_route_sort_key,
             )

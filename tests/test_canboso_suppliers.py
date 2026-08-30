@@ -330,7 +330,7 @@ def test_gg18m_haji_fallback_keeps_canboso_public_price() -> None:
         sessions = async_sessionmaker(engine, expire_on_commit=False)
         cipher = SecretCipher(Fernet.generate_key().decode())
         lehai = RoutedSupplier("lehai", price=20_000, stock=10)
-        canboso = RoutedSupplier("canboso", price=11_000, stock=10)
+        canboso = RoutedSupplier("canboso", price=11_000, stock=0)
         haji = RoutedSupplier("haji", price=9_000, stock=10)
         async with sessions() as session:
             category = Category(name_vi="Gemini", name_en="Gemini")
