@@ -7,6 +7,7 @@ from app.custom_emoji import (
     BINANCE_DEPOSIT_EMOJI_ID,
     MBBANK_COLUMN_EMOJI_ID,
     CHATGPT_EMOJI_ID,
+    CLAUDE_EMOJI_ID,
     EMOJI_IDS,
     GEMINI_EMOJI_ID,
     NETFLIX_EMOJI_ID,
@@ -20,6 +21,7 @@ from app.keyboards import quick_access_keyboard
 
 def test_product_brand_emoji_uses_exact_service_logo() -> None:
     assert product_brand_emoji_id("ChatGPT Plus") == CHATGPT_EMOJI_ID
+    assert product_brand_emoji_id("Claude Team Standard 1 tháng") == CLAUDE_EMOJI_ID
     assert product_brand_emoji_id("Netflix 4K Premium") == NETFLIX_EMOJI_ID
     assert product_brand_emoji_id("Netfliix 4K HD TK RIÊNG BHF") == NETFLIX_EMOJI_ID
     assert product_brand_emoji_id("Link GG Pro Jio 18M") == GEMINI_EMOJI_ID

@@ -10,6 +10,7 @@ from aiogram.types import InlineKeyboardMarkup, ReplyKeyboardMarkup
 # Telegram's animated topic-icon set. Keeping the IDs here makes all bot surfaces
 # consistent without storing media on the VPS.
 CHATGPT_EMOJI_ID = "5310259124817134249"
+CLAUDE_EMOJI_ID = "5321196473784773037"
 NETFLIX_EMOJI_ID = "5318911503938634641"
 GOOGLE_EMOJI_ID = "6319109310144062723"
 GEMINI_EMOJI_ID = "6212797771372563847"
@@ -97,6 +98,8 @@ def product_brand_emoji_id(name: str) -> str:
     normalized = " ".join(name.casefold().split())
     if re.search(r"netfli+x", normalized):
         return NETFLIX_EMOJI_ID
+    if "claude" in normalized:
+        return CLAUDE_EMOJI_ID
     if any(marker in normalized for marker in ("gemini", "veo", "antigravity")):
         return GEMINI_EMOJI_ID
     if "18m" in normalized and any(
@@ -117,6 +120,8 @@ def product_brand_emoji(name: str) -> str:
         if emoji_id == NETFLIX_EMOJI_ID
         else "✨"
         if emoji_id == GEMINI_EMOJI_ID
+        else "🧠"
+        if emoji_id == CLAUDE_EMOJI_ID
         else "🔎"
         if emoji_id == GOOGLE_EMOJI_ID
         else "🤖"
@@ -159,6 +164,7 @@ def button_emoji_id(text: str) -> str | None:
             "netflix",
             "netfliix",
             "chatgpt",
+            "claude",
             "openai",
             "gpt",
             "codex",
