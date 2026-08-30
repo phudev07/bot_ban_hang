@@ -40,16 +40,14 @@
       </section>
       <section class="section" id="config">
         <span class="eyebrow">B4 · Bắt buộc</span><h2>Cập nhật <em>config.toml</em></h2>
-        <p class="lead">Mở file cấu hình Codex và cập nhật block 9Router. Thay <code>sk-your-key</code> bằng API key của bạn; giữ nguyên các phần cấu hình khác.</p>
-        <div class="code-box"><button class="copy" type="button" data-copy='model = "cx/gpt-5.6-sol"&#10;&#10;[model_providers.9router]&#10;name = "9Router"&#10;base_url = "https://aixingialaire.shop/cdx/v1"&#10;wire_api = "responses"&#10;experimental_bearer_token = "sk-your-key"&#10;requires_openai_auth = false'>Sao chép</button><pre>model = "cx/gpt-5.6-sol"
-
-[model_providers.9router]
+        <p class="lead">Tìm block <code>[model_providers.9router]</code> đang có trong file rồi bổ sung các dòng bên dưới. Thay <code>sk-your-key</code> bằng API key của bạn; giữ nguyên các phần cấu hình khác.</p>
+        <div class="code-box"><button class="copy" type="button" data-copy='[model_providers.9router]&#10;name = "9Router"&#10;base_url = "https://aixingialaire.shop/cdx/v1"&#10;wire_api = "responses"&#10;experimental_bearer_token = "sk-your-key"&#10;requires_openai_auth = false'>Sao chép</button><pre>[model_providers.9router]
 name = "9Router"
 base_url = "https://aixingialaire.shop/cdx/v1"
 wire_api = "responses"
 experimental_bearer_token = "sk-your-key"
 requires_openai_auth = false</pre></div>
-        <ul class="check-list"><li>Windows: <code>C:\Users\Tên máy của bạn\.codex\config.toml</code></li><li>Ubuntu: <code>~/.codex/config.toml</code></li><li>Dòng đầu <code>model</code> phải dùng model có prefix <code>cx/</code>.</li><li>Không xóa thư mục <code>.codex</code> hoặc thư mục sessions; chỉ cập nhật block cấu hình.</li></ul>
+        <ul class="check-list"><li>Windows: <code>C:\Users\Tên máy của bạn\.codex\config.toml</code></li><li>Ubuntu: <code>~/.codex/config.toml</code></li><li>Model và Subagent Model được chọn ở bước B2 trong 9Router.</li><li>Không xóa thư mục <code>.codex</code> hoặc thư mục sessions; chỉ cập nhật block cấu hình.</li></ul>
         <p class="note">Sau khi lưu file, khởi động lại Codex Desktop. Nếu vẫn thấy endpoint cũ, mở lại trang CLI Tools của 9Router và bấm <b>Áp dụng</b> một lần nữa.</p>
       </section>
       <footer>PHP TOOL Shop · Bot mua hàng <strong>@phptool_bot</strong></footer>
