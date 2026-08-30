@@ -8,9 +8,17 @@ from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from app.canboso_suppliers import CANBOSO_GG18M_ROUTE_ID, CanbosoClient
 from app.database import Base
+from app.lehai_suppliers import refresh_lehai_product
 from app.models import Category, Order, Product, User
 from app.services import ProductPricing, price_supplier_plan, purchase_product
-from app.suppliers import SupplierPurchase, SupplierRoute, SupplierSnapshot
+from app.suppliers import (
+    SupplierError,
+    SupplierPurchase,
+    SupplierRoute,
+    SupplierRouteFailure,
+    SupplierRouteFetch,
+    SupplierSnapshot,
+)
 from app.utils import SecretCipher
 
 
@@ -371,6 +379,75 @@ def test_gg18m_haji_fallback_keeps_canboso_public_price() -> None:
         assert canboso.buy_calls == []
         assert result.orders[0].supplier_provider == "haji"
         assert result.orders[0].amount == 16_000
+        await engine.dispose()
+
+    asyncio.run(scenario())
+
+
+def test_gg18m_haji_fallback_keeps_price_when_canboso_route_is_unavailable() -> None:
+    async def scenario() -> None:
+        engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+        async with engine.begin() as connection:
+            await connection.run_sync(Base.metadata.create_all)
+        sessions = async_sessionmaker(engine, expire_on_commit=False)
+        lehai = RoutedSupplier("lehai", price=20_000, stock=0)
+        canboso = RoutedSupplier("canboso", price=10_450, stock=0)
+        haji = RoutedSupplier("haji", price=9_000, stock=5)
+        async with sessions() as session:
+            category = Category(name_vi="Gemini", name_en="Gemini")
+            session.add(category)
+            await session.flush()
+            product = Product(
+                category_id=category.id,
+                name_vi="Link GG Pro Jio 18M",
+                name_en="Google Pro Jio 18M",
+                price=19_000,
+                supplier_price=10_450,
+                supplier_markup=9_000,
+                fulfillment_source="lehai",
+                supplier_product_id="cdk_ggpro_18m",
+                lehai_api_enabled=False,
+                canboso_api_enabled=True,
+            )
+            session.add(product)
+            await session.commit()
+
+            fetched = SupplierRouteFetch(
+                routes=(
+                    SupplierRoute(
+                        provider="haji",
+                        product_id="link_gemini_18moth",
+                        client=haji,  # type: ignore[arg-type]
+                        snapshot=SupplierSnapshot(
+                            product_id="link_gemini_18moth",
+                            name="Link GG Pro Jio 18M",
+                            description="",
+                            unit_price=9_000,
+                            source_stock=5,
+                            owner_balance=45_000,
+                        ),
+                    ),
+                ),
+                failures=(
+                    SupplierRouteFailure(
+                        provider="canboso",
+                        product_id=CANBOSO_GG18M_ROUTE_ID,
+                        error=SupplierError("SUPPLIER_REFRESH_BACKOFF"),
+                    ),
+                ),
+                configured_count=2,
+            )
+            await refresh_lehai_product(
+                session,
+                product,
+                lehai,  # type: ignore[arg-type]
+                canboso_client=canboso,  # type: ignore[arg-type]
+                haji_client=haji,  # type: ignore[arg-type]
+                route_fetch=fetched,
+            )
+            await session.commit()
+            assert product.price == 19_000
+
         await engine.dispose()
 
     asyncio.run(scenario())

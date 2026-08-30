@@ -969,21 +969,31 @@ async def refresh_lehai_product(
             ),
             None,
         )
+        # GG 18M's public price is owned by Canboso. If that route is
+        # temporarily unavailable, Haji may still fulfill orders, but its
+        # lower cost must not replace the shop price.
+        canboso_price_is_authoritative = (
+            product.supplier_product_id == JIO_18M_PRODUCT_ID
+            and "canboso" in enabled_providers
+        )
         if priced_routes or canboso_price_route is not None:
             # Keep the shop's public GG 18M price anchored to Canboso while
             # Haji is available, even if Canboso itself is temporarily empty.
             # The route planner may still fulfill from a cheaper Haji/Le Hai
             # route, preserving the extra margin.
-            price_route = canboso_price_route or min(
-                priced_routes,
-                key=supplier_route_sort_key,
-            )
-            await apply_supplier_price(
-                session,
-                product,
-                price_route.snapshot.unit_price,
-                alert_provider=price_route.provider,
-            )
+            price_route = canboso_price_route
+            if price_route is None and not canboso_price_is_authoritative:
+                price_route = min(
+                    priced_routes,
+                    key=supplier_route_sort_key,
+                )
+            if price_route is not None:
+                await apply_supplier_price(
+                    session,
+                    product,
+                    price_route.snapshot.unit_price,
+                    alert_provider=price_route.provider,
+                )
         product.external_stock = supplier_stock + recovered_stock
         await apply_supplier_stock(
             session,
