@@ -20,8 +20,8 @@ HAJI_PROVIDER = "haji"
 HAJI_NETFLIX_CATEGORY_VI = "Netflix"
 HAJI_NETFLIX_CATEGORY_EN = "Netflix"
 HAJI_NETFLIX_CATEGORY_POSITION = 3
-HAJI_CODEX_CATEGORY_VI = "API CODEX & CLAUDE"
-HAJI_CODEX_CATEGORY_EN = "CODEX & CLAUDE API"
+HAJI_CODEX_CATEGORY_VI = "API CODEX"
+HAJI_CODEX_CATEGORY_EN = "CODEX API"
 HAJI_CODEX_CATEGORY_POSITION = 4
 HAJI_CODEX_PRODUCT_MARKUPS = {
     "apicodex_10m_1day": 5_000,
@@ -544,6 +544,10 @@ async def ensure_haji_products(
                 continue
             if product.supplier_product_id not in live_ids:
                 product.external_stock = 0
+                # Claude is no longer an API catalog item. Hide stale Claude
+                # rows that disappeared from the allowed supplier catalog.
+                if (product.supplier_product_id or "").startswith("claude_"):
+                    product.active = False
 
         for source in products:
             if source.product_id in HAJI_ROUTE_ONLY_PRODUCT_IDS:
@@ -552,7 +556,7 @@ async def ensure_haji_products(
                 netflix_category
                 if source.kind == "netflix"
                 else codex_category
-                if source.kind in {"codex", "claude"}
+                if source.kind == "codex"
                 else gpt_category
             )
             name_vi, name_en = haji_product_names(source)
@@ -594,7 +598,7 @@ async def ensure_haji_products(
                         description_vi=description_vi,
                         description_en=description_en,
                         price=source.unit_price + markup_value,
-                        product_type="service" if source.kind == "claude" else "account",
+                        product_type="account",
                         allow_quantity=source.kind != "codex",
                         max_quantity=1 if source.kind == "codex" else 100,
                         fulfillment_source=HAJI_PROVIDER,
@@ -606,6 +610,14 @@ async def ensure_haji_products(
                     )
                 )
                 continue
+            if source.kind == "claude":
+                # Claude is a team account product, not an API package. Move
+                # existing rows out of the Codex category during sync while
+                # retaining the email-based supplier fulfillment flow.
+                product.category_id = gpt_category.id
+                product.product_type = "account"
+                product.allow_quantity = True
+                product.max_quantity = 100
             if (
                 source.kind == "claude"
                 and product.supplier_price is not None

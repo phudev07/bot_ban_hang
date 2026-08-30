@@ -420,11 +420,11 @@ def create_router(
             return products
 
     async def codex_menu_enabled(session: AsyncSession) -> bool:
-        """Show the Codex/Claude menu while at least one package is visible."""
+        """Show the Codex menu while at least one package is visible."""
         if haji_client is None:
             return False
         return any(
-            (product.supplier_product_id or "").startswith(("apicodex_", "claude_"))
+            (product.supplier_product_id or "").startswith("apicodex_")
             for product in await menu_products(session)
         )
 
@@ -949,7 +949,7 @@ def create_router(
             product
             for product in await menu_products(session)
             if product.fulfillment_source == "haji"
-            and (product.supplier_product_id or "").startswith(("apicodex_", "claude_"))
+            and (product.supplier_product_id or "").startswith("apicodex_")
         ]
         flash_prices = await active_flash_sale_prices(
             session, [product.id for product in products]
@@ -961,11 +961,11 @@ def create_router(
             flash_prices,
         )
         text = (
-            "🤖 <b>API CODEX &amp; CLAUDE</b>\n\n"
-            "Chọn gói Codex hoặc Claude cần mua. Gói Codex có hạn 24 giờ tính từ lúc kích hoạt key."
+            "🤖 <b>API CODEX</b>\n\n"
+            "Chọn gói Codex cần mua. Gói có hạn 24 giờ tính từ lúc kích hoạt key."
             if user.language == "vi"
-            else "🤖 <b>CODEX &amp; CLAUDE API</b>\n\n"
-            "Choose a Codex or Claude package. Codex packages are valid for 24 hours after key activation."
+            else "🤖 <b>CODEX API</b>\n\n"
+            "Choose a Codex package. Packages are valid for 24 hours after key activation."
         )
         if not products:
             text += (

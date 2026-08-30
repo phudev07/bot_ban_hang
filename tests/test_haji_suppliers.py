@@ -474,7 +474,7 @@ def test_haji_products_are_imported_with_fixed_codex_sale_prices() -> None:
             codex_10m, codex_category = by_id["apicodex_10m_1day"]
             codex_50m = by_id["apicodex_50m_1day"][0]
             codex_100m = by_id["apicodex_100m_1day"][0]
-            assert codex_category.name_vi == "API CODEX & CLAUDE"
+            assert codex_category.name_vi == "API CODEX"
             assert codex_10m.price == 30_000 and codex_10m.supplier_markup == 5_000
             assert codex_50m.price == 50_000 and codex_50m.supplier_markup == 15_000
             assert codex_100m.price == 70_000 and codex_100m.supplier_markup == 15_000
@@ -487,7 +487,7 @@ def test_haji_products_are_imported_with_fixed_codex_sale_prices() -> None:
     asyncio.run(scenario())
 
 
-def test_haji_claude_product_is_created_in_codex_category() -> None:
+def test_haji_claude_product_is_created_as_account_in_chatgpt_category() -> None:
     def handler(request: httpx.Request) -> httpx.Response:
         if request.url.path == "/api/v2/catalog":
             payload = catalog_payload()
@@ -529,10 +529,10 @@ def test_haji_claude_product_is_created_in_codex_category() -> None:
             ).one()
             assert product.name_vi == "Claude Team Standard 1 tháng"
             assert product.price == 450_000
-            assert product.product_type == "service"
+            assert product.product_type == "account"
             assert product.allow_quantity is True and product.max_quantity == 100
             assert product.external_stock == 0
-            assert category.name_vi == "API CODEX & CLAUDE"
+            assert category.name_vi == "Tài Khoản ChatGPT cá nhân"
         await client.aclose()
         await engine.dispose()
 

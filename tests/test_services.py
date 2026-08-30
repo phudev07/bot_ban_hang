@@ -526,11 +526,11 @@ def test_quick_buy_uses_available_inventory_for_local_product_stock() -> None:
     asyncio.run(scenario())
 
 
-def test_quick_buy_includes_haji_claude_service_products() -> None:
+def test_quick_buy_includes_haji_claude_account_products() -> None:
     async def scenario() -> None:
         engine, sessions = await make_database()
         async with sessions() as session:
-            category = Category(name_vi="API CODEX & CLAUDE", name_en="CODEX & CLAUDE API")
+            category = Category(name_vi="ChatGPT", name_en="ChatGPT")
             session.add(category)
             await session.flush()
             session.add(
@@ -539,7 +539,7 @@ def test_quick_buy_includes_haji_claude_service_products() -> None:
                     name_vi="Claude Team Standard 1 tháng",
                     name_en="Claude Team Standard 1 month",
                     price=450_000,
-                    product_type="service",
+                    product_type="account",
                     fulfillment_source="haji",
                     supplier_product_id="claude_addteam1x25",
                     external_stock=2,
