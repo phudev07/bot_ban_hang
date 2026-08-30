@@ -1,5 +1,6 @@
 import asyncio
 import logging
+import re
 from datetime import UTC, datetime
 from decimal import Decimal, InvalidOperation
 from html import escape
@@ -419,13 +420,66 @@ def create_router(
             return products
 
     async def codex_menu_enabled(session: AsyncSession) -> bool:
-        """Show the Codex menu only while at least one Codex product is visible."""
+        """Show the Codex/Claude menu while at least one package is visible."""
         if haji_client is None:
             return False
         return any(
-            (product.supplier_product_id or "").startswith("apicodex_")
+            (product.supplier_product_id or "").startswith(("apicodex_", "claude_"))
             for product in await menu_products(session)
         )
+
+    def requires_supplier_email(product: Product) -> bool:
+        return (
+            product.fulfillment_source == "haji"
+            and (product.supplier_product_id or "").startswith("claude_")
+        )
+
+    def parse_supplier_emails(value: str, quantity: int) -> tuple[str, ...] | None:
+        emails = tuple(
+            item.strip().lower()
+            for item in re.split(r"[\s,;]+", value)
+            if item.strip()
+        )
+        if len(emails) != quantity:
+            return None
+        if any(
+            not re.fullmatch(r"[^@\s]+@[^@\s]+\.[^@\s]+", email)
+            for email in emails
+        ):
+            return None
+        return emails
+
+    async def request_supplier_email(
+        target: Message,
+        user: User,
+        product: Product,
+        quantity: int,
+        state: FSMContext,
+        *,
+        action: str = "wallet",
+        coupon_id: int | None = None,
+        expected_flash_sale_id: int | None = None,
+        expected_total_amount: int | None = None,
+    ) -> None:
+        await state.set_state(PurchaseStates.waiting_for_supplier_email)
+        await state.update_data(
+            product_id=product.id,
+            quantity=quantity,
+            supplier_email_action=action,
+            coupon_id=coupon_id,
+            expected_flash_sale_id=expected_flash_sale_id,
+            expected_total_amount=expected_total_amount,
+        )
+        prompt = (
+            f"📧 <b>Nhập email Claude</b>\n\n"
+            f"📦 Sản phẩm: <b>{safe_customer_html(product.name_vi)}</b>\n"
+            f"Gửi {quantity} email, mỗi email một dòng để thêm vào team."
+            if user.language == "vi"
+            else f"📧 <b>Enter the Claude email</b>\n\n"
+            f"📦 Product: <b>{safe_customer_html(product.name_en)}</b>\n"
+            f"Send {quantity} email address(es), one per line, to add to the team."
+        )
+        await target.answer(prompt, reply_markup=back_menu(user.language))
 
     def sms_source_settings(source_key: str) -> tuple[int, int, int]:
         if source_key == "1":
@@ -895,7 +949,7 @@ def create_router(
             product
             for product in await menu_products(session)
             if product.fulfillment_source == "haji"
-            and (product.supplier_product_id or "").startswith("apicodex_")
+            and (product.supplier_product_id or "").startswith(("apicodex_", "claude_"))
         ]
         flash_prices = await active_flash_sale_prices(
             session, [product.id for product in products]
@@ -907,11 +961,11 @@ def create_router(
             flash_prices,
         )
         text = (
-            "🤖 <b>API CODEX</b>\n\n"
-            "Chọn gói token cần mua. Mỗi gói có hạn 24 giờ tính từ lúc kích hoạt key."
+            "🤖 <b>API CODEX &amp; CLAUDE</b>\n\n"
+            "Chọn gói Codex hoặc Claude cần mua. Gói Codex có hạn 24 giờ tính từ lúc kích hoạt key."
             if user.language == "vi"
-            else "🤖 <b>CODEX API</b>\n\n"
-            "Choose a token package. Each package is valid for 24 hours after key activation."
+            else "🤖 <b>CODEX &amp; CLAUDE API</b>\n\n"
+            "Choose a Codex or Claude package. Codex packages are valid for 24 hours after key activation."
         )
         if not products:
             text += (
@@ -1728,6 +1782,7 @@ def create_router(
         session_factory: async_sessionmaker[AsyncSession],
         coupon_id: int | None = None,
         supplier_request_key: str | None = None,
+        supplier_emails: tuple[str, ...] | None = None,
         expected_flash_sale_id: int | None = None,
         expected_total_amount: int | None = None,
     ) -> str:
@@ -1769,6 +1824,7 @@ def create_router(
                     None if fulfillment_message is not None else show_fulfillment_started
                 ),
                 supplier_idempotency_key=supplier_request_key,
+                supplier_emails=supplier_emails,
                 expected_flash_sale_id=expected_flash_sale_id,
                 expected_total_amount=expected_total_amount,
                 usd_to_vnd=settings.binance_pay_usd_to_vnd,
@@ -1967,6 +2023,92 @@ def create_router(
                 session_factory,
             )
         return result.message
+
+    @router.message(PurchaseStates.waiting_for_supplier_email)
+    async def receive_supplier_emails(
+        message: Message,
+        session: AsyncSession,
+        session_factory: async_sessionmaker[AsyncSession],
+        state: FSMContext,
+    ) -> None:
+        user = await get_or_create_user(message, session)
+        data = await state.get_data()
+        product_id = int(data.get("product_id", 0))
+        quantity = int(data.get("quantity", 0))
+        product = await session.get(Product, product_id)
+        emails = parse_supplier_emails(message.text or "", quantity)
+        if (
+            product is None
+            or not product.active
+            or not requires_supplier_email(product)
+            or emails is None
+        ):
+            await message.answer(
+                (
+                    f"Email không hợp lệ. Hãy gửi đúng {quantity} email, "
+                    "mỗi email một dòng."
+                    if user.language == "vi"
+                    else f"Invalid email list. Send exactly {quantity} valid email address(es), one per line."
+                )
+            )
+            return
+        action = str(data.get("supplier_email_action") or "wallet")
+        await state.clear()
+        if action == "directpay":
+            await state.update_data(
+                product_id=product.id,
+                quantity=quantity,
+                supplier_emails=list(emails),
+                supplier_email_action="directpay_ready",
+            )
+            await message.answer(
+                (
+                    "✅ Đã nhận email. Bấm nút QR bên dưới để tạo mã thanh toán cho đơn này."
+                    if user.language == "vi"
+                    else "✅ Email received. Tap the QR button below to create payment for this order."
+                ),
+                reply_markup=purchase_payment_options(
+                    product.id,
+                    quantity,
+                    user.language,
+                    coupon_id=(
+                        int(data["coupon_id"])
+                        if data.get("coupon_id") is not None
+                        else None
+                    ),
+                    flash_sale_id=(
+                        int(data["expected_flash_sale_id"])
+                        if data.get("expected_flash_sale_id") is not None
+                        else None
+                    ),
+                ),
+            )
+            return
+        await complete_product_purchase(
+            message,
+            user,
+            product.id,
+            quantity,
+            session,
+            session_factory,
+            coupon_id=(
+                int(data["coupon_id"])
+                if data.get("coupon_id") is not None
+                else None
+            ),
+            supplier_request_key=f"tg-message-{message.chat.id}-{message.message_id}",
+            supplier_emails=emails,
+            expected_flash_sale_id=(
+                int(data["expected_flash_sale_id"])
+                if data.get("expected_flash_sale_id") is not None
+                else None
+            ),
+            expected_total_amount=(
+                int(data["expected_total_amount"])
+                if data.get("expected_total_amount") is not None
+                else None
+            ),
+        )
 
     async def show_seller_purchase_confirmation(
         target: Message,
@@ -2366,6 +2508,15 @@ def create_router(
             )
             return
         await state.clear()
+        if requires_supplier_email(product):
+            await request_supplier_email(
+                message,
+                user,
+                product,
+                quantity,
+                state,
+            )
+            return
         normalized_flash_sale_id = (
             int(expected_flash_sale_id)
             if expected_flash_sale_id is not None
@@ -2489,6 +2640,7 @@ def create_router(
         callback: CallbackQuery,
         session: AsyncSession,
         session_factory: async_sessionmaker[AsyncSession],
+        state: FSMContext,
     ) -> None:
         user = await get_or_create_user(callback, session)
         parts = callback.data.split(":")
@@ -2513,6 +2665,16 @@ def create_router(
             if user.language == "vi"
             else "Checking your order..."
         )
+        if requires_supplier_email(product):
+            if callback.message:
+                await request_supplier_email(
+                    callback.message,
+                    user,
+                    product,
+                    quantity,
+                    state,
+                )
+            return
         if callback.message and await show_seller_purchase_confirmation(
             callback.message,
             user,
@@ -2539,6 +2701,7 @@ def create_router(
         callback: CallbackQuery,
         session: AsyncSession,
         session_factory: async_sessionmaker[AsyncSession],
+        state: FSMContext,
     ) -> None:
         user = await get_or_create_user(callback, session)
         parts = callback.data.split(":")
@@ -2555,6 +2718,20 @@ def create_router(
             if user.language == "vi"
             else "Processing your order..."
         )
+        product = await session.get(Product, int(product_id))
+        if product is not None and requires_supplier_email(product):
+            if callback.message:
+                await request_supplier_email(
+                    callback.message,
+                    user,
+                    product,
+                    quantity,
+                    state,
+                    action="seller",
+                    expected_total_amount=expected_total_amount,
+                    expected_flash_sale_id=expected_flash_sale_id,
+                )
+            return
         if callback.message:
             await complete_product_purchase(
                 callback.message,
@@ -2573,6 +2750,7 @@ def create_router(
         callback: CallbackQuery,
         session: AsyncSession,
         session_factory: async_sessionmaker[AsyncSession],
+        state: FSMContext,
     ) -> None:
         user = await get_or_create_user(callback, session)
         _, product_id_text, quantity_text, coupon_id_text = callback.data.split(":")
@@ -2581,6 +2759,19 @@ def create_router(
             if user.language == "vi"
             else "Processing your order..."
         )
+        product = await session.get(Product, int(product_id_text))
+        if product is not None and requires_supplier_email(product):
+            if callback.message:
+                await request_supplier_email(
+                    callback.message,
+                    user,
+                    product,
+                    int(quantity_text),
+                    state,
+                    action="coupon",
+                    coupon_id=int(coupon_id_text),
+                )
+            return
         if callback.message:
             await complete_product_purchase(
                 callback.message,
@@ -2597,6 +2788,7 @@ def create_router(
     async def direct_product_payment(
         callback: CallbackQuery,
         session: AsyncSession,
+        state: FSMContext,
     ) -> None:
         user = await get_or_create_user(callback, session)
         if not settings.sepay_enabled:
@@ -2626,6 +2818,49 @@ def create_router(
                 show_alert=True,
             )
             return
+        supplier_emails: tuple[str, ...] = ()
+        if requires_supplier_email(product):
+            saved = await state.get_data()
+            saved_product_id = int(saved.get("product_id", 0) or 0)
+            saved_quantity = int(saved.get("quantity", 0) or 0)
+            saved_emails = saved.get("supplier_emails")
+            if (
+                saved_product_id != product.id
+                or saved_quantity != quantity
+                or not isinstance(saved_emails, list)
+            ):
+                if callback.message:
+                    await request_supplier_email(
+                        callback.message,
+                        user,
+                        product,
+                        quantity,
+                        state,
+                        action="directpay",
+                        coupon_id=coupon_id,
+                        expected_flash_sale_id=expected_flash_sale_id,
+                    )
+                await callback.answer()
+                return
+            supplier_emails = tuple(
+                str(email).strip().lower() for email in saved_emails if str(email).strip()
+            )
+            if len(supplier_emails) != quantity:
+                await state.clear()
+                if callback.message:
+                    await request_supplier_email(
+                        callback.message,
+                        user,
+                        product,
+                        quantity,
+                        state,
+                        action="directpay",
+                        coupon_id=coupon_id,
+                        expected_flash_sale_id=expected_flash_sale_id,
+                    )
+                await callback.answer()
+                return
+            await state.clear()
         if quantity < 1 or quantity > product.max_quantity:
             await callback.answer(
                 "Số lượng không hợp lệ."
@@ -2739,6 +2974,7 @@ def create_router(
                 payment_kind="direct_purchase",
                 product_id=product.id,
                 quantity=quantity,
+                supplier_emails=supplier_emails,
                 discount_amount=total_discount,
                 discount_code_id=pricing.coupon.id if pricing.coupon else None,
                 discount_code=pricing.coupon.code if pricing.coupon else None,

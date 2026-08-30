@@ -696,6 +696,8 @@ class Deposit(Base):
         ForeignKey("products.id"), nullable=True, index=True
     )
     quantity: Mapped[int] = mapped_column(default=1)
+    # JSON array of customer emails for supplier services that require them.
+    supplier_emails: Mapped[str] = mapped_column(Text, default="", server_default="")
     discount_amount: Mapped[int] = mapped_column(BigInteger, default=0)
     discount_code_id: Mapped[int | None] = mapped_column(
         ForeignKey("discount_codes.id", ondelete="SET NULL"), nullable=True, index=True

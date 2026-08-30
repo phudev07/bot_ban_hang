@@ -1,5 +1,6 @@
 import asyncio
 import hashlib
+import json
 import logging
 import secrets
 from collections.abc import Awaitable, Callable
@@ -154,6 +155,7 @@ async def buy_supplier_product(
     *,
     idempotency_key: str | None = None,
     shop_product_id: int | None = None,
+    supplier_emails: tuple[str, ...] | None = None,
 ) -> SupplierPurchase:
     provider = getattr(client, "provider", "sumistore")
     request_key = idempotency_key or f"shop-{secrets.token_hex(16)}"
@@ -214,6 +216,7 @@ async def buy_supplier_product(
             product_id,
             quantity,
             idempotency_key=request_key,
+            supplier_emails=supplier_emails,
         )
     except SupplierError as exc:
         attempt.status = "failed"
@@ -297,10 +300,16 @@ async def execute_supplier_route_plan(
     *,
     request_key: str,
     cipher: SecretCipher,
+    supplier_emails: tuple[str, ...] | None = None,
 ) -> tuple[tuple[SupplierPurchase, int], ...]:
     completed: list[tuple[SupplierPurchase, int]] = []
+    email_offset = 0
     try:
         for position, (route, route_quantity) in enumerate(plan, start=1):
+            route_emails: tuple[str, ...] | None = None
+            if supplier_emails is not None:
+                route_emails = supplier_emails[email_offset : email_offset + route_quantity]
+            email_offset += route_quantity
             purchase = await buy_supplier_product(
                 session,
                 route.client,
@@ -316,6 +325,7 @@ async def execute_supplier_route_plan(
                     )
                 ),
                 shop_product_id=product.id,
+                supplier_emails=route_emails,
             )
             unit_cost = max(
                 0,
@@ -360,12 +370,20 @@ async def _execute_supplier_purchase(
     quantity: int,
     *,
     idempotency_key: str | None = None,
+    supplier_emails: tuple[str, ...] | None = None,
 ) -> SupplierPurchase:
     provider = getattr(client, "provider", "sumistore")
     started_at = datetime.now(UTC)
     try:
         if provider == "sumistore":
             return await client.buy(product_id, quantity)
+        if provider == "haji" and supplier_emails:
+            return await client.buy(
+                product_id,
+                quantity,
+                idempotency_key=idempotency_key,
+                emails=supplier_emails,
+            )
         return await client.buy(product_id, quantity, idempotency_key=idempotency_key)
     except SupplierError as exc:
         if (
@@ -392,6 +410,11 @@ async def _execute_supplier_purchase(
                         product_id,
                         quantity,
                         idempotency_key=idempotency_key,
+                        **(
+                            {"emails": list(supplier_emails)}
+                            if provider == "haji" and supplier_emails
+                            else {}
+                        ),
                     )
                 except SupplierError as retry_exc:
                     logger.warning(
@@ -412,6 +435,11 @@ async def _execute_supplier_purchase(
                     product_id,
                     quantity,
                     idempotency_key=idempotency_key,
+                    **(
+                        {"emails": list(supplier_emails)}
+                        if provider == "haji" and supplier_emails
+                        else {}
+                    ),
                 )
             except SupplierError:
                 raise exc
@@ -1682,6 +1710,7 @@ async def purchase_product(
     expected_total_amount: int | None = None,
     usd_to_vnd: int = 27_500,
     preferred_payment_currency: str | None = None,
+    supplier_emails: tuple[str, ...] | None = None,
 ) -> PurchaseResult:
     if wallet_already_charged and preorder_id is None:
         return PurchaseResult(False, "invalid_preorder_payment")
@@ -1733,6 +1762,7 @@ async def purchase_product(
                 expected_total_amount=expected_total_amount,
                 usd_to_vnd=usd_to_vnd,
                 preferred_payment_currency=preferred_payment_currency,
+                supplier_emails=supplier_emails,
             )
     return await _purchase_product(
         session_factory,
@@ -1762,6 +1792,7 @@ async def purchase_product(
         expected_total_amount=expected_total_amount,
         usd_to_vnd=usd_to_vnd,
         preferred_payment_currency=preferred_payment_currency,
+        supplier_emails=supplier_emails,
     )
 
 
@@ -1794,6 +1825,7 @@ async def _purchase_product(
     expected_total_amount: int | None,
     usd_to_vnd: int,
     preferred_payment_currency: str | None,
+    supplier_emails: tuple[str, ...] | None,
 ) -> PurchaseResult:
     async with session_factory() as session:
         async with session.begin():
@@ -2333,6 +2365,7 @@ async def _purchase_product(
                             multi_plan,
                             request_key=request_key,
                             cipher=cipher,
+                            supplier_emails=supplier_emails,
                         )
                     else:
                         supplier_purchase = await buy_supplier_product(
@@ -2342,6 +2375,7 @@ async def _purchase_product(
                             supplier_quantity,
                             idempotency_key=request_key,
                             shop_product_id=product.id,
+                            supplier_emails=supplier_emails,
                         )
                         supplier_purchases = (
                             (
@@ -2908,6 +2942,7 @@ async def create_deposit(
     payment_kind: str = "wallet",
     product_id: int | None = None,
     quantity: int = 1,
+    supplier_emails: tuple[str, ...] | None = None,
     discount_amount: int = 0,
     discount_code_id: int | None = None,
     discount_code: str | None = None,
@@ -2919,6 +2954,15 @@ async def create_deposit(
     max_pending_deposits: int = 3,
 ) -> Deposit:
     now = datetime.now(UTC)
+    serialized_supplier_emails = (
+        json.dumps(
+            tuple(supplier_emails),
+            ensure_ascii=True,
+            separators=(",", ":"),
+        )
+        if supplier_emails
+        else ""
+    )
     user = await session.scalar(
         select(User).where(User.telegram_id == user_id).with_for_update()
     )
@@ -2964,6 +3008,7 @@ async def create_deposit(
             Deposit.payment_kind == payment_kind,
             Deposit.product_id == product_id,
             Deposit.quantity == quantity,
+            Deposit.supplier_emails == serialized_supplier_emails,
             Deposit.discount_code_id == discount_code_id,
             Deposit.flash_sale_id == flash_sale_id,
             Deposit.seller_price_id == seller_price_id,
@@ -3018,6 +3063,7 @@ async def create_deposit(
         payment_kind=payment_kind,
         product_id=product_id,
         quantity=quantity,
+        supplier_emails=serialized_supplier_emails,
         discount_amount=discount_amount,
         discount_code_id=discount_code_id,
         discount_code=discount_code,
@@ -3703,6 +3749,19 @@ async def _process_sepay_payment(
                     )
                 items: list[InventoryItem] = []
                 supplier_purchase_made = False
+                deposit_supplier_emails: tuple[str, ...] = ()
+                raw_supplier_emails = str(getattr(deposit, "supplier_emails", "") or "")
+                if raw_supplier_emails:
+                    try:
+                        parsed_supplier_emails = json.loads(raw_supplier_emails)
+                    except (TypeError, ValueError):
+                        parsed_supplier_emails = []
+                    if isinstance(parsed_supplier_emails, list):
+                        deposit_supplier_emails = tuple(
+                            str(email).strip()
+                            for email in parsed_supplier_emails
+                            if str(email).strip()
+                        )
                 supplier_purchase_parts: tuple[
                     tuple[SupplierPurchase, int], ...
                 ] = ()
@@ -4034,6 +4093,7 @@ async def _process_sepay_payment(
                                                 multi_plan,
                                                 request_key=f"qr-{deposit.code}",
                                                 cipher=cipher,
+                                                supplier_emails=deposit_supplier_emails,
                                             )
                                         )
                                     elif multi_route_fetch is not None:
@@ -4046,6 +4106,7 @@ async def _process_sepay_payment(
                                             supplier_quantity,
                                             idempotency_key=f"qr-{deposit.code}",
                                             shop_product_id=product.id,
+                                            supplier_emails=deposit_supplier_emails,
                                         )
                                         supplier_purchase_parts = (
                                             (

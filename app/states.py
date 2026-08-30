@@ -10,6 +10,7 @@ class PurchaseStates(StatesGroup):
     waiting_for_quantity = State()
     waiting_for_coupon = State()
     waiting_for_coupon_quantity = State()
+    waiting_for_supplier_email = State()
 
 
 class BroadcastStates(StatesGroup):

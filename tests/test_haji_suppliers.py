@@ -108,6 +108,51 @@ def test_haji_product_matching_is_limited_to_requested_families() -> None:
     assert haji_product_kind("API Codex 50M Token 1 ngay") == "codex"
     assert haji_product_kind("API Codex 100M Token 1 ngay") == "codex"
     assert haji_product_kind("API Codex 500M Token") is None
+    assert haji_product_kind("Slot Claude Team Standard") == "claude"
+
+
+def test_haji_only_exposes_the_requested_claude_sku() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/api/v2/catalog":
+            payload = catalog_payload()
+            payload["data"]["products"].extend(
+                [
+                    {
+                        "product_id": "claude_addteam1x25",
+                        "name": "Slot Claude Team (Standard) BHF 1 Moth",
+                        "price": 400_000,
+                        "currency": "VND",
+                        "stock_count": 14,
+                        "available": True,
+                    },
+                    {
+                        "product_id": "claude_slot_premium",
+                        "name": "Claude Slot Premium",
+                        "price": 2_100_000,
+                        "currency": "VND",
+                        "stock_count": 10,
+                        "available": True,
+                    },
+                ]
+            )
+            return httpx.Response(200, json=payload)
+        if request.url.path == "/api/v2/me":
+            return httpx.Response(200, json={"ok": True, "data": {"balance": 6_000_000}})
+        raise AssertionError(f"Unexpected request: {request.method} {request.url}")
+
+    async def scenario() -> None:
+        client = HajiClient(
+            "https://api.haji.in.net",
+            "dl_test_key_123456789",
+            transport=httpx.MockTransport(handler),
+        )
+        products = await client.refresh_catalog(force=True)
+        assert {product.product_id for product in products if product.kind == "claude"} == {
+            "claude_addteam1x25"
+        }
+        await client.aclose()
+
+    asyncio.run(scenario())
 
 
 def test_haji_catalog_balance_and_bulk_purchase_use_documented_contract() -> None:
@@ -183,6 +228,104 @@ def test_haji_catalog_balance_and_bulk_purchase_use_documented_contract() -> Non
         assert purchase.accounts == ("netflix-1|pass", "netflix-2|pass")
         assert purchase.provider == "haji"
         assert seen_order_headers == ["shop-order-001"]
+        await client.aclose()
+
+    asyncio.run(scenario())
+
+
+def test_haji_manual_claude_purchase_sends_emails_and_polls_until_done() -> None:
+    order_requests: list[dict[str, object]] = []
+    poll_count = 0
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal poll_count
+        if request.url.path == "/api/v2/catalog":
+            payload = catalog_payload()
+            payload["data"]["products"].append(
+                {
+                    "product_id": "claude_addteam1x25",
+                    "name": "Slot Claude Team (Standard) BHF 1 Moth",
+                    "price": 400_000,
+                    "currency": "VND",
+                    "stock_count": 14,
+                    "available": True,
+                    "delivery_mode": "manual_fulfillment",
+                    "requires_emails": True,
+                }
+            )
+            return httpx.Response(200, json=payload)
+        if request.url.path == "/api/v2/me":
+            return httpx.Response(200, json={"ok": True, "data": {"balance": 6_000_000}})
+        if request.url.path == "/api/v2/orders" and request.method == "POST":
+            order_requests.append(json.loads(request.content))
+            assert request.headers["x-idempotency-key"] == "shop-claude-001"
+            return httpx.Response(
+                200,
+                json={
+                    "ok": True,
+                    "data": {
+                        "order_code": "AP-CLAUDE001",
+                        "quantity": 2,
+                        "unit_price": 400_000,
+                        "total_price": 800_000,
+                        "status": "processing",
+                    },
+                },
+            )
+        if request.url.path == "/api/v2/orders/AP-CLAUDE001":
+            poll_count += 1
+            return httpx.Response(
+                200,
+                json={
+                    "ok": True,
+                    "data": {
+                        "order_code": "AP-CLAUDE001",
+                        "quantity": 2,
+                        "unit_price": 400_000,
+                        "status": "done",
+                        "items": [
+                            {"value": "customer-one@example.com", "type": "email"},
+                            {"value": "customer-two@example.com", "type": "email"},
+                        ],
+                    },
+                },
+            )
+        raise AssertionError(f"Unexpected request: {request.method} {request.url}")
+
+    async def scenario() -> None:
+        client = HajiClient(
+            "https://api.haji.in.net",
+            "dl_test_key_123456789",
+            transport=httpx.MockTransport(handler),
+            manual_poll_seconds=0.2,
+            manual_timeout_seconds=1,
+        )
+        products = await client.refresh_catalog(force=True)
+        claude = next(product for product in products if product.product_id == "claude_addteam1x25")
+        assert claude.kind == "claude"
+        assert claude.delivery_mode == "manual_fulfillment"
+        assert claude.requires_emails is True
+        purchase = await client.buy(
+            claude.product_id,
+            2,
+            idempotency_key="shop-claude-001",
+            emails=("customer-one@example.com", "customer-two@example.com"),
+        )
+        assert order_requests == [
+            {
+                "product_id": "claude_addteam1x25",
+                "quantity": 2,
+                "partner_ref": "shop-claude-001",
+                "emails": ["customer-one@example.com", "customer-two@example.com"],
+            }
+        ]
+        assert poll_count == 1
+        assert purchase.order_code == "HAJI-AP-CLAUDE001"
+        assert purchase.unit_price == 400_000
+        assert purchase.accounts == (
+            "customer-one@example.com",
+            "customer-two@example.com",
+        )
         await client.aclose()
 
     asyncio.run(scenario())
@@ -331,13 +474,65 @@ def test_haji_products_are_imported_with_fixed_codex_sale_prices() -> None:
             codex_10m, codex_category = by_id["apicodex_10m_1day"]
             codex_50m = by_id["apicodex_50m_1day"][0]
             codex_100m = by_id["apicodex_100m_1day"][0]
-            assert codex_category.name_vi == "API CODEX"
+            assert codex_category.name_vi == "API CODEX & CLAUDE"
             assert codex_10m.price == 30_000 and codex_10m.supplier_markup == 5_000
             assert codex_50m.price == 50_000 and codex_50m.supplier_markup == 15_000
             assert codex_100m.price == 70_000 and codex_100m.supplier_markup == 15_000
             assert codex_10m.allow_quantity is False and codex_10m.max_quantity == 1
             assert codex_50m.allow_quantity is False and codex_50m.max_quantity == 1
             assert codex_100m.allow_quantity is False and codex_100m.max_quantity == 1
+        await client.aclose()
+        await engine.dispose()
+
+    asyncio.run(scenario())
+
+
+def test_haji_claude_product_is_created_in_codex_category() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/api/v2/catalog":
+            payload = catalog_payload()
+            payload["data"]["products"].append(
+                {
+                    "product_id": "claude_addteam1x25",
+                    "name": "Slot Claude Team (Standard) BHF 1 Moth",
+                    "price": 400_000,
+                    "currency": "VND",
+                    "stock_count": 14,
+                    "available": True,
+                    "delivery_mode": "manual_fulfillment",
+                    "requires_emails": True,
+                }
+            )
+            return httpx.Response(200, json=payload)
+        if request.url.path == "/api/v2/me":
+            return httpx.Response(200, json={"ok": True, "data": {"balance": 6_000_000}})
+        raise AssertionError(f"Unexpected request: {request.method} {request.url}")
+
+    async def scenario() -> None:
+        engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+        async with engine.begin() as connection:
+            await connection.run_sync(Base.metadata.create_all)
+        sessions = async_sessionmaker(engine, expire_on_commit=False)
+        client = HajiClient(
+            "https://api.haji.in.net",
+            "dl_test_key_123456789",
+            transport=httpx.MockTransport(handler),
+        )
+        await ensure_haji_products(sessions, client, markup=5_000)
+        async with sessions() as session:
+            product, category = (
+                await session.execute(
+                    select(Product, Category)
+                    .join(Category, Category.id == Product.category_id)
+                    .where(Product.supplier_product_id == "claude_addteam1x25")
+                )
+            ).one()
+            assert product.name_vi == "Claude Team Standard 1 tháng"
+            assert product.price == 405_000
+            assert product.product_type == "service"
+            assert product.allow_quantity is True and product.max_quantity == 100
+            assert product.external_stock == 0
+            assert category.name_vi == "API CODEX & CLAUDE"
         await client.aclose()
         await engine.dispose()
 

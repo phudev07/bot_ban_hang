@@ -20,8 +20,8 @@ HAJI_PROVIDER = "haji"
 HAJI_NETFLIX_CATEGORY_VI = "Netflix"
 HAJI_NETFLIX_CATEGORY_EN = "Netflix"
 HAJI_NETFLIX_CATEGORY_POSITION = 3
-HAJI_CODEX_CATEGORY_VI = "API CODEX"
-HAJI_CODEX_CATEGORY_EN = "CODEX API"
+HAJI_CODEX_CATEGORY_VI = "API CODEX & CLAUDE"
+HAJI_CODEX_CATEGORY_EN = "CODEX & CLAUDE API"
 HAJI_CODEX_CATEGORY_POSITION = 4
 HAJI_CODEX_PRODUCT_MARKUPS = {
     "apicodex_10m_1day": 5_000,
@@ -36,13 +36,22 @@ HAJI_CODEX_PRODUCT_NAMES = {
         "Codex API 100M Tokens · 24 hours",
     ),
 }
+HAJI_CLAUDE_PRODUCT_NAMES = {
+    "claude_addteam1x25": (
+        "Claude Team Standard 1 tháng",
+        "Claude Team Standard 1 month",
+    ),
+}
+# Only expose the Claude Team slot requested for this shop. Other Claude SKUs
+# in the supplier catalog may have different fulfillment or pricing rules.
+HAJI_ALLOWED_CLAUDE_PRODUCT_IDS = frozenset({"claude_addteam1x25"})
 # Link Gemini 18M is fulfilled through the canonical Le Hai product so the
 # customer sees one listing while the route planner can choose the cheapest
 # enabled supplier.  Keep the Haji catalog kind for route discovery, but do
 # not expose it as a second standalone product.
 HAJI_ROUTE_ONLY_PRODUCT_IDS = frozenset({"link_gemini_18moth"})
 HAJI_SUPPORTED_KINDS = frozenset(
-    {"netflix", "gpt_gcash", "gpt_k12", "codex", "gemini_18m"}
+    {"netflix", "gpt_gcash", "gpt_k12", "codex", "claude", "gemini_18m"}
 )
 
 
@@ -54,6 +63,8 @@ class HajiProduct:
     unit_price: int
     stock: int
     kind: str
+    delivery_mode: str = "instant_items"
+    requires_emails: bool = False
 
 
 def _plain_text(value: object) -> str:
@@ -81,6 +92,8 @@ def haji_product_kind(value: object) -> str | None:
         return "gemini_18m"
     if "codex" in normalized and re.search(r"\b(?:10|50|100)\s*m\b", normalized):
         return "codex"
+    if "claude" in normalized:
+        return "claude"
     if "netflix" in normalized:
         return "netflix"
     if ("gpt" in normalized or "chatgpt" in normalized) and "gcash" in normalized:
@@ -101,7 +114,10 @@ def haji_product_markup(product_id: str, default_markup: int) -> int:
 def haji_product_names(source: HajiProduct) -> tuple[str, str]:
     if source.product_id in HAJI_ROUTE_ONLY_PRODUCT_IDS:
         return "Link GG Pro Jio 18M", "Google Pro Jio 18M Link"
-    return HAJI_CODEX_PRODUCT_NAMES.get(source.product_id, (source.name, source.name))
+    return HAJI_CODEX_PRODUCT_NAMES.get(
+        source.product_id,
+        HAJI_CLAUDE_PRODUCT_NAMES.get(source.product_id, (source.name, source.name)),
+    )
 
 
 def _delivery_items(data: dict[str, object]) -> tuple[str, ...]:
@@ -110,7 +126,10 @@ def _delivery_items(data: dict[str, object]) -> tuple[str, ...]:
         return ()
     values: list[str] = []
     for item in raw_items:
-        value = item.get("value") if isinstance(item, dict) else item
+        if isinstance(item, dict):
+            value = item.get("value") or item.get("email") or item.get("account")
+        else:
+            value = item
         text = _plain_text(value)
         if text:
             values.append(text)
@@ -127,12 +146,16 @@ class HajiClient:
         *,
         timeout_seconds: float = 15,
         snapshot_cache_seconds: int = 10,
+        manual_poll_seconds: float = 3.0,
+        manual_timeout_seconds: float = 180.0,
         transport: httpx.AsyncBaseTransport | None = None,
     ) -> None:
         self.base_url = base_url.rstrip("/")
         self.api_key = api_key
         self.timeout_seconds = timeout_seconds
         self.snapshot_cache_seconds = max(1, snapshot_cache_seconds)
+        self.manual_poll_seconds = max(0.2, float(manual_poll_seconds))
+        self.manual_timeout_seconds = max(1.0, float(manual_timeout_seconds))
         self.transport = transport
         self.balance_lock = asyncio.Lock()
         self.refresh_backoff_until: dict[str, float] = {}
@@ -237,11 +260,21 @@ class HajiClient:
                 not product_id
                 or not name
                 or kind not in HAJI_SUPPORTED_KINDS
+                or (kind == "claude" and product_id not in HAJI_ALLOWED_CLAUDE_PRODUCT_IDS)
                 or unit_price <= 0
                 or currency not in {"", "VND"}
             ):
                 continue
             available = raw_product.get("available") is not False
+            delivery_mode = (
+                _plain_text(raw_product.get("delivery_mode")).lower() or "instant_items"
+            )
+            raw_requires_emails = raw_product.get("requires_emails")
+            requires_emails = (
+                raw_requires_emails is True
+                or _normalized(raw_requires_emails) in {"1", "true", "yes"}
+                or delivery_mode == "manual_fulfillment"
+            )
             values.append(
                 HajiProduct(
                     product_id=product_id,
@@ -254,6 +287,8 @@ class HajiClient:
                         else 0
                     ),
                     kind=kind,
+                    delivery_mode=delivery_mode,
+                    requires_emails=requires_emails,
                 )
             )
         return tuple(values)
@@ -305,12 +340,17 @@ class HajiClient:
         quantity: int,
         *,
         idempotency_key: str | None = None,
+        emails: tuple[str, ...] | None = None,
     ) -> SupplierPurchase:
         if not 1 <= quantity <= 100:
             raise SupplierError("INVALID_QUANTITY")
         request_key = _plain_text(idempotency_key)
         if not request_key:
             raise SupplierError("SUPPLIER_IDEMPOTENCY_REQUIRED")
+        product = self._catalog.get(product_id)
+        if product is not None and product.requires_emails:
+            if emails is None or len(emails) != quantity:
+                raise SupplierError("SUPPLIER_EMAIL_REQUIRED")
         try:
             response = await self._http().post(
                 self._url("/api/v2/orders"),
@@ -318,6 +358,7 @@ class HajiClient:
                     "product_id": product_id,
                     "quantity": quantity,
                     "partner_ref": request_key,
+                    **({"emails": list(emails)} if emails is not None else {}),
                 },
                 headers={"x-idempotency-key": request_key},
             )
@@ -330,6 +371,33 @@ class HajiClient:
         total_price = _safe_int(data.get("total_price"))
         if unit_price <= 0 and total_price > 0:
             unit_price = (total_price + quantity - 1) // quantity
+        status = _plain_text(data.get("status")).lower()
+        if status in {"cancelled", "canceled", "failed", "refunded"}:
+            raise SupplierError("INSUFFICIENT_STOCK")
+        if status in {"processing", "pending"}:
+            if not order_code:
+                raise SupplierError("SUPPLIER_DELIVERY_INCOMPLETE")
+            deadline = time.monotonic() + self.manual_timeout_seconds
+            while time.monotonic() < deadline:
+                await asyncio.sleep(self.manual_poll_seconds)
+                try:
+                    current = await self._get(f"/api/v2/orders/{order_code}")
+                except SupplierError as exc:
+                    if exc.code in {"SUPPLIER_UNAVAILABLE", "SUPPLIER_INVALID_RESPONSE"}:
+                        continue
+                    raise
+                current_status = _plain_text(current.get("status")).lower()
+                if current_status in {"cancelled", "canceled", "failed", "refunded"}:
+                    raise SupplierError("INSUFFICIENT_STOCK")
+                current_items = _delivery_items(current)
+                current_unit_price = _safe_int(current.get("unit_price"))
+                if current_unit_price > 0:
+                    unit_price = current_unit_price
+                if current_status in {"done", "fulfilled", "success", "completed"}:
+                    accounts = current_items
+                    break
+            else:
+                raise SupplierError("SUPPLIER_UNAVAILABLE")
         if not order_code or len(accounts) != quantity or unit_price <= 0:
             raise SupplierError("SUPPLIER_DELIVERY_INCOMPLETE")
         self.invalidate_snapshot_cache()
@@ -483,7 +551,7 @@ async def ensure_haji_products(
                 netflix_category
                 if source.kind == "netflix"
                 else codex_category
-                if source.kind == "codex"
+                if source.kind in {"codex", "claude"}
                 else gpt_category
             )
             name_vi, name_en = haji_product_names(source)
@@ -497,6 +565,15 @@ async def ensure_haji_products(
                     "An activation key for a Codex API package valid for 24 hours after activation. "
                     "Open the setup guide after delivery to activate it and connect through "
                     "9Router or Custom Codex."
+                )
+            elif source.kind == "claude":
+                description_vi = (
+                    f"{source.name}. Sau khi mua, gửi email Claude cần thêm vào team. "
+                    "Đơn sẽ được xử lý tự động và thông báo khi hoàn tất."
+                )
+                description_en = (
+                    f"{source.name}. After purchase, provide the Claude email to add to the team. "
+                    "The order is processed automatically and you will be notified when complete."
                 )
             else:
                 description_vi = (
@@ -516,7 +593,7 @@ async def ensure_haji_products(
                         description_vi=description_vi,
                         description_en=description_en,
                         price=source.unit_price + markup_value,
-                        product_type="account",
+                        product_type="service" if source.kind == "claude" else "account",
                         allow_quantity=source.kind != "codex",
                         max_quantity=1 if source.kind == "codex" else 100,
                         fulfillment_source=HAJI_PROVIDER,
