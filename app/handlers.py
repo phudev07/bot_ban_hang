@@ -2084,7 +2084,7 @@ def create_router(
                 ),
             )
             return
-        await complete_product_purchase(
+        result_message = await complete_product_purchase(
             message,
             user,
             product.id,
@@ -2109,6 +2109,18 @@ def create_router(
                 else None
             ),
         )
+        # Keep the validated emails for the QR fallback when the wallet is
+        # insufficient. The QR callback consumes and clears this state, so the
+        # customer only enters the Claude email once.
+        if result_message == "insufficient":
+            await state.update_data(
+                product_id=product.id,
+                quantity=quantity,
+                supplier_emails=list(emails),
+                supplier_email_action="directpay_ready",
+            )
+        else:
+            await state.clear()
 
     async def show_seller_purchase_confirmation(
         target: Message,
