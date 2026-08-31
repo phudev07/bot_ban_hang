@@ -7,10 +7,16 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from app.database import Base
-from app.haji_suppliers import HajiClient, ensure_haji_products, haji_product_kind
+from app.haji_suppliers import (
+    HajiClient,
+    ensure_haji_products,
+    haji_product_kind,
+    refresh_haji_product,
+)
 from app.models import (
     Category,
     Deposit,
+    InventoryItem,
     Order,
     PaymentTransaction,
     Preorder,
@@ -22,6 +28,7 @@ from app.models import (
 from app.preorders import _claim_next_preorder, _process_claimed_preorder, create_preorder
 from app.services import buy_supplier_product, process_sepay_payment, purchase_product
 from app.suppliers import SupplierPurchase, SupplierSnapshot
+from app.suppliers import SupplierError
 from app.utils import SecretCipher
 
 
@@ -600,6 +607,53 @@ def test_haji_catalog_sync_preserves_admin_product_edits() -> None:
             assert product.active is False
 
         await client.aclose()
+        await engine.dispose()
+
+    asyncio.run(scenario())
+
+
+def test_missing_haji_product_clears_stale_api_stock_but_keeps_local_stock() -> None:
+    class MissingProductClient:
+        async def fetch_snapshot(self, product_id: str) -> SupplierSnapshot:
+            raise SupplierError("SUPPLIER_PRODUCT_MISSING")
+
+    async def scenario() -> None:
+        engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+        async with engine.begin() as connection:
+            await connection.run_sync(Base.metadata.create_all)
+        sessions = async_sessionmaker(engine, expire_on_commit=False)
+        cipher = SecretCipher(Fernet.generate_key().decode())
+        async with sessions() as session:
+            category = Category(name_vi="Codex", name_en="Codex")
+            session.add(category)
+            await session.flush()
+            product = Product(
+                category_id=category.id,
+                name_vi="API Codex 100M Token 7d",
+                name_en="Codex API 100M Token 7d",
+                price=60_000,
+                fulfillment_source="haji",
+                supplier_product_id="apicodex_100m_1day",
+                supplier_available_stock=3,
+                external_stock=13,
+            )
+            session.add(product)
+            await session.flush()
+            for index in range(10):
+                session.add(
+                    InventoryItem(
+                        product_id=product.id,
+                        encrypted_secret=cipher.encrypt(f"key-{index}"),
+                        account_fingerprint=cipher.inventory_fingerprint(f"key-{index}"),
+                        status="available",
+                    )
+                )
+            await session.flush()
+            stock = await refresh_haji_product(session, product, MissingProductClient())
+            assert stock == 10
+            assert product.external_stock == 10
+            assert product.supplier_available_stock == 0
+            await session.commit()
         await engine.dispose()
 
     asyncio.run(scenario())

@@ -691,7 +691,17 @@ async def refresh_haji_product(
         return product.external_stock
     try:
         snapshot = await client.fetch_snapshot(product.supplier_product_id)
-    except SupplierError:
+    except SupplierError as exc:
+        # A catalog removal is authoritative: do not keep the last API stock
+        # value and accidentally add it to newly imported local inventory.
+        # Other errors are transient and must retain the last known value so a
+        # short provider outage cannot make an item disappear.
+        if exc.code == "SUPPLIER_PRODUCT_MISSING":
+            product.supplier_available_stock = 0
+            product.supplier_available_stock_initialized = True
+            product.external_stock = local_stock
+            await session.flush()
+            return product.external_stock
         return max(local_stock, product.external_stock)
     product.supplier_owner_balance = snapshot.owner_balance
     product.external_stock = snapshot.effective_stock + local_stock
