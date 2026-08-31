@@ -81,6 +81,7 @@ async def settle_haji_attempt(
         ):
             return None
         order_code = attempt.supplier_order_code
+        supplier_product_id = attempt.supplier_product_id
 
     try:
         remote = await client.check_order(order_code)
@@ -172,6 +173,21 @@ async def settle_haji_attempt(
     if not remote.items or len(remote.items) != remote.quantity:
         return None
     unit_price = remote.unit_price
+    # Some Haji manual add-team responses report a completed order and all
+    # delivered items but omit unit_price (or return zero). Resolve the cost
+    # from the current Haji catalog instead of leaving the paid order stuck in
+    # processing. Never fall back to the customer's selling amount here.
+    if unit_price <= 0:
+        try:
+            snapshot = await client.fetch_snapshot(remote.product_id or supplier_product_id)
+        except SupplierError as exc:
+            logger.warning(
+                "Could not resolve Haji cost for completed order %s: %s",
+                order_code,
+                exc.code,
+            )
+            return None
+        unit_price = int(snapshot.unit_price)
     if unit_price <= 0:
         return None
 
