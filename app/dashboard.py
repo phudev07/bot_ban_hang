@@ -4290,11 +4290,9 @@ def create_dashboard_router(
             raise HTTPException(status_code=404, detail="Withdrawal not found")
 
         secrets_for_copy: list[str] = []
-        item_ids: list[int] = []
         total_cost = 0
         source_summary: dict[tuple[str, str | None], dict[str, object]] = {}
         for item, _product in rows:
-            item_ids.append(item.id)
             total_cost += int(item.cost_amount)
             provider = item.supplier_provider or "local"
             source_key = (provider, item.supplier_order_code)
@@ -4329,7 +4327,6 @@ def create_dashboard_router(
                 withdrawn_by=first_item.withdrawn_by,
                 withdrawal_reason=first_item.withdrawal_reason,
                 withdrawal_secrets=secrets_for_copy,
-                item_ids=item_ids,
                 total_cost=total_cost,
                 withdrawal_sources=list(source_summary.values()),
                 withdrawal_source_label=("API" if first_item.supplier_provider else "Kho nhập"),

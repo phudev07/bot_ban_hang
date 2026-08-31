@@ -2856,6 +2856,7 @@ def test_admin_withdraws_inventory_for_warranty_without_partial_or_resale(tmp_pa
         assert local_secrets[0] in local_detail.text
         assert local_secrets[1] in local_detail.text
         assert local_secrets[2] not in local_detail.text
+        assert "ID kho" not in local_detail.text
 
         partial_attempt = client.post(
             "/admin/inventory/withdraw",

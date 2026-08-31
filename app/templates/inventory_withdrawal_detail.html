@@ -30,7 +30,6 @@
       <div><dt>Người thực hiện</dt><dd>{{ withdrawn_by or 'admin' }}</dd></div>
       <div><dt>Thời gian</dt><dd>{{ withdrawn_at|localtime }}</dd></div>
       <div><dt>Lý do</dt><dd>{{ withdrawal_reason or 'Bảo hành khách hàng' }}</dd></div>
-      <div><dt>ID kho</dt><dd>#{{ item_ids|join(', #') }}</dd></div>
     </dl>
     <div class="withdrawal-source-list">
       <strong>Đối soát nguồn</strong>
