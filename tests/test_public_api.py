@@ -325,6 +325,8 @@ def test_codex_guide_and_zip_download_are_public_but_raw_exe_is_not(tmp_path) ->
         assert "requires_openai_auth = false" in guide.text
         assert "B1" in guide.text and "B2" in guide.text and "B3" in guide.text
         assert "B4" in guide.text and "B5" in guide.text
+        assert 'id="router-b4"' in guide.text
+        assert "B4 · config.toml" in guide.text
         assert "Kết nối" in guide.text and "Codex Desktop" in guide.text and "qua 9Router" in guide.text
         assert "9Router Providers" in guide.text
         assert "Custom Codex" in guide.text
