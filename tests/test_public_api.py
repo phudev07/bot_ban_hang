@@ -328,6 +328,11 @@ def test_codex_guide_and_zip_download_are_public_but_raw_exe_is_not(tmp_path) ->
         assert "Kết nối" in guide.text and "Codex Desktop" in guide.text and "qua 9Router" in guide.text
         assert "9Router Providers" in guide.text
         assert "Custom Codex" in guide.text
+        assert "[agents.subagent]" in guide.text
+        assert "model = \"gpt-5.6-sol\"" in guide.text
+        assert "router-b5" in guide.text
+        assert '"auth_mode": "apikey"' in guide.text
+        assert '"OPENAI_API_KEY": "sk-your-key"' in guide.text
         assert "chmod +x" not in guide.text
         assert 'href="/codex-api/download"' in guide.text
         assert 'href="/codex-api/download/ubuntu-x64"' in guide.text
