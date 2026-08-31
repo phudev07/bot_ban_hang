@@ -66,6 +66,9 @@ CODEX_GUIDE_ASSET_PATHS = {
     "provider-card.png": Path(__file__).parent / "static" / "codex-9router-provider-card.png",
     "provider-details.png": Path(__file__).parent / "static" / "codex-9router-provider-details.png",
     "api-key.png": Path(__file__).parent / "static" / "codex-9router-api-key.png",
+    "cockpit-step-1.png": Path(__file__).parent / "static" / "cockpit-step-1.png",
+    "cockpit-step-2.png": Path(__file__).parent / "static" / "cockpit-step-2.png",
+    "cockpit-step-3.png": Path(__file__).parent / "static" / "cockpit-step-3.png",
 }
 CODEX_MODELS = (
     "cx/gpt-5.6",
