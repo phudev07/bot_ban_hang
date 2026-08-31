@@ -332,6 +332,8 @@ def test_codex_guide_and_zip_download_are_public_but_raw_exe_is_not(tmp_path) ->
         assert "Custom Codex" in guide.text
         assert 'data-method="files"' in guide.text
         assert 'id="files-panel"' in guide.text
+        assert "có thể không hiển thị các cuộc trò chuyện cũ" in guide.text
+        assert "Dữ liệu chat không bị xóa" in guide.text
         assert "[agents.subagent]" in guide.text
         assert "model = \"gpt-5.6-sol\"" in guide.text
         assert "files-b3" in guide.text
