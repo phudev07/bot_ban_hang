@@ -83,12 +83,14 @@ def delivery_text(
         preview_length += extra_length
     items = "\n".join(preview)
     account_block = f"<pre>{items}</pre>"
+    file_label_vi = "file JSON đầy đủ" if is_codex_json else "file TXT"
+    file_label_en = "the full JSON file" if is_codex_json else "the TXT file"
     remaining = len(display_secrets) - len(preview)
     if remaining > 0:
         account_block += (
-            f"\n… còn {remaining} tài khoản trong file TXT."
+            f"\n… còn {remaining} tài khoản trong {file_label_vi}."
             if language == "vi"
-            else f"\n… {remaining} more items are available in the TXT file."
+            else f"\n… {remaining} more items are available in {file_label_en}."
         )
 
     if language == "en":
@@ -101,7 +103,7 @@ def delivery_text(
             f"🧮 Quantity: <b>{len(secrets)}</b>\n"
             f"💰 Total: <b>{format_vnd(total_amount)}</b>\n\n"
             f"📋 <b>{delivered_label}:</b>\n{account_block}\n\n"
-            "Use the copy-all button or download the TXT file. Keep this information private."
+            f"Use the copy-all button or download {file_label_en}. Keep this information private."
         )
 
     title = "Thanh toán và giao hàng thành công" if paid_by_qr else "Mua hàng thành công"
@@ -113,7 +115,7 @@ def delivery_text(
         f"🧮 Số lượng: <b>{len(secrets)}</b>\n"
         f"💰 Tổng tiền: <b>{format_vnd(total_amount)}</b>\n\n"
         f"📋 <b>{delivered_label}:</b>\n{account_block}\n\n"
-        "Dùng nút sao chép hoặc tải file TXT. Không chia sẻ thông tin này cho người khác."
+        f"Dùng nút sao chép hoặc tải {file_label_vi}. Không chia sẻ thông tin này cho người khác."
     )
 
 
