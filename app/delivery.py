@@ -1,3 +1,5 @@
+import json
+
 from aiogram.types import (
     BufferedInputFile,
     CopyTextButton,
@@ -13,6 +15,35 @@ MAX_MESSAGE_PREVIEW = 10
 MAX_COPY_TEXT_LENGTH = 256
 MAX_DELIVERY_TEXT_LENGTH = 3_500
 GPT_FREE_PRODUCT_ID = 28
+
+
+def _codex_json_payload(secret: str) -> tuple[str | None, object | None]:
+    """Extract the API key and parsed payload from a Cockpit Codex JSON item."""
+    raw = str(secret or "").strip()
+    if not raw or raw[0] not in "[{":
+        return None, None
+    try:
+        payload = json.loads(raw)
+    except (TypeError, ValueError):
+        return None, None
+    records = payload if isinstance(payload, list) else [payload]
+    for record in records:
+        if isinstance(record, dict):
+            key = record.get("OPENAI_API_KEY")
+            if isinstance(key, str) and key.strip():
+                return key.strip(), payload
+    return None, None
+
+
+def _codex_display_secret(secret: str) -> str:
+    key, _payload = _codex_json_payload(secret)
+    return key or secret
+
+
+def _is_codex_json_delivery(product_name: str, secrets: list[str]) -> bool:
+    return "codex" in product_name.casefold() and any(
+        _codex_json_payload(secret)[0] for secret in secrets
+    )
 
 
 def _gpt_free_account_line(secret: str) -> str:
@@ -33,10 +64,14 @@ def delivery_text(
     product_name = sanitize_customer_text(product_name)
     is_gpt_free = "gpt free" in product_name.casefold()
     is_codex_key = "codex" in product_name.casefold() and not is_gpt_free
+    is_codex_json = _is_codex_json_delivery(product_name, secrets)
     brand_emoji = product_brand_emoji(product_name)
-    display_secrets = (
-        [_gpt_free_account_line(secret) for secret in secrets] if is_gpt_free else secrets
-    )
+    if is_gpt_free:
+        display_secrets = [_gpt_free_account_line(secret) for secret in secrets]
+    elif is_codex_json:
+        display_secrets = [_codex_display_secret(secret) for secret in secrets]
+    else:
+        display_secrets = secrets
     preview: list[str] = []
     preview_length = 0
     for secret in display_secrets[:MAX_MESSAGE_PREVIEW]:
@@ -91,7 +126,11 @@ def delivery_keyboard(
     include_file_button: bool = True,
 ) -> InlineKeyboardMarkup:
     rows: list[list[InlineKeyboardButton]] = []
-    combined = "\n".join(secrets)
+    copy_secrets = [
+        _codex_display_secret(secret) if _codex_json_payload(secret)[0] else secret
+        for secret in secrets
+    ]
+    combined = "\n".join(copy_secrets)
     if combined and len(combined) <= MAX_COPY_TEXT_LENGTH:
         rows.append(
             [
@@ -195,8 +234,30 @@ def delivery_files(
     language: str,
     product_id: int | None = None,
 ) -> list[BufferedInputFile]:
-    """Build the customer files, including the two-file GPT Free delivery."""
+    """Build customer files, including GPT Free and Cockpit Codex formats."""
     if product_id != GPT_FREE_PRODUCT_ID:
+        if _is_codex_json_delivery(product_name, secrets):
+            payloads: list[object] = []
+            for secret in secrets:
+                _key, payload = _codex_json_payload(secret)
+                if isinstance(payload, list):
+                    payloads.extend(payload)
+                elif payload is not None:
+                    payloads.append(payload)
+            if payloads:
+                safe_code = "".join(
+                    character
+                    for character in shop_order_code
+                    if character.isalnum() or character in "-_"
+                )[:64] or "shop"
+                filename_prefix = "don-hang" if language == "vi" else "order"
+                content = json.dumps(payloads, ensure_ascii=False, indent=2).encode("utf-8")
+                return [
+                    BufferedInputFile(
+                        content,
+                        filename=f"{filename_prefix}-{safe_code}-full.json",
+                    )
+                ]
         return [
             delivery_file(
                 shop_order_code=shop_order_code,

@@ -164,3 +164,34 @@ def test_codex_delivery_can_open_setup_guide() -> None:
     assert "Codex" in guide_buttons[0].text
     assert "Key kích hoạt của bạn" in text
     assert "CDK" not in text
+
+
+def test_cockpit_codex_json_delivery_shows_key_and_sends_valid_json_file() -> None:
+    secret = (
+        '[{"OPENAI_API_KEY":"sk-cdx-test",'
+        '"account_name":"key-cockpit-7D-100M-204849",'
+        '"api_base_url":"https://aixingialaire.shop/cdx/v1",'
+        '"api_wire_api":"responses"}]'
+    )
+    text = delivery_text(
+        shop_order_code="BCODEX100M7D",
+        product_name="API Codex 100M Token · 7 ngày",
+        secrets=[secret],
+        total_amount=70_000,
+        language="vi",
+    )
+    assert "sk-cdx-test" in text
+    assert "account_name" not in text
+
+    documents = delivery_files(
+        shop_order_code="BCODEX100M7D",
+        product_name="API Codex 100M Token · 7 ngày",
+        secrets=[secret],
+        total_amount=70_000,
+        language="vi",
+        product_id=999,
+    )
+    assert [document.filename for document in documents] == [
+        "don-hang-BCODEX100M7D-full.json"
+    ]
+    assert '"OPENAI_API_KEY": "sk-cdx-test"' in documents[0].data.decode("utf-8")
