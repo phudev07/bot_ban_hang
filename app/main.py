@@ -794,6 +794,12 @@ async def initialize_database(engine, session_factory, seed_demo_data: bool) -> 
         )
         await connection.execute(
             text(
+                "ALTER TABLE supplier_purchase_attempts ADD COLUMN IF NOT EXISTS "
+                "unit_cost BIGINT NULL"
+            )
+        )
+        await connection.execute(
+            text(
                 "CREATE INDEX IF NOT EXISTS ix_supplier_purchase_attempts_deposit_id "
                 "ON supplier_purchase_attempts (deposit_id)"
             )

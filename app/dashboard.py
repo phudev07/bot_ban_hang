@@ -4078,6 +4078,7 @@ def create_dashboard_router(
                                 quantity,
                                 idempotency_key=request_key,
                                 shop_product_id=product.id,
+                                unit_cost=int(selected_route.snapshot.unit_price),
                             )
                             supplier_purchases = (
                                 (
@@ -4130,6 +4131,11 @@ def create_dashboard_router(
                                 quantity,
                                 idempotency_key=request_key,
                                 shop_product_id=product.id,
+                                unit_cost=int(
+                                    api_snapshot.unit_price
+                                    or product.supplier_price
+                                    or 0
+                                ),
                             )
                             supplier_purchases = (
                                 (

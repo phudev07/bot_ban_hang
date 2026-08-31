@@ -1040,6 +1040,11 @@ class SupplierPurchaseAttempt(Base):
     supplier_order_code: Mapped[str | None] = mapped_column(
         String(64), nullable=True, index=True
     )
+    # Supplier unit cost captured at the moment the order is submitted.  This
+    # is deliberately independent from the live catalog price: Haji Claude
+    # orders may complete (email add-team) minutes later, after the catalog
+    # has changed or the completion response omits its price.
+    unit_cost: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
     deposit_id: Mapped[int | None] = mapped_column(
         ForeignKey("deposits.id", ondelete="SET NULL"), nullable=True, index=True
     )

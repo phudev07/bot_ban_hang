@@ -142,7 +142,7 @@ def test_failed_haji_claude_order_refunds_paid_amount_once() -> None:
     asyncio.run(scenario())
 
 
-def test_completed_haji_order_resolves_missing_cost_from_catalog() -> None:
+def test_completed_haji_order_uses_cost_captured_at_submission() -> None:
     async def scenario() -> None:
         engine = create_async_engine("sqlite+aiosqlite:///:memory:")
         async with engine.begin() as connection:
@@ -186,6 +186,7 @@ def test_completed_haji_order_resolves_missing_cost_from_catalog() -> None:
                 status="processing",
                 error_code="SUPPLIER_PENDING",
                 supplier_order_code="HAJI-AP-DONE001",
+                unit_cost=400_000,
                 deposit_id=deposit.id,
                 started_at=datetime.now(UTC),
             )

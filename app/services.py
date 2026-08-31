@@ -158,6 +158,7 @@ async def buy_supplier_product(
     supplier_emails: tuple[str, ...] | None = None,
     deposit_id: int | None = None,
     defer_manual: bool = False,
+    unit_cost: int | None = None,
 ) -> SupplierPurchase:
     provider = getattr(client, "provider", "sumistore")
     request_key = idempotency_key or f"shop-{secrets.token_hex(16)}"
@@ -200,6 +201,7 @@ async def buy_supplier_product(
             status="processing",
             started_at=started_at,
             deposit_id=deposit_id,
+            unit_cost=(max(0, int(unit_cost)) if unit_cost is not None else None),
         )
         session.add(attempt)
     else:
@@ -207,6 +209,10 @@ async def buy_supplier_product(
         attempt.supplier_product_id = product_id
         attempt.quantity = quantity
         attempt.deposit_id = deposit_id or attempt.deposit_id
+        # Never overwrite a previously captured cost with an omitted/zero
+        # value when retrying an idempotent supplier request.
+        if unit_cost is not None and int(unit_cost) > 0:
+            attempt.unit_cost = int(unit_cost)
         attempt.status = "processing"
         attempt.error_code = None
         attempt.error_detail = None
@@ -336,6 +342,7 @@ async def execute_supplier_route_plan(
                 supplier_emails=route_emails,
                 deposit_id=deposit_id,
                 defer_manual=defer_manual,
+                unit_cost=int(route.snapshot.unit_price),
             )
             unit_cost = max(
                 0,
@@ -2388,6 +2395,7 @@ async def _purchase_product(
                             idempotency_key=request_key,
                             shop_product_id=product.id,
                             supplier_emails=supplier_emails,
+                            unit_cost=max(0, int(product.supplier_price or 0)),
                         )
                         supplier_purchases = (
                             (
@@ -4135,6 +4143,7 @@ async def _process_sepay_payment(
                                                     "claude_"
                                                 )
                                             ),
+                                            unit_cost=max(0, int(product.supplier_price or 0)),
                                         )
                                         supplier_purchase_parts = (
                                             (

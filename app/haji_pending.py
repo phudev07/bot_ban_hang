@@ -81,7 +81,8 @@ async def settle_haji_attempt(
         ):
             return None
         order_code = attempt.supplier_order_code
-        supplier_product_id = attempt.supplier_product_id
+        captured_unit_cost = int(attempt.unit_cost or 0)
+        attempt_quantity = max(1, int(attempt.quantity or 1))
 
     try:
         remote = await client.check_order(order_code)
@@ -172,23 +173,33 @@ async def settle_haji_attempt(
         return None
     if not remote.items or len(remote.items) != remote.quantity:
         return None
-    unit_price = remote.unit_price
-    # Some Haji manual add-team responses report a completed order and all
-    # delivered items but omit unit_price (or return zero). Resolve the cost
-    # from the current Haji catalog instead of leaving the paid order stuck in
-    # processing. Never fall back to the customer's selling amount here.
+    # The supplier response is an add-team completion callback and may omit
+    # pricing.  Cost must come from the quote captured when payment/order
+    # submission happened, never from the live catalog (which may have
+    # changed in the meantime).
+    unit_price = captured_unit_cost
     if unit_price <= 0:
-        try:
-            snapshot = await client.fetch_snapshot(remote.product_id or supplier_product_id)
-        except SupplierError as exc:
-            logger.warning(
-                "Could not resolve Haji cost for completed order %s: %s",
-                order_code,
-                exc.code,
+        # Backfill legacy attempts only from an already-recorded supplier debit
+        # tied to this exact order.  This is historical data, not a catalog
+        # lookup, and therefore cannot silently reprice an old customer order.
+        async with session_factory() as history_session:
+            debit = await history_session.scalar(
+                select(SupplierBalanceTransaction)
+                .where(
+                    SupplierBalanceTransaction.provider == "haji",
+                    SupplierBalanceTransaction.supplier_order_code == order_code,
+                    SupplierBalanceTransaction.amount < 0,
+                )
+                .order_by(SupplierBalanceTransaction.id.desc())
             )
-            return None
-        unit_price = int(snapshot.unit_price)
+        if debit is not None:
+            unit_price = abs(int(debit.amount)) // attempt_quantity
     if unit_price <= 0:
+        logger.error(
+            "Haji order %s completed without a captured historical unit cost; "
+            "leaving it pending instead of using a live catalog price",
+            order_code,
+        )
         return None
 
     async with session_factory() as session:
@@ -205,6 +216,8 @@ async def settle_haji_attempt(
                 or attempt.supplier_order_code != order_code
             ):
                 return None
+            if int(attempt.unit_cost or 0) <= 0:
+                attempt.unit_cost = unit_price
             deposit = await session.scalar(
                 select(Deposit).where(Deposit.id == attempt.deposit_id).with_for_update()
             )
