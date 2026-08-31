@@ -327,10 +327,10 @@ def test_codex_guide_and_zip_download_are_public_but_raw_exe_is_not(tmp_path) ->
         assert "B4" in guide.text and "B5" in guide.text
         assert "Kết nối" in guide.text and "Codex Desktop" in guide.text and "qua 9Router" in guide.text
         assert "9Router Providers" in guide.text
-        assert "Custom Codex" not in guide.text
+        assert "Custom Codex" in guide.text
         assert "chmod +x" not in guide.text
-        assert 'href="/codex-api/download"' not in guide.text
-        assert 'href="/codex-api/download/ubuntu-x64"' not in guide.text
+        assert 'href="/codex-api/download"' in guide.text
+        assert 'href="/codex-api/download/ubuntu-x64"' in guide.text
         assert 'class="sidebar"' in guide.text
 
         for asset_name in (
