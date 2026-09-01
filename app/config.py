@@ -122,8 +122,8 @@ class Settings(BaseSettings):
     rentsim_api_key: SecretStr = SecretStr("")
     rentsim_server_id: str = "kh2"
     rentsim_service_id: str = "chatgpt"
-    rentsim_markup: int = 1_500
-    rentsim_fallback_price: int = 1_000
+    rentsim_markup: int = 1_300
+    rentsim_fallback_price: int = 1_200
     rentsim_timeout_seconds: float = 15
     rentsim_poll_seconds: int = 5
     rentsim_cooldown_seconds: int = 60
@@ -136,8 +136,8 @@ class Settings(BaseSettings):
     autosms_api_key: SecretStr = SecretStr("")
     autosms_country_id: str = "us"
     autosms_service_id: str = "chatgpt"
-    autosms_markup: int = 1_500
-    autosms_fallback_price: int = 1_000
+    autosms_markup: int = 1_300
+    autosms_fallback_price: int = 1_200
     autosms_timeout_seconds: float = 15
     autosms_poll_seconds: int = 5
     autosms_cooldown_seconds: int = 60
