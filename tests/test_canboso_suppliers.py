@@ -349,7 +349,7 @@ def test_gg18m_purchase_prefers_cheaper_canboso_source() -> None:
     asyncio.run(scenario())
 
 
-def test_gg18m_haji_fallback_keeps_canboso_public_price() -> None:
+def test_gg18m_haji_fallback_uses_available_haji_public_price() -> None:
     async def scenario() -> None:
         engine = create_async_engine("sqlite+aiosqlite:///:memory:")
         async with engine.begin() as connection:
@@ -393,11 +393,11 @@ def test_gg18m_haji_fallback_keeps_canboso_public_price() -> None:
         )
 
         assert result.ok is True
-        assert result.total_amount == 16_000
+        assert result.total_amount == 14_000
         assert haji.buy_calls[0][:2] == ("link_gemini_18moth", 1)
         assert canboso.buy_calls == []
         assert result.orders[0].supplier_provider == "haji"
-        assert result.orders[0].amount == 16_000
+        assert result.orders[0].amount == 14_000
         await engine.dispose()
 
     asyncio.run(scenario())

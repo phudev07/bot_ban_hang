@@ -967,10 +967,9 @@ async def refresh_lehai_product(
             ),
             None,
         )
-        # GG 18M uses the more expensive active source as the public-price
-        # anchor. When Haji is cheaper, Canboso remains the anchor so the
-        # saving is retained as margin; when Haji is higher, its normal price
-        # (cost plus markup) becomes the shop price.
+        # GG 18M uses the more expensive source as the public-price anchor
+        # when both routes are available. If only one route has stock, use
+        # that route's live cost instead of an exhausted source's price.
         canboso_price_is_authoritative = (
             product.supplier_product_id == JIO_18M_PRODUCT_ID
             and "canboso" in enabled_providers
@@ -986,12 +985,26 @@ async def refresh_lehai_product(
                     ),
                     None,
                 )
+                canboso_has_stock = bool(
+                    canboso_price_route is not None
+                    and canboso_price_route.snapshot.effective_stock > 0
+                )
                 if (
+                    haji_price_route is not None
+                    and canboso_price_route is not None
+                    and not canboso_has_stock
+                ):
+                    # If only Haji has stock, its live cost is the price
+                    # basis; do not keep an exhausted Canboso price.
+                    price_route = haji_price_route
+                elif (
                     haji_price_route is not None
                     and canboso_price_route is not None
                     and haji_price_route.snapshot.unit_price
                     > canboso_price_route.snapshot.unit_price
                 ):
+                    # When both routes are available (or both are empty),
+                    # retain the configured GG 18M price-anchor rule.
                     price_route = haji_price_route
             if price_route is None and not canboso_price_is_authoritative:
                 price_route = min(
