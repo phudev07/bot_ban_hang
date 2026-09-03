@@ -963,10 +963,10 @@ def create_router(
         )
         text = (
             "🤖 <b>API CODEX</b>\n\n"
-            "Chọn gói Codex cần mua. Gói có hạn 24 giờ tính từ lúc kích hoạt key."
+            "Chọn gói Codex cần mua."
             if user.language == "vi"
             else "🤖 <b>CODEX API</b>\n\n"
-            "Choose a Codex package. Packages are valid for 24 hours after key activation."
+            "Choose a Codex package."
         )
         if not products:
             text += (
