@@ -956,7 +956,7 @@ def test_simultaneous_codex_wallet_purchases_do_not_oversell_one_key() -> None:
     asyncio.run(scenario())
 
 
-def test_codex_preorder_charges_five_percent_and_fulfills_with_stable_key() -> None:
+def test_codex_preorder_uses_current_price_and_fulfills_with_stable_key() -> None:
     async def scenario() -> None:
         engine = create_async_engine("sqlite+aiosqlite:///:memory:")
         async with engine.begin() as connection:
@@ -983,7 +983,7 @@ def test_codex_preorder_charges_five_percent_and_fulfills_with_stable_key() -> N
             )
             await session.commit()
             preorder_id = preorder.id
-            assert preorder.total_amount == 31_500
+            assert preorder.total_amount == 30_000
 
         supplier.stock = 1
         async with sessions() as session:
@@ -1014,11 +1014,11 @@ def test_codex_preorder_charges_five_percent_and_fulfills_with_stable_key() -> N
             assert preorder is not None and preorder.status == "completed"
             assert preorder.completed_order_code == order.shop_order_code
             assert order is not None
-            assert order.amount == 31_500 and order.cost_amount == 25_000
+            assert order.amount == 30_000 and order.cost_amount == 25_000
             assert order.sales_channel == "preorder"
             assert order.supplier_provider == "haji"
             assert attempt is not None and attempt.request_key == f"preorder-{preorder_id}"
-            assert user is not None and user.balance == 18_500
+            assert user is not None and user.balance == 20_000
         assert supplier.idempotency_keys == [f"preorder-{preorder_id}"]
         await engine.dispose()
 

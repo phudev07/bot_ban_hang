@@ -68,9 +68,9 @@ async def seed_product(
         return product.id, user.telegram_id
 
 
-def test_preorder_price_adds_five_percent() -> None:
-    assert preorder_unit_price(10_000) == 10_500
-    assert preorder_unit_price(10_001) == 10_502
+def test_new_preorder_price_matches_current_sale_price() -> None:
+    assert preorder_unit_price(10_000) == 10_000
+    assert preorder_unit_price(10_001) == 10_001
 
 
 def test_preorder_creation_deducts_wallet_immediately() -> None:
@@ -88,12 +88,12 @@ def test_preorder_creation_deducts_wallet_immediately() -> None:
                 max_active_per_user=5,
             )
             await session.commit()
-            assert preorder.total_amount == 21_000
+            assert preorder.total_amount == 20_000
 
         async with sessions() as session:
             user = await session.get(User, user_id)
             assert user is not None
-            assert user.balance == 79_000
+            assert user.balance == 80_000
             assert await session.scalar(select(func.count(Preorder.id))) == 1
         await engine.dispose()
 
@@ -150,7 +150,7 @@ def test_customer_cancel_refunds_exactly_once() -> None:
             preorder_id = preorder.id
         async with sessions() as session:
             user = await session.get(User, user_id)
-            assert user is not None and user.balance == 89_500
+            assert user is not None and user.balance == 90_000
             cancelled = await cancel_user_preorder(session, user_id, preorder_id)
             await session.commit()
             assert cancelled.refunded_at is not None
@@ -340,8 +340,8 @@ def test_local_preorder_fulfills_once_and_deducts_exact_fixed_price() -> None:
                 )
             )
             assert preorder is not None and preorder.status == "completed"
-            assert user is not None and user.balance == 79_000
-            assert [order.amount for order in orders] == [10_500, 10_500]
+            assert user is not None and user.balance == 80_000
+            assert [order.amount for order in orders] == [10_000, 10_000]
             assert all(order.sales_channel == "preorder" for order in orders)
 
         repeated = await purchase_product(
@@ -352,13 +352,13 @@ def test_local_preorder_fulfills_once_and_deducts_exact_fixed_price() -> None:
             2,
             preorder_id=preorder_id,
             expected_base_unit_price=10_000,
-            fixed_unit_price=10_500,
+            fixed_unit_price=10_000,
         )
         assert repeated.ok is True
         assert repeated.secrets == ["account-a", "account-b"]
         async with sessions() as session:
             user = await session.get(User, user_id)
-            assert user is not None and user.balance == 79_000
+            assert user is not None and user.balance == 80_000
             assert (
                 await session.scalar(
                     select(func.count(Order.id)).where(Order.preorder_id == preorder_id)
@@ -630,8 +630,8 @@ def test_api_preorder_uses_supplier_and_keeps_provider_private_from_order_flow()
             order = await session.scalar(select(Order).where(Order.preorder_id == preorder_id))
             alert = await session.scalar(select(ProductStockAlert))
             assert preorder is not None and preorder.status == "completed"
-            assert user is not None and user.balance == 79_000
-            assert order is not None and order.amount == 21_000
+            assert user is not None and user.balance == 80_000
+            assert order is not None and order.amount == 20_000
             assert alert is not None and alert.preorder_fulfilled_quantity == 1
             assert supplier.buy_calls == 1
         await engine.dispose()
@@ -699,7 +699,7 @@ def test_transient_supplier_failure_stays_pending_and_does_not_charge() -> None:
             user = await session.get(User, user_id)
             assert preorder is not None and preorder.status == "pending"
             assert preorder.last_error == "supplier_unavailable"
-            assert user is not None and user.balance == 79_000
+            assert user is not None and user.balance == 80_000
             assert await session.scalar(select(func.count(Order.id))) == 0
         await engine.dispose()
 

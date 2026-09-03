@@ -25,7 +25,9 @@ from app.wallet_ledger import apply_wallet_change
 logger = logging.getLogger(__name__)
 ACTIVE_PREORDER_STATUSES = ("pending", "processing")
 TERMINAL_PREORDER_STATUSES = ("completed", "cancelled")
-PREORDER_SURCHARGE_PERCENT = 5
+# New preorders use the current shop price without a surcharge. The stored
+# `preorder_unit_price` keeps historical values intact for older orders.
+PREORDER_SURCHARGE_PERCENT = 0
 STALE_PROCESSING_SECONDS = 300
 
 
@@ -176,7 +178,7 @@ async def create_preorder(
         reference_type="preorder",
         reference_id=preorder.code,
         description=(
-            f"Đặt trước {quantity} tài khoản {product.name_vi} · giá đã gồm 5%"
+            f"Đặt trước {quantity} tài khoản {product.name_vi} · theo giá bán hiện tại"
         ),
     )
     preorder.funds_charged = True
@@ -355,7 +357,7 @@ def preorder_detail_text(preorder: Preorder, language: str) -> str:
             f"• Product: <b>{escape(name)}</b>\n"
             f"• Quantity: <b>{preorder.quantity}</b>\n"
             f"• Normal price at booking: <b>{format_vnd(preorder.base_unit_price)}/1</b>\n"
-            f"• Preorder price (+5%): <b>{format_vnd(preorder.preorder_unit_price)}/1</b>\n"
+            f"• Preorder price: <b>{format_vnd(preorder.preorder_unit_price)}/1</b>\n"
             f"• Expected total: <b>{format_vnd(preorder.total_amount)}</b>\n"
             f"• Payment: {payment_status}\n"
             f"• Status: <b>{status}</b>\n\n"
@@ -385,7 +387,7 @@ def preorder_detail_text(preorder: Preorder, language: str) -> str:
         f"• Sản phẩm: <b>{escape(name)}</b>\n"
         f"• Số lượng: <b>{preorder.quantity}</b>\n"
         f"• Giá thường lúc đặt: <b>{format_vnd(preorder.base_unit_price)}/1</b>\n"
-        f"• Giá đặt trước (+5%): <b>{format_vnd(preorder.preorder_unit_price)}/1</b>\n"
+        f"• Giá đặt trước: <b>{format_vnd(preorder.preorder_unit_price)}/1</b>\n"
         f"• Tổng dự kiến: <b>{format_vnd(preorder.total_amount)}</b>\n"
         f"• Thanh toán: {payment_status}\n"
         f"• Trạng thái: <b>{status}</b>\n\n"

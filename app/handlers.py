@@ -649,7 +649,7 @@ def create_router(
         if user.language == "en":
             text = (
                 "📦 <b>Preorder out-of-stock products</b>\n\n"
-                "The preorder price is the current normal price plus 5%. The full amount "
+                "The preorder price matches the current normal price. The full amount "
                 "is charged when you confirm. If you cancel, or the product price changes "
                 "before delivery, the amount is refunded automatically."
             )
@@ -658,7 +658,7 @@ def create_router(
         else:
             text = (
                 "📦 <b>Đặt trước mặt hàng đang hết</b>\n\n"
-                "Giá đặt trước bằng giá thường hiện tại cộng 5%. Bot trừ toàn bộ tiền ngay "
+                "Giá đặt trước bằng đúng giá bán hiện tại. Bot trừ toàn bộ tiền ngay "
                 "khi xác nhận. Nếu bạn hủy hoặc giá sản phẩm thay đổi trước lúc giao, tiền "
                 "sẽ tự động hoàn lại ví."
             )
@@ -998,7 +998,7 @@ def create_router(
         if user.language == "en":
             text = (
                 "📦 <b>Preorder out-of-stock products</b>\n\n"
-                "Price: current normal price +5%. The amount is charged immediately and "
+                "Price: the current normal price. The amount is charged immediately and "
                 "refunded automatically if the preorder is cancelled."
             )
             if not products:
@@ -1006,7 +1006,7 @@ def create_router(
         else:
             text = (
                 "📦 <b>Đặt trước mặt hàng đang hết</b>\n\n"
-                "Giá: giá thường hiện tại +5%. Bot trừ tiền ngay khi xác nhận và tự hoàn "
+                "Giá: đúng giá bán hiện tại. Bot trừ tiền ngay khi xác nhận và tự hoàn "
                 "đầy đủ nếu đơn đặt trước bị hủy."
             )
             if not products:
@@ -1124,7 +1124,7 @@ def create_router(
             f"📦 <b>Confirm preorder</b>\n\n"
             f"• Product: <b>{escape(name)}</b>\n"
             f"• Normal price: <b>{format_vnd(quote.base_unit_price)}/1</b>\n"
-            f"• Preorder price (+5%): <b>{format_vnd(quote.preorder_unit_price)}/1</b>\n"
+            f"• Preorder price: <b>{format_vnd(quote.preorder_unit_price)}/1</b>\n"
             f"• Quantity: <b>{quantity}</b>\n"
             f"• Expected total: <b>{format_vnd(quote.total_amount)}</b>\n"
             f"• Wallet: <b>{format_vnd(user.balance)}</b>\n\n"
@@ -1133,7 +1133,7 @@ def create_router(
             else f"📦 <b>Xác nhận đặt trước</b>\n\n"
             f"• Sản phẩm: <b>{escape(name)}</b>\n"
             f"• Giá thường: <b>{format_vnd(quote.base_unit_price)}/1</b>\n"
-            f"• Giá đặt trước (+5%): <b>{format_vnd(quote.preorder_unit_price)}/1</b>\n"
+            f"• Giá đặt trước: <b>{format_vnd(quote.preorder_unit_price)}/1</b>\n"
             f"• Số lượng: <b>{quantity}</b>\n"
             f"• Tổng dự kiến: <b>{format_vnd(quote.total_amount)}</b>\n"
             f"• Số dư ví: <b>{format_vnd(user.balance)}</b>\n\n"

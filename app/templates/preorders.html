@@ -20,7 +20,7 @@
 
 <section class="panel">
   <div class="panel-head"><div><span>PREORDER QUEUE</span><h2>Hàng chờ giao tự động</h2></div><small>100 đơn mỗi trang · đã thu tiền</small></div>
-  <div class="table-wrap"><table><thead><tr><th>Mã đặt trước</th><th>Khách hàng</th><th>Sản phẩm</th><th>Số lượng</th><th>Giá lúc đặt</th><th>Giá +5%</th><th>Tổng đã thu</th><th>Trạng thái</th><th>Kết quả</th><th>Thời gian</th><th>Quản lý</th></tr></thead><tbody>
+  <div class="table-wrap"><table><thead><tr><th>Mã đặt trước</th><th>Khách hàng</th><th>Sản phẩm</th><th>Số lượng</th><th>Giá lúc đặt</th><th>Giá đặt trước</th><th>Tổng đã thu</th><th>Trạng thái</th><th>Kết quả</th><th>Thời gian</th><th>Quản lý</th></tr></thead><tbody>
   {% for preorder, user, product in rows %}
   <tr>
     <td><strong><code>{{ preorder.code }}</code></strong><small>ID #{{ preorder.id }} · thử {{ preorder.attempt_count }} lần</small></td>
