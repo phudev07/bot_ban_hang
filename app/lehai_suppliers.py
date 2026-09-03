@@ -947,10 +947,16 @@ async def refresh_lehai_product(
                 )
             product.supplier_owner_balance = current_owner_balance
 
+        # Price synchronization must not depend on stock. A supplier can be
+        # sold out while still publishing its current price, and that price
+        # is needed for the next sale/preorder quote.
         priced_routes = tuple(
+            route for route in fetched.routes if route.snapshot.unit_price > 0
+        )
+        available_priced_routes = tuple(
             route
-            for route in fetched.routes
-            if route.snapshot.effective_stock > 0 and route.snapshot.unit_price > 0
+            for route in priced_routes
+            if route.snapshot.effective_stock > 0
         )
         canboso_price_route = next(
             (
@@ -958,14 +964,6 @@ async def refresh_lehai_product(
                 for route in fetched.routes
                 if route.provider == "canboso"
                 and route.snapshot.unit_price > 0
-                and (
-                    route.snapshot.effective_stock > 0
-                    or any(
-                        available_route.provider == "haji"
-                        and available_route.snapshot.effective_stock > 0
-                        for available_route in fetched.routes
-                    )
-                )
             ),
             None,
         )
@@ -984,9 +982,7 @@ async def refresh_lehai_product(
                     (
                         route
                         for route in fetched.routes
-                        if route.provider == "haji"
-                        and route.snapshot.unit_price > 0
-                        and route.snapshot.effective_stock > 0
+                        if route.provider == "haji" and route.snapshot.unit_price > 0
                     ),
                     None,
                 )
@@ -1030,8 +1026,8 @@ async def refresh_lehai_product(
                 if canboso_topup_ready
                 else "haji"
                 if haji_topup_ready
-                else min(priced_routes, key=supplier_route_sort_key).provider
-                if priced_routes
+                else min(available_priced_routes, key=supplier_route_sort_key).provider
+                if available_priced_routes
                 else None
             ),
         )

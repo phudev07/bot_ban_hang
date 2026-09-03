@@ -472,6 +472,76 @@ def test_gg18m_haji_fallback_keeps_price_when_canboso_route_is_unavailable() -> 
     asyncio.run(scenario())
 
 
+def test_gg18m_syncs_price_when_both_sources_are_out_of_stock() -> None:
+    async def scenario() -> None:
+        engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+        async with engine.begin() as connection:
+            await connection.run_sync(Base.metadata.create_all)
+        sessions = async_sessionmaker(engine, expire_on_commit=False)
+        lehai = RoutedSupplier("lehai", price=20_000, stock=0)
+        canboso = RoutedSupplier("canboso", price=11_000, stock=0)
+        haji = RoutedSupplier("haji", price=19_999, stock=0)
+        async with sessions() as session:
+            category = Category(name_vi="Gemini", name_en="Gemini")
+            session.add(category)
+            await session.flush()
+            product = Product(
+                category_id=category.id,
+                name_vi="Link GG Pro Jio 18M",
+                name_en="Google Pro Jio 18M",
+                price=16_000,
+                supplier_price=11_000,
+                supplier_markup=9_000,
+                fulfillment_source="lehai",
+                supplier_product_id="cdk_ggpro_18m",
+                lehai_api_enabled=True,
+                canboso_api_enabled=True,
+            )
+            session.add(product)
+            await session.commit()
+
+            fetched = SupplierRouteFetch(
+                routes=tuple(
+                    SupplierRoute(
+                        provider=provider,
+                        product_id=product_id,
+                        client=client,  # type: ignore[arg-type]
+                        snapshot=SupplierSnapshot(
+                            product_id=product_id,
+                            name="Link GG Pro Jio 18M",
+                            description="",
+                            unit_price=price,
+                            source_stock=0,
+                            owner_balance=0,
+                        ),
+                    )
+                    for provider, product_id, client, price in (
+                        ("lehai", "cdk_ggpro_18m", lehai, 20_000),
+                        ("canboso", CANBOSO_GG18M_ROUTE_ID, canboso, 11_000),
+                        ("haji", "link_gemini_18moth", haji, 19_999),
+                    )
+                ),
+                failures=(),
+                configured_count=3,
+            )
+            await refresh_lehai_product(
+                session,
+                product,
+                lehai,  # type: ignore[arg-type]
+                canboso_client=canboso,  # type: ignore[arg-type]
+                haji_client=haji,  # type: ignore[arg-type]
+                route_fetch=fetched,
+            )
+            await session.commit()
+            assert product.external_stock == 0
+            assert product.supplier_price == 19_999
+            assert product.price == 28_999
+
+        await engine.dispose()
+
+    asyncio.run(scenario())
+
+
 def test_gg18m_purchase_falls_back_to_lehai_when_canboso_has_no_stock() -> None:
     async def scenario() -> None:
         engine = create_async_engine("sqlite+aiosqlite:///:memory:")
