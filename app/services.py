@@ -3344,7 +3344,7 @@ async def approve_direct_purchase_deposit(
             )
             if deposit is None:
                 return PaymentResult("manual_not_found")
-            if deposit.payment_kind != "direct_purchase":
+            if deposit.payment_kind not in {"direct_purchase", "preorder"}:
                 return PaymentResult("manual_invalid_kind", deposit_code=deposit.code)
             if deposit.status == "paid":
                 return PaymentResult("already_paid_payment", deposit_code=deposit.code)
@@ -3400,7 +3400,7 @@ async def cancel_direct_purchase_deposit(
             )
             if deposit is None:
                 return ManualDepositCancellationResult("not_found")
-            if deposit.payment_kind != "direct_purchase":
+            if deposit.payment_kind not in {"direct_purchase", "preorder"}:
                 return ManualDepositCancellationResult(
                     "invalid_kind", deposit_code=deposit.code
                 )
@@ -3583,7 +3583,7 @@ async def _process_sepay_payment(
             manual_override = manual_deposit_id is not None and manual_deposit_id == deposit.id
             if manual_deposit_id is not None and not manual_override:
                 return PaymentResult("manual_invalid_request")
-            if manual_override and deposit.payment_kind != "direct_purchase":
+            if manual_override and deposit.payment_kind not in {"direct_purchase", "preorder"}:
                 return PaymentResult("manual_invalid_kind", deposit_code=deposit.code)
             existing = await session.scalar(
                 select(PaymentTransaction).where(
@@ -3665,13 +3665,13 @@ async def _process_sepay_payment(
                 deposit.failure_reason = "blocked_user"
                 rejected_status = "failed_request_payment"
                 credit_status = "failed_request"
-            elif deposit.payment_kind not in {"wallet", "binance", "direct_purchase"}:
+            elif deposit.payment_kind not in {"wallet", "binance", "direct_purchase", "preorder"}:
                 deposit.status = "failed"
                 deposit.failed_at = now
                 deposit.failure_reason = "invalid_payment_kind"
                 rejected_status = "failed_request_payment"
                 credit_status = "failed_request"
-            elif deposit.payment_kind == "direct_purchase" and (
+            elif deposit.payment_kind in {"direct_purchase", "preorder"} and (
                 deposit.product_id is None or deposit.quantity < 1
             ):
                 deposit.status = "failed"
@@ -3704,6 +3704,118 @@ async def _process_sepay_payment(
                     user.telegram_id,
                     amount,
                     quantity=deposit.quantity,
+                    language=user.language,
+                    balance=user.balance,
+                    currency=currency,
+                    balance_usd_tenths=user.balance_usd_tenths,
+                    deposit_code=deposit.code,
+                    username=user.username,
+                    paid_at=now,
+                )
+
+            if deposit.payment_kind == "preorder":
+                # QR payment reserves the preorder at the paid amount. No
+                # second wallet debit is made; cancellation still refunds the
+                # stored preorder total through the normal preorder ledger.
+                from app.preorders import PreorderError, create_preorder
+
+                product = await session.scalar(
+                    select(Product)
+                    .where(Product.id == deposit.product_id)
+                    .with_for_update()
+                )
+                expected_price = amount // max(1, int(deposit.quantity))
+                try:
+                    preorder = await create_preorder(
+                        session,
+                        user.telegram_id,
+                        int(deposit.product_id),
+                        int(deposit.quantity),
+                        expected_base_unit_price=expected_price,
+                        max_active_per_user=5,
+                        charge_wallet=False,
+                    )
+                except (PreorderError, ValueError):
+                    # Payment is valid but the reservation can no longer be
+                    # created (for example stock appeared or the price moved);
+                    # preserve the customer's money by crediting the wallet.
+                    apply_wallet_change(
+                        session,
+                        user,
+                        amount,
+                        kind="preorder_payment_fallback",
+                        event_key=f"deposit:{deposit.id}",
+                        reference_type="deposit",
+                        reference_id=deposit.code,
+                        description=f"Thanh toán đặt trước {deposit.code} chuyển vào ví",
+                        currency=currency,
+                    )
+                    deposit.status = "paid"
+                    deposit.paid_amount = amount
+                    deposit.paid_at = now
+                    deposit.failed_at = None
+                    deposit.failure_reason = None
+                    if existing is None:
+                        session.add(
+                            PaymentTransaction(
+                                deposit_id=deposit.id,
+                                user_id=user.telegram_id,
+                                provider_tx_id=provider_tx_id,
+                                amount=amount,
+                                currency=currency,
+                                credit_status="credited",
+                            )
+                        )
+                    else:
+                        existing.amount = amount
+                        existing.currency = currency
+                        existing.credit_status = "credited"
+                    await session.flush()
+                    return PaymentResult(
+                        "preorder_fallback",
+                        user.telegram_id,
+                        amount,
+                        product_id=product.id if product is not None else deposit.product_id,
+                        product_name_vi=product.name_vi if product is not None else None,
+                        product_name_en=product.name_en if product is not None else None,
+                        quantity=deposit.quantity,
+                        language=user.language,
+                        balance=user.balance,
+                        currency=currency,
+                        balance_usd_tenths=user.balance_usd_tenths,
+                        deposit_code=deposit.code,
+                        username=user.username,
+                        paid_at=now,
+                    )
+                deposit.status = "paid"
+                deposit.paid_amount = amount
+                deposit.paid_at = now
+                deposit.failed_at = None
+                deposit.failure_reason = None
+                if existing is None:
+                    session.add(
+                        PaymentTransaction(
+                            deposit_id=deposit.id,
+                            user_id=user.telegram_id,
+                            provider_tx_id=provider_tx_id,
+                            amount=amount,
+                            currency=currency,
+                            credit_status="credited",
+                        )
+                    )
+                else:
+                    existing.amount = amount
+                    existing.currency = currency
+                    existing.credit_status = "credited"
+                await session.flush()
+                return PaymentResult(
+                    "preorder_created",
+                    user.telegram_id,
+                    amount,
+                    product_id=product.id if product is not None else deposit.product_id,
+                    product_name_vi=product.name_vi if product is not None else None,
+                    product_name_en=product.name_en if product is not None else None,
+                    quantity=preorder.quantity,
                     language=user.language,
                     balance=user.balance,
                     currency=currency,

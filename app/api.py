@@ -484,6 +484,8 @@ def create_api(
                 "direct_purchase_completed",
                 "direct_purchase_fallback",
                 "direct_purchase_pending",
+                "preorder_created",
+                "preorder_fallback",
                 "expired_payment",
                 "amount_mismatch",
                 "already_paid_payment",
@@ -578,6 +580,46 @@ def create_api(
             except Exception:
                 logger.exception(
                     "Could not deliver direct purchase to user %s",
+                    result.user_id,
+                )
+
+        if result.status == "preorder_created" and result.user_id is not None:
+            try:
+                await bot.send_message(
+                    result.user_id,
+                    (
+                        "✅ <b>Đặt trước thành công</b>\n\n"
+                        f"• Số lượng: <b>{result.quantity}</b>\n"
+                        f"• Đã thanh toán: <b>{format_vnd(result.amount)}</b>\n"
+                        "Hệ thống đã ghi nhận đơn và sẽ giao theo thứ tự khi có hàng."
+                        if result.language == "vi"
+                        else "✅ <b>Preorder created</b>\n\n"
+                        f"• Quantity: <b>{result.quantity}</b>\n"
+                        f"• Paid: <b>{format_vnd(result.amount)}</b>\n"
+                        "Your preorder is queued and will be fulfilled when stock arrives."
+                    ),
+                )
+            except Exception:
+                logger.exception(
+                    "Could not notify user %s about preorder payment",
+                    result.user_id,
+                )
+
+        if result.status == "preorder_fallback" and result.user_id is not None:
+            try:
+                await bot.send_message(
+                    result.user_id,
+                    (
+                        "⚠️ <b>Thanh toán đã được ghi nhận</b>\n\n"
+                        "Đơn đặt trước không còn hợp lệ nên số tiền đã được hoàn vào ví của bạn."
+                        if result.language == "vi"
+                        else "⚠️ <b>Payment received</b>\n\n"
+                        "The preorder was no longer valid, so the amount was refunded to your wallet."
+                    ),
+                )
+            except Exception:
+                logger.exception(
+                    "Could not notify user %s about preorder fallback",
                     result.user_id,
                 )
 

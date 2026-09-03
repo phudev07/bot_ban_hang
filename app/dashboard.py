@@ -6169,7 +6169,7 @@ def create_dashboard_router(
                 )
             flash(request, message, "error")
             return RedirectResponse("/admin/payments", status_code=303)
-        is_direct_purchase = payment_kind == "direct_purchase"
+        is_direct_purchase = payment_kind in {"direct_purchase", "preorder"}
         if is_direct_purchase:
             result = await approve_direct_purchase_deposit(
                 session_factory,
@@ -6193,6 +6193,8 @@ def create_dashboard_router(
             "direct_purchase_completed",
             "direct_purchase_fallback",
             "direct_purchase_pending",
+            "preorder_created",
+            "preorder_fallback",
         }
         successful_wallet = not is_direct_purchase and result.status == "approved"
         if not successful_direct and not successful_wallet:
@@ -6220,7 +6222,17 @@ def create_dashboard_router(
             flash(request, message, "error")
             return RedirectResponse("/admin/payments", status_code=303)
 
-        if result.status == "direct_purchase_completed":
+        if result.status == "preorder_created":
+            message = (
+                f"Đã duyệt và tạo đơn đặt trước QR {result.deposit_code} "
+                f"({result.quantity} sản phẩm)."
+            )
+        elif result.status == "preorder_fallback":
+            message = (
+                f"Đã duyệt QR {result.deposit_code}; đơn đặt trước không còn hợp lệ "
+                f"nên đã hoàn {format_vnd(result.amount)} vào ví."
+            )
+        elif result.status == "direct_purchase_completed":
             message = (
                 f"Đã duyệt và giao đơn QR {result.deposit_code} "
                 f"({result.quantity} sản phẩm)."
@@ -6255,6 +6267,32 @@ def create_dashboard_router(
             except Exception:
                 logger.exception(
                     "Could not notify user %s about manual deposit approval",
+                    result.user_id,
+                )
+        if bot is not None and result.user_id is not None and result.status == "preorder_created":
+            try:
+                await bot.send_message(
+                    result.user_id,
+                    "✅ <b>Đã nhận thanh toán đặt trước</b>\n\n"
+                    f"• Mã thanh toán: <code>{escape(result.deposit_code or '—')}</code>\n"
+                    f"• Số lượng: <b>{result.quantity}</b>\n"
+                    "Đơn đặt trước đã được tạo và tiền đã được ghi nhận.",
+                )
+            except Exception:
+                logger.exception(
+                    "Could not notify user %s about preorder approval",
+                    result.user_id,
+                )
+        if bot is not None and result.user_id is not None and result.status == "preorder_fallback":
+            try:
+                await bot.send_message(
+                    result.user_id,
+                    "⚠️ <b>Thanh toán đặt trước đã được ghi nhận</b>\n\n"
+                    "Đơn đặt trước không còn hợp lệ nên số tiền đã được hoàn vào ví.",
+                )
+            except Exception:
+                logger.exception(
+                    "Could not notify user %s about preorder fallback",
                     result.user_id,
                 )
         if bot is not None and result.user_id is not None and result.status == "direct_purchase_completed":

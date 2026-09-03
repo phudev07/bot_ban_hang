@@ -13,6 +13,7 @@ from app.models import (
     InventoryItem,
     Order,
     PaymentTransaction,
+    Preorder,
     Product,
     ProductPriceAlert,
     QuantityDiscount,
@@ -1865,6 +1866,63 @@ def test_direct_purchase_payment_delivers_without_using_wallet() -> None:
             assert all(item.status == "sold" for item in stock_items)
             assert order_count == 2
             assert wallet_count == 0
+        await engine.dispose()
+
+    asyncio.run(scenario())
+
+
+def test_preorder_qr_payment_creates_preorder_without_second_wallet_charge() -> None:
+    async def scenario() -> None:
+        engine, sessions = await make_database()
+        async with sessions() as session:
+            category = Category(name_vi="Preorder", name_en="Preorder")
+            product = Product(
+                category_id=1,
+                name_vi="Out of stock account",
+                name_en="Out of stock account",
+                price=30_000,
+                allow_quantity=True,
+                max_quantity=10,
+                active=True,
+            )
+            user = User(telegram_id=123458, full_name="Preorder buyer", balance=0)
+            session.add(category)
+            await session.flush()
+            product.category_id = category.id
+            session.add_all([product, user])
+            await session.flush()
+            deposit = Deposit(
+                user_id=user.telegram_id,
+                code="NAP123458PRE",
+                requested_amount=60_000,
+                payment_kind="preorder",
+                product_id=product.id,
+                quantity=2,
+            )
+            session.add(deposit)
+            await session.commit()
+
+        result = await process_sepay_payment(
+            sessions,
+            {
+                "id": 33333,
+                "transferType": "in",
+                "transferAmount": 60_000,
+                "content": "NAP123458PRE",
+            },
+        )
+        assert result.status == "preorder_created"
+        async with sessions() as session:
+            preorder = await session.scalar(select(Preorder))
+            user = await session.get(User, 123458)
+            deposit = await session.scalar(select(Deposit))
+            transaction = await session.scalar(select(PaymentTransaction))
+            assert preorder is not None
+            assert preorder.total_amount == 60_000
+            assert preorder.funds_charged is True
+            assert user is not None and user.balance == 0
+            assert deposit is not None and deposit.status == "paid"
+            assert transaction is not None and transaction.credit_status == "credited"
         await engine.dispose()
 
     asyncio.run(scenario())

@@ -97,6 +97,7 @@ async def create_preorder(
     *,
     expected_base_unit_price: int,
     max_active_per_user: int,
+    charge_wallet: bool = True,
 ) -> Preorder:
     user = await session.scalar(
         select(User).where(User.telegram_id == user_id).with_for_update()
@@ -148,7 +149,7 @@ async def create_preorder(
         raise PreorderError("active_limit")
 
     quote = preorder_quote(product, quantity)
-    if int(user.balance) < quote.total_amount:
+    if charge_wallet and int(user.balance) < quote.total_amount:
         raise PreorderError("insufficient")
     preorder = Preorder(
         user_id=user_id,
@@ -169,18 +170,19 @@ async def create_preorder(
     except IntegrityError as exc:
         await session.rollback()
         raise PreorderError("duplicate") from exc
-    apply_wallet_change(
-        session,
-        user,
-        -quote.total_amount,
-        kind="preorder_charge",
-        event_key=f"preorder_charge:{preorder.id}",
-        reference_type="preorder",
-        reference_id=preorder.code,
-        description=(
-            f"Đặt trước {quantity} tài khoản {product.name_vi} · theo giá bán hiện tại"
-        ),
-    )
+    if charge_wallet:
+        apply_wallet_change(
+            session,
+            user,
+            -quote.total_amount,
+            kind="preorder_charge",
+            event_key=f"preorder_charge:{preorder.id}",
+            reference_type="preorder",
+            reference_id=preorder.code,
+            description=(
+                f"Đặt trước {quantity} tài khoản {product.name_vi} · theo giá bán hiện tại"
+            ),
+        )
     preorder.funds_charged = True
     return preorder
 

@@ -3,6 +3,8 @@ from app.keyboards import (
     deposit_amounts_for_providers,
     main_menu,
     order_history_menu,
+    preorder_confirmation_menu,
+    preorder_quantity_menu,
     product_detail,
     products_menu,
     preorder_products_menu,
@@ -96,6 +98,33 @@ def test_preorder_product_button_uses_sale_price_without_surcharge() -> None:
     keyboard = preorder_products_menu([product], "vi")
 
     assert keyboard.inline_keyboard[0][0].text == "📦 Tài khoản · 20.000đ/1"
+
+
+def test_preorder_quantity_menu_has_quick_choices_and_wallet_or_qr() -> None:
+    product = make_product()
+    quantity_keyboard = preorder_quantity_menu(product, "vi")
+    quantity_callbacks = [
+        button.callback_data
+        for row in quantity_keyboard.inline_keyboard
+        for button in row
+    ]
+    assert quantity_callbacks[:4] == [
+        "preorder:quantity:10:1",
+        "preorder:quantity:10:2",
+        "preorder:quantity:10:5",
+        "preorder:quantity:10:10",
+    ]
+
+    confirmation = preorder_confirmation_menu("vi", 10, 2, 20_000)
+    confirmation_callbacks = [
+        button.callback_data
+        for row in confirmation.inline_keyboard
+        for button in row
+    ]
+    assert confirmation_callbacks[:2] == [
+        "preorder:confirm:10:2:20000",
+        "preorder:pay:10:2:20000",
+    ]
 
 
 def test_local_inventory_menu_stock_overrides_stale_external_stock() -> None:

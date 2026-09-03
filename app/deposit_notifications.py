@@ -29,6 +29,10 @@ def deposit_notification_text(result: PaymentResult) -> str:
     )
     if result.status == "direct_purchase_pending":
         return base + "\nTrạng thái: hệ thống đang xử lý add email vào team."
+    if result.status == "preorder_created":
+        return base + "\nTrạng thái: đã tạo đơn đặt trước."
+    if result.status == "preorder_fallback":
+        return base + "\nTrạng thái: đơn đặt trước không hợp lệ, đã hoàn vào ví."
     if result.status in {
         "credited",
         "direct_purchase_completed",

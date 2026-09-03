@@ -142,11 +142,54 @@ def preorder_confirmation_menu(
             ],
             [
                 InlineKeyboardButton(
+                    text=(
+                        "💳 Thanh toán QR cho đơn đặt trước"
+                        if language == "vi"
+                        else "💳 Pay preorder by QR"
+                    ),
+                    callback_data=f"preorder:pay:{product_id}:{quantity}:{base_unit_price}",
+                )
+            ],
+            [
+                InlineKeyboardButton(
                     text=tr(language, "back"), callback_data="menu:preorders"
                 )
             ],
         ]
     )
+
+
+def preorder_quantity_menu(
+    product: Product,
+    language: str,
+) -> InlineKeyboardMarkup:
+    """Offer the same quick quantity choices as normal purchases."""
+    builder = InlineKeyboardBuilder()
+    maximum = max(1, int(product.max_quantity)) if product.allow_quantity else 1
+    suggestions = [value for value in (1, 2, 5, 10) if value <= maximum]
+    for quantity in suggestions:
+        builder.button(
+            text=(
+                f"{quantity} tài khoản · {format_vnd(product.price * quantity)}"
+                if language == "vi"
+                else f"{quantity} accounts · {format_vnd(product.price * quantity)}"
+            ),
+            callback_data=f"preorder:quantity:{product.id}:{quantity}",
+        )
+    builder.adjust(2)
+    if product.allow_quantity:
+        builder.row(
+            InlineKeyboardButton(
+                text="✍️ Nhập số lượng" if language == "vi" else "✍️ Custom quantity",
+                callback_data=f"preorder:custom:{product.id}",
+            )
+        )
+    builder.row(
+        InlineKeyboardButton(
+            text=tr(language, "back"), callback_data="menu:preorders"
+        )
+    )
+    return builder.as_markup()
 
 
 def preorder_history_menu(
