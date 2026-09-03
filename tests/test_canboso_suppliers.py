@@ -10,7 +10,12 @@ from app.canboso_suppliers import CANBOSO_GG18M_ROUTE_ID, CanbosoClient
 from app.database import Base
 from app.lehai_suppliers import refresh_lehai_product
 from app.models import Category, Order, Product, User
-from app.services import ProductPricing, price_supplier_plan, purchase_product
+from app.services import (
+    ProductPricing,
+    price_supplier_plan,
+    purchase_product,
+    supplier_sale_price,
+)
 from app.suppliers import (
     SupplierError,
     SupplierPurchase,
@@ -272,6 +277,20 @@ def test_canboso_multi_source_quote_uses_rounded_shop_price() -> None:
     assert quote.total_amount == 21_000
     assert quote.allocations[0].original_unit_price == 21_000
     assert quote.allocations[0].final_unit_price == 21_000
+
+
+def test_gg18m_haji_uses_own_markup_when_it_is_the_expensive_route() -> None:
+    product = Product(
+        price=16_000,
+        supplier_price=11_000,
+        supplier_markup=5_000,
+        fulfillment_source="lehai",
+        supplier_product_id="cdk_ggpro_18m",
+    )
+
+    assert supplier_sale_price(product, 15_000, "haji") == 20_000
+    # A cheaper Haji quote keeps the Canboso-anchored public price instead.
+    assert supplier_sale_price(product, 9_000, "haji") == 16_000
 
 
 def test_gg18m_purchase_prefers_cheaper_canboso_source() -> None:

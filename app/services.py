@@ -932,9 +932,12 @@ def supplier_sale_price(product: Product, supplier_price: int, provider: str) ->
         and product.fulfillment_source == "lehai"
         and product.supplier_product_id == JIO_18M_PRODUCT_ID
     ):
-        # Haji is a cheaper fallback route, but GG 18M keeps the public price
-        # established by the Canboso route so the saving remains shop margin.
-        return int(product.price)
+        # When Haji is cheaper, keep the Canboso-based public price so the
+        # difference remains shop margin. If Haji is the more expensive route,
+        # it owns the public price and uses its normal cost plus markup.
+        anchor_cost = int(product.supplier_price or 0)
+        if anchor_cost > 0 and int(supplier_price) <= anchor_cost:
+            return int(product.price)
     sale_price = int(supplier_price) + max(0, int(product.supplier_markup))
     return round_vnd_to_thousand(sale_price) if provider == "canboso" else sale_price
 

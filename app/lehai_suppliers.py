@@ -969,19 +969,34 @@ async def refresh_lehai_product(
             ),
             None,
         )
-        # GG 18M's public price is owned by Canboso. If that route is
-        # temporarily unavailable, Haji may still fulfill orders, but its
-        # lower cost must not replace the shop price.
+        # GG 18M uses the more expensive active source as the public-price
+        # anchor. When Haji is cheaper, Canboso remains the anchor so the
+        # saving is retained as margin; when Haji is higher, its normal price
+        # (cost plus markup) becomes the shop price.
         canboso_price_is_authoritative = (
             product.supplier_product_id == JIO_18M_PRODUCT_ID
             and "canboso" in enabled_providers
         )
         if priced_routes or canboso_price_route is not None:
-            # Keep the shop's public GG 18M price anchored to Canboso while
-            # Haji is available, even if Canboso itself is temporarily empty.
-            # The route planner may still fulfill from a cheaper Haji/Le Hai
-            # route, preserving the extra margin.
             price_route = canboso_price_route
+            if product.supplier_product_id == JIO_18M_PRODUCT_ID:
+                haji_price_route = next(
+                    (
+                        route
+                        for route in fetched.routes
+                        if route.provider == "haji"
+                        and route.snapshot.unit_price > 0
+                        and route.snapshot.effective_stock > 0
+                    ),
+                    None,
+                )
+                if (
+                    haji_price_route is not None
+                    and canboso_price_route is not None
+                    and haji_price_route.snapshot.unit_price
+                    > canboso_price_route.snapshot.unit_price
+                ):
+                    price_route = haji_price_route
             if price_route is None and not canboso_price_is_authoritative:
                 price_route = min(
                     priced_routes,
