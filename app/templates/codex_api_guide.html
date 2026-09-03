@@ -58,8 +58,8 @@ requires_openai_auth = false</pre></div><ul class="check-list"><li>Windows: <cod
         <span class="eyebrow">Codex · file configuration</span><h2>Cấu hình bằng <em>config.toml + auth.json</em></h2>
         <p class="lead">Đây là cách riêng, không cần thao tác trong CLI Tools. Hai file nằm trong thư mục <code>.codex</code> của tài khoản Windows hoặc Ubuntu.</p>
         <article class="step" id="files-b1"><span class="step-number">B1</span><div><h3>Mở đúng thư mục .codex</h3><p>Windows mở <code>C:\Users\Tên máy của bạn\.codex</code>. Ubuntu mở <code>~/.codex</code>. Không xóa thư mục <code>sessions</code> hoặc các file hội thoại cũ.</p></div></article>
-        <article class="step" id="files-b2"><span class="step-number">B2</span><div><h3>Ghi file config.toml</h3><p>Tạo hoặc mở <code>config.toml</code>, dán toàn bộ mẫu sau và chỉ thay <code>sk-your-key</code>.</p><div class="code-box"><button class="copy" type="button" data-copy='# 9Router Configuration for Codex CLI&#10;&#10;model = "gpt-5.6-sol"&#10;[model_providers.9router]&#10;name = "9Router"&#10;base_url = "https://aixingialaire.shop/cdx/v1"&#10;wire_api = "responses"&#10;experimental_bearer_token = "sk-your-key"&#10;requires_openai_auth = false&#10;&#10;[agents.subagent]&#10;model = "gpt-5.6-sol"'>Sao chép</button><pre># 9Router Configuration for Codex CLI
-model = "gpt-5.6-sol"
+        <article class="step" id="files-b2"><span class="step-number">B2</span><div><h3>Ghi file config.toml</h3><p>Tạo hoặc mở <code>config.toml</code>, dán toàn bộ mẫu sau và chỉ thay <code>sk-your-key</code>.</p><div class="code-box"><button class="copy" type="button" data-copy='model = "gpt-5.6-sol"&#10;model_provider = "9router"&#10;[model_providers.9router]&#10;name = "9Router"&#10;base_url = "https://aixingialaire.shop/cdx/v1"&#10;wire_api = "responses"&#10;experimental_bearer_token = "sk-your-key"&#10;requires_openai_auth = false&#10;&#10;[agents.subagent]&#10;model = "gpt-5.6-sol"'>Sao chép</button><pre>model = "gpt-5.6-sol"
+model_provider = "9router"
 [model_providers.9router]
 name = "9Router"
 base_url = "https://aixingialaire.shop/cdx/v1"

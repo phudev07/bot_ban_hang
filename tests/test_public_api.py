@@ -336,6 +336,7 @@ def test_codex_guide_and_zip_download_are_public_but_raw_exe_is_not(tmp_path) ->
         assert "Dữ liệu chat không bị xóa" in guide.text
         assert "[agents.subagent]" in guide.text
         assert "model = \"gpt-5.6-sol\"" in guide.text
+        assert "model_provider = \"9router\"" in guide.text
         assert "files-b3" in guide.text
         assert '"auth_mode": "apikey"' in guide.text
         assert '"OPENAI_API_KEY": "sk-your-key"' in guide.text
