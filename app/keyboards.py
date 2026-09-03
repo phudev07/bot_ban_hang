@@ -95,7 +95,9 @@ def preorder_products_menu(
         name = sanitize_customer_text(
             product.name_en if language == "en" else product.name_vi
         )
-        unit_price = (max(0, int(product.price)) * 105 + 99) // 100
+        # Preorder prices use the current sale price; historical orders keep
+        # their stored prices in the preorder record.
+        unit_price = max(0, int(product.price))
         rows.append(
             [
                 InlineKeyboardButton(

@@ -5,6 +5,7 @@ from app.keyboards import (
     order_history_menu,
     product_detail,
     products_menu,
+    preorder_products_menu,
     purchase_payment_options,
     quick_access_keyboard,
     quantity_menu,
@@ -87,6 +88,14 @@ def test_out_of_stock_product_button_is_red_and_clearly_labelled() -> None:
     assert available_button.style == "success"
     assert sold_out_button.style == "danger"
     assert sold_out_button.text == "🔴 Hết hàng · 30.000đ · Hết hàng"
+
+
+def test_preorder_product_button_uses_sale_price_without_surcharge() -> None:
+    product = make_product()
+
+    keyboard = preorder_products_menu([product], "vi")
+
+    assert keyboard.inline_keyboard[0][0].text == "📦 Tài khoản · 20.000đ/1"
 
 
 def test_local_inventory_menu_stock_overrides_stale_external_stock() -> None:
