@@ -86,7 +86,7 @@ Set-ScheduledTask -InputObject $task
 ## Locations and retention
 
 - VPS: `/opt/backups/telegram-sepay-shop/automated`, retained for 14 days.
-- Windows: `C:\Users\DELL\Documents\VietShareBackups\bot_ban_hang`, retained for 90 days.
+- Windows: `C:\Users\DELL\Documents\VietShareBackups\bot_ban_hang`, retained for 14 days.
 - Decryption key: `C:\Users\DELL\.ssh\shop_backup.key`.
 
 Keep an additional offline copy of the decryption key. Losing both the VPS and this key

@@ -3,7 +3,8 @@ param(
     [string]$SshKey = "$HOME\.ssh\codex_vps",
     [string]$RemoteDirectory = "/opt/backups/telegram-sepay-shop/automated",
     [string]$Destination = "$HOME\Documents\VietShareBackups\bot_ban_hang",
-    [int]$RetentionDays = 90
+    # Match the VPS retention window so the offsite folder stays bounded.
+    [int]$RetentionDays = 14
 )
 
 $ErrorActionPreference = "Stop"
