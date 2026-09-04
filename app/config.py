@@ -166,6 +166,7 @@ class Settings(BaseSettings):
     gpt_import_9router_windows_zip_path: str = "/app/downloads/import_to_9router_windows.zip"
     gpt_import_9router_linux_zip_path: str = "/app/downloads/import_to_9router_linux.zip"
     gpt_import_9router_macos_zip_path: str = "/app/downloads/import_to_9router_macos.zip"
+    codex_quota_gateway_url: str = "https://aixingialaire.shop/cdx/v1"
     referral_commission_percent: int = 2
 
     inventory_encryption_key: SecretStr

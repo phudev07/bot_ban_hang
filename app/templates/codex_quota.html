@@ -1,0 +1,78 @@
+<!doctype html>
+<html lang="vi">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="Kiểm tra hạn mức token Codex API">
+  <title>Kiểm tra hạn mức · PHP TOOL Shop</title>
+  <style>
+    :root{--bg:#070a0d;--panel:#101820;--line:#284451;--cyan:#55ead0;--lime:#d4fa75;--text:#effffb;--muted:#9db3b0;--danger:#ff927b}
+    *{box-sizing:border-box}body{margin:0;min-height:100vh;color:var(--text);font:15px/1.55 "Segoe UI",sans-serif;background:radial-gradient(circle at 80% 0,rgba(85,234,208,.14),transparent 32rem),linear-gradient(135deg,#070a0d,#0a1218 60%,#07100f)}
+    .wrap{width:min(700px,calc(100% - 28px));margin:0 auto;padding:42px 0 60px}.brand{color:var(--cyan);font:800 11px/1 "Cascadia Code",Consolas,monospace;letter-spacing:.15em;text-transform:uppercase}.panel{margin-top:14px;padding:clamp(22px,5vw,38px);border:1px solid var(--line);border-radius:18px;background:rgba(16,24,32,.9);box-shadow:0 22px 70px rgba(0,0,0,.35)}h1{margin:8px 0 0;font-size:clamp(27px,6vw,42px);line-height:1.08;letter-spacing:-.04em}h1 em{color:var(--lime);font-style:normal}.lead{margin:13px 0 0;color:var(--muted)}label{display:block;margin-top:25px;color:#d5e8e4;font-weight:700}input{display:block;width:100%;margin-top:8px;padding:13px 14px;border:1px solid var(--line);border-radius:10px;color:var(--text);background:#071016;font:14px "Cascadia Code",Consolas,monospace}input:focus{border-color:var(--cyan);outline:2px solid rgba(85,234,208,.16)}button{width:100%;margin-top:12px;padding:13px 15px;border:1px solid var(--cyan);border-radius:10px;color:#03100e;background:var(--cyan);font-weight:900;cursor:pointer}button:disabled{cursor:wait;opacity:.65}.hint{margin:10px 0 0;color:var(--muted);font-size:12px}.result{display:none;margin-top:22px;padding:18px;border:1px solid var(--line);border-radius:13px;background:rgba(4,12,16,.7)}.result.show{display:block}.result.error{border-color:rgba(255,146,123,.55)}.result h2{margin:0 0 10px;font-size:16px}.big{color:var(--lime);font:900 clamp(28px,7vw,48px)/1.1 "Cascadia Code",Consolas,monospace}.grid{display:grid;grid-template-columns:repeat(3,1fr);gap:9px;margin-top:15px}.metric{padding:10px;border:1px solid rgba(85,234,208,.18);border-radius:9px}.metric small{display:block;color:var(--muted);font-size:11px}.metric strong{display:block;margin-top:2px;font-size:14px}.status{margin-top:14px;color:var(--muted);font-size:13px}.back{display:inline-block;margin-top:17px;color:var(--cyan);font-size:13px;text-decoration:none}.back:hover{color:var(--lime)}
+    @media(max-width:520px){.wrap{padding-top:25px}.grid{grid-template-columns:1fr 1fr}.metric:last-child{grid-column:span 2}}
+  </style>
+</head>
+<body>
+  <main class="wrap">
+    <div class="brand">PHP TOOL SHOP · CODEX API</div>
+    <section class="panel">
+      <h1>Kiểm tra <em>hạn mức token</em></h1>
+      <p class="lead">Nhập key Codex của bạn để xem số token còn lại. Key chỉ được dùng trong lần kiểm tra này và không được lưu trên hệ thống.</p>
+      <form id="quota-form" novalidate>
+        <label for="api-key">API key</label>
+        <input id="api-key" name="key" type="password" autocomplete="off" spellcheck="false" placeholder="sk-cdx-..." required>
+        <button id="submit" type="submit">Làm mới hạn mức</button>
+        <p class="hint">Chỉ chấp nhận key bắt đầu bằng <code>sk-cdx-</code>.</p>
+      </form>
+      <div id="result" class="result" aria-live="polite">
+        <h2 id="result-title">Hạn mức hiện tại</h2>
+        <div id="display" class="big">-</div>
+        <div class="grid">
+          <div class="metric"><small>Đã dùng</small><strong id="used">-</strong></div>
+          <div class="metric"><small>Tổng hạn mức</small><strong id="total">-</strong></div>
+          <div class="metric"><small>Tỷ lệ còn lại</small><strong id="percentage">-</strong></div>
+        </div>
+        <div id="expires" class="status"></div>
+      </div>
+      <a class="back" href="/codex-api">← Xem hướng dẫn Codex API</a>
+    </section>
+  </main>
+  <script>
+    (() => {
+      const form = document.getElementById('quota-form');
+      const input = document.getElementById('api-key');
+      const submit = document.getElementById('submit');
+      const result = document.getElementById('result');
+      const title = document.getElementById('result-title');
+      const display = document.getElementById('display');
+      const used = document.getElementById('used');
+      const total = document.getElementById('total');
+      const percentage = document.getElementById('percentage');
+      const expires = document.getElementById('expires');
+      const showError = (message) => {
+        result.className = 'result show error';
+        title.textContent = message;
+        display.textContent = '-'; used.textContent = '-'; total.textContent = '-'; percentage.textContent = '-'; expires.textContent = '';
+      };
+      form.addEventListener('submit', async (event) => {
+        event.preventDefault();
+        const key = input.value.trim();
+        if (!key.startsWith('sk-cdx-')) { showError('Key không hợp lệ'); input.focus(); return; }
+        submit.disabled = true; submit.textContent = 'Đang cập nhật...'; result.className = 'result';
+        try {
+          const response = await fetch('/codex-api/quota/check', {method:'POST', headers:{'Content-Type':'application/json','Accept':'application/json'}, body:JSON.stringify({key}), credentials:'same-origin'});
+          const payload = await response.json();
+          if (!response.ok || !payload.ok) throw new Error(payload.message || 'Không thể kiểm tra hạn mức.');
+          const quota = payload.quota || {};
+          result.className = 'result show'; title.textContent = 'Hạn mức hiện tại'; display.textContent = quota.display || '-';
+          used.textContent = quota.used == null ? '-' : Number(quota.used).toLocaleString('vi-VN');
+          total.textContent = quota.total == null ? '-' : Number(quota.total).toLocaleString('vi-VN');
+          percentage.textContent = quota.percentage == null ? '-' : `${quota.percentage}%`;
+          expires.textContent = quota.expires_at ? `Hết hạn: ${String(quota.expires_at)}` : '';
+        } catch (error) { showError(error instanceof Error ? error.message : 'Không thể kiểm tra hạn mức.'); }
+        finally { submit.disabled = false; submit.textContent = 'Làm mới hạn mức'; }
+      });
+    })();
+  </script>
+</body>
+</html>

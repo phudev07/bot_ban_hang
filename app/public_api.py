@@ -21,6 +21,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from sqlalchemy.orm import selectinload
 
+from app.codex_quota import CodexQuotaError, fetch_codex_quota
 from app.config import Settings
 from app.flash_sales import (
     active_flash_sale,
@@ -37,6 +38,7 @@ from app.models import (
     User,
 )
 from app.partner_services import api_signature
+from app.rate_limit import FixedWindowRateLimiter, RateLimitRule
 from app.services import (
     active_products,
     available_stock,
@@ -134,6 +136,12 @@ class ApiOrderBody(BaseModel):
     currency: Literal["VND", "USD"] = "VND"
 
 
+class CodexQuotaCheckBody(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    key: str = Field(min_length=1, max_length=512)
+
+
 @dataclass(frozen=True)
 class ApiPrincipal:
     client: ApiClient
@@ -186,8 +194,14 @@ def public_order_failure_code(message: str) -> str:
     return message.upper()
 
 
-def create_public_api_docs_router(settings: Settings) -> APIRouter:
+def create_public_api_docs_router(
+    settings: Settings,
+    redis_client: Redis | None = None,
+) -> APIRouter:
     router = APIRouter(tags=["shop-api-docs"])
+    quota_limiter = (
+        FixedWindowRateLimiter(redis_client, "codex-quota") if redis_client is not None else None
+    )
 
     @router.get("/codex-api", response_class=HTMLResponse)
     @router.get("/codex-api/", response_class=HTMLResponse, include_in_schema=False)
@@ -203,6 +217,67 @@ def create_public_api_docs_router(settings: Settings) -> APIRouter:
         )
         response.headers["Cache-Control"] = "public, max-age=300"
         return response
+
+    @router.get("/codex-api/quota", response_class=HTMLResponse)
+    @router.get("/codex-api/quota/", response_class=HTMLResponse, include_in_schema=False)
+    async def codex_quota_page(request: Request) -> HTMLResponse:
+        response = templates.TemplateResponse(
+            request,
+            "codex_quota.html",
+            {"gateway_url": settings.codex_quota_gateway_url},
+        )
+        response.headers["Cache-Control"] = "no-store"
+        return response
+
+    @router.post("/codex-api/quota/check")
+    async def codex_quota_check(
+        request: Request,
+        body: CodexQuotaCheckBody,
+    ) -> JSONResponse:
+        if quota_limiter is not None:
+            remote_ip = client_ip(request) or "unknown"
+            decision = await quota_limiter.hit(
+                f"ip:{remote_ip}",
+                (RateLimitRule("burst", 3, 10), RateLimitRule("minute", 12, 60)),
+            )
+            if not decision.allowed:
+                return JSONResponse(
+                    {"ok": False, "code": "RATE_LIMITED", "message": "Bạn thao tác quá nhanh. Vui lòng thử lại sau."},
+                    status_code=429,
+                    headers={
+                        "Retry-After": str(decision.retry_after),
+                        "Cache-Control": "no-store",
+                    },
+                )
+        try:
+            quota = await fetch_codex_quota(
+                body.key,
+                base_url=settings.codex_quota_gateway_url,
+            )
+        except CodexQuotaError as exc:
+            status_code = 400 if exc.code == "INVALID_KEY" else 503
+            if exc.code == "UPSTREAM_RATE_LIMITED":
+                status_code = 429
+            return JSONResponse(
+                {"ok": False, "code": exc.code, "message": exc.message},
+                status_code=status_code,
+                headers={"Cache-Control": "no-store"},
+            )
+        return JSONResponse(
+            {
+                "ok": True,
+                "quota": {
+                    "total": quota.total,
+                    "used": quota.used,
+                    "remaining": quota.remaining,
+                    "unlimited": quota.unlimited,
+                    "percentage": quota.percentage,
+                    "expires_at": quota.expires_at,
+                    "display": quota.display,
+                },
+            },
+            headers={"Cache-Control": "no-store", "Pragma": "no-cache"},
+        )
 
     @router.get("/codex-api/assets/9router.png", response_class=FileResponse)
     async def codex_9router_screenshot() -> FileResponse:

@@ -306,7 +306,7 @@ def create_api(
         )
 
     if settings.shop_api_enabled:
-        app.include_router(create_public_api_docs_router(settings))
+        app.include_router(create_public_api_docs_router(settings, api_redis_client))
         app.include_router(
             create_public_api_router(
                 settings,
