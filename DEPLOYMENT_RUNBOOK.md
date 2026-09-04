@@ -1,6 +1,6 @@
 # VietShare Shop - Deployment and VPS Runbook
 
-Last reviewed: 2026-07-22
+Last reviewed: 2026-09-04
 
 This file is the handoff document for a new Codex conversation or a new operator. Read
 it before changing production. It intentionally contains no password, API key, bot token,
@@ -545,6 +545,12 @@ encrypted archive when the PC becomes available:
 Get-ScheduledTaskInfo -TaskName "VietShare-Shop-Offsite-Backup"
 Get-Content "$HOME\Documents\VietShareBackups\bot_ban_hang\last-success.txt"
 ```
+
+The Windows offsite folder keeps the newest 14 days of encrypted archives and matching
+`.sha256` files. This matches the VPS retention window and prevents old snapshots from
+filling the workstation disk. Before deleting or moving backups, keep at least the newest
+verified archive and its checksum; the decryption key remains separate at
+`C:\Users\DELL\.ssh\shop_backup.key`.
 
 Full restore instructions are in `deploy/BACKUP_RECOVERY.md`. Do not regenerate the backup
 encryption key unless intentionally invalidating access to all older backups.
