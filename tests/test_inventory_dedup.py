@@ -8,9 +8,82 @@ from app.database import Base
 from app.inventory_dedup import (
     backfill_historical_duplicate_alerts,
     backfill_inventory_fingerprints,
+    filter_duplicate_inventory,
 )
 from app.models import Category, InventoryDuplicateAlert, InventoryItem, Product
 from app.utils import SecretCipher
+
+
+def test_reimport_override_allows_only_consumed_inventory(tmp_path) -> None:
+    async def scenario() -> None:
+        engine = create_async_engine(
+            f"sqlite+aiosqlite:///{(tmp_path / 'inventory-reimport.db').as_posix()}"
+        )
+        async with engine.begin() as connection:
+            await connection.run_sync(Base.metadata.create_all)
+        sessions = async_sessionmaker(engine, expire_on_commit=False)
+        cipher = SecretCipher(Fernet.generate_key().decode())
+        async with sessions() as session:
+            category = Category(name_vi="Test", name_en="Test")
+            session.add(category)
+            await session.flush()
+            product = Product(
+                category_id=category.id,
+                name_vi="Test account",
+                name_en="Test account",
+                price=10_000,
+            )
+            session.add(product)
+            await session.flush()
+            sold = "returned@example.com|password|key"
+            available = "still-in-stock@example.com|password|key"
+            session.add_all(
+                [
+                    InventoryItem(
+                        product_id=product.id,
+                        encrypted_secret=cipher.encrypt(sold),
+                        account_fingerprint=cipher.inventory_fingerprint(sold),
+                        status="sold",
+                    ),
+                    InventoryItem(
+                        product_id=product.id,
+                        encrypted_secret=cipher.encrypt(available),
+                        account_fingerprint=cipher.inventory_fingerprint(available),
+                        status="available",
+                    ),
+                ]
+            )
+            await session.flush()
+            result = await filter_duplicate_inventory(
+                session,
+                cipher,
+                product_id=product.id,
+                raw_items=[sold, available],
+                allow_reimport_consumed=True,
+            )
+            assert [item.raw_item for item in result.accepted] == [sold]
+            assert result.duplicate_count == 1
+            session.add(
+                InventoryItem(
+                    product_id=product.id,
+                    encrypted_secret=cipher.encrypt(sold),
+                    account_fingerprint=cipher.inventory_fingerprint(sold),
+                    status="available",
+                )
+            )
+            await session.flush()
+            blocked = await filter_duplicate_inventory(
+                session,
+                cipher,
+                product_id=product.id,
+                raw_items=[sold],
+                allow_reimport_consumed=True,
+            )
+            assert blocked.accepted == ()
+            assert blocked.duplicate_count == 1
+        await engine.dispose()
+
+    asyncio.run(scenario())
 
 
 def test_old_inventory_items_receive_fingerprints(tmp_path) -> None:

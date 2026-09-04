@@ -3828,6 +3828,7 @@ def create_dashboard_router(
             new_import_note = text_field("new_import_note")
             lock_sale_price = form.get("lock_sale_price")
             notify_stock_arrival = form.get("notify_stock_arrival")
+            allow_reimport_consumed = form.get("allow_reimport_consumed")
 
         try:
             product_id = int(raw_product_id)
@@ -3858,6 +3859,7 @@ def create_dashboard_router(
                     new_import_note=normalized_new_note,
                     lock_sale_price=lock_sale_price is not None,
                     notify_stock_arrival=notify_stock_arrival is not None,
+                    allow_reimport_consumed=allow_reimport_consumed is not None,
                 )
             except InventoryImportError as exc:
                 messages = {

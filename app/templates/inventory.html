@@ -45,6 +45,11 @@
         <span>Gửi thông báo hàng về sau khi nhập kho</span>
         <small>Không cần nạp tiền vào API. Bot dùng số hàng vừa nhập và giá bán hiện tại; nếu đang Flash Sale sẽ thông báo giá và số suất Flash Sale còn lại.</small>
       </label>
+      <label class="check wide">
+        <input type="checkbox" name="allow_reimport_consumed" value="1">
+        <span>Cho phép nhập lại tài khoản đã bán / hoàn / rút bảo hành</span>
+        <small>Chỉ bật khi khách đã hoàn đúng tài khoản. Hệ thống vẫn chặn tài khoản đang còn trong kho và tài khoản trùng trong chính lần nhập này.</small>
+      </label>
       <p class="hint">Số lượng phía trên cập nhật ngay khi nhập hoặc dán dữ liệu. Dữ liệu được mã hóa trước khi lưu.</p>
       <button class="button primary" type="submit" {{ 'disabled' if not import_products else '' }}>Mã hóa và nhập kho</button>
     </form>

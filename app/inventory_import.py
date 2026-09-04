@@ -59,6 +59,7 @@ async def import_inventory(
     new_import_note: str = "",
     lock_sale_price: bool = False,
     notify_stock_arrival: bool = False,
+    allow_reimport_consumed: bool = False,
 ) -> InventoryImportResult:
     """Import clean inventory rows inside the caller's transaction.
 
@@ -98,6 +99,7 @@ async def import_inventory(
         cipher,
         product_id=product.id,
         raw_items=items,
+        allow_reimport_consumed=allow_reimport_consumed,
     )
 
     import_note = normalized_new_note

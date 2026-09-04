@@ -31,6 +31,7 @@ async def filter_duplicate_inventory(
     *,
     product_id: int,
     raw_items: list[str],
+    allow_reimport_consumed: bool = False,
 ) -> InventoryDuplicateCheck:
     """Serialize Admin imports, keep clean rows and persist every rejected duplicate."""
     if session.get_bind().dialect.name == "postgresql":
@@ -60,9 +61,12 @@ async def filter_duplicate_inventory(
         else []
     )
     existing_by_fingerprint: dict[str, InventoryItem] = {}
+    existing_available_fingerprints: set[str] = set()
     for existing_item in existing_rows:
         if existing_item.account_fingerprint:
             existing_by_fingerprint.setdefault(existing_item.account_fingerprint, existing_item)
+            if existing_item.status == "available":
+                existing_available_fingerprints.add(existing_item.account_fingerprint)
 
     accepted: list[AcceptedInventoryItem] = []
     duplicate_count = 0
@@ -75,7 +79,11 @@ async def filter_duplicate_inventory(
         if fingerprint is not None:
             if fingerprint in seen_fingerprints:
                 reason = "duplicate_in_import"
-            elif existing_item is not None:
+            elif existing_item is not None and not (
+                allow_reimport_consumed
+                and existing_item.status in {"sold", "withdrawn"}
+                and fingerprint not in existing_available_fingerprints
+            ):
                 reason = "duplicate_existing"
             seen_fingerprints.add(fingerprint)
         if reason is None:
