@@ -49,6 +49,16 @@
       const total = document.getElementById('total');
       const percentage = document.getElementById('percentage');
       const expires = document.getElementById('expires');
+      const formatExpiry = (value) => {
+        if (value == null || value === '') return '';
+        const raw = String(value).trim();
+        const numeric = Number(raw);
+        const date = Number.isFinite(numeric)
+          ? new Date(numeric > 100000000000 ? numeric : numeric * 1000)
+          : new Date(raw);
+        if (Number.isNaN(date.getTime())) return `Hết hạn: ${raw}`;
+        return `Hết hạn: ${date.toLocaleString('vi-VN', {dateStyle:'short', timeStyle:'short'})}`;
+      };
       const showError = (message) => {
         result.className = 'result show error';
         title.textContent = message;
@@ -68,7 +78,7 @@
           used.textContent = quota.used == null ? '-' : Number(quota.used).toLocaleString('vi-VN');
           total.textContent = quota.total == null ? '-' : Number(quota.total).toLocaleString('vi-VN');
           percentage.textContent = quota.percentage == null ? '-' : `${quota.percentage}%`;
-          expires.textContent = quota.expires_at ? `Hết hạn: ${String(quota.expires_at)}` : '';
+          expires.textContent = formatExpiry(quota.expires_at);
         } catch (error) { showError(error instanceof Error ? error.message : 'Không thể kiểm tra hạn mức.'); }
         finally { submit.disabled = false; submit.textContent = 'Làm mới hạn mức'; }
       });
