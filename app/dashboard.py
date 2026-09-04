@@ -5504,9 +5504,11 @@ def create_dashboard_router(
             order_group = group_order_rows(
                 [(related_order, product, user) for related_order in related_orders]
             )[0]
+            # Keep each delivered account exactly as stored; ordinal prefixes
+            # make copying and matching the original inventory value harder.
             secret = "\n\n".join(
-                f"{index}. {cipher.decrypt(item.encrypted_secret)}"
-                for index, (_related_order, item) in enumerate(related_rows, start=1)
+                cipher.decrypt(item.encrypted_secret)
+                for _related_order, item in related_rows
             )
             user_order_count = int(
                 await session.scalar(
