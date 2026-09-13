@@ -1,6 +1,6 @@
 # VietShare Shop - Deployment and VPS Runbook
 
-Last reviewed: 2026-09-04
+Last reviewed: 2026-09-13
 
 This file is the handoff document for a new Codex conversation or a new operator. Read
 it before changing production. It intentionally contains no password, API key, bot token,
@@ -14,6 +14,10 @@ encryption key, database password, or backup decryption key.
 4. Neu xu ly mot don cu the, gui kem ma don shop, ma don nguon, log ID, user ID va
    thoi gian xay ra loi; khong gui API key hoac mat khau vao chat.
 
+**Bat buoc truoc moi lan deploy:** chay `git status --short`. Neu co bat ky dong nao,
+day la working tree chua commit; tuyet doi khong dong goi bang `git archive HEAD`. Dung
+muc 7.2 de dua ca file da sua va file moi len VPS, hoac dung lai de hoi chu so huu.
+
 Tai lieu dung tieng Anh ky thuat de cau lenh va ten thanh phan khong bi hieu sai khi
 ban giao, nhung moi thao tac production quan trong deu co lenh mau co the chay tu
 PowerShell tren may Windows nay.
@@ -22,15 +26,20 @@ PowerShell tren may Windows nay.
 
 1. The local Git repository is the source of truth. Production is a deployed archive and
    is not a Git checkout.
-2. Never commit `.env`, backup archives, database dumps, private SSH keys, API keys, or
+2. **CRITICAL DEPLOY RULE: `HEAD` is not necessarily the current code.** Always inspect
+   `git status --short` immediately before packaging. If it prints anything, the working
+   tree is dirty and `git archive HEAD` MUST NOT be used as the deployment payload. A dirty
+   tree contains user changes that may not be committed yet; omitting them can roll
+   production back to an older version.
+3. Never commit `.env`, backup archives, database dumps, private SSH keys, API keys, or
    customer account data. The GitHub repository is public.
-3. Before editing, run `git status --short`. Preserve any unrelated user changes.
-4. Before deployment, run the full test suite, Ruff, and `git diff --check`.
-5. Do not test a supplier purchase on production unless the owner explicitly approves a
+4. Before editing, run `git status --short`. Preserve any unrelated user changes.
+5. Before deployment, run the full test suite, Ruff, and `git diff --check`.
+6. Do not test a supplier purchase on production unless the owner explicitly approves a
    real purchase and the possible wallet debit.
-6. Do not retry an ambiguous supplier purchase with a new idempotency key. Inspect the
+7. Do not retry an ambiguous supplier purchase with a new idempotency key. Inspect the
    purchase-attempt and supplier-audit records first.
-7. Back up before manual database repair or a risky migration.
+8. Back up before manual database repair or a risky migration.
 
 ## 2. Project locations
 
@@ -118,6 +127,13 @@ and binds port 8080 only to localhost. Caddy is the public reverse proxy.
   keys, supplier URLs, supplier product IDs, supplier order IDs, or supplier cost.
 - Warehouse API only sells active account products. SMS rental is excluded.
 - Public API orders require HMAC, nonce, timestamp, idempotency key, and `max_unit_price`.
+- GPT Free product `#28` supports a Telegram-only bulk quantity up to 1,000 accounts.
+  Other products and the partner Warehouse API remain capped at 100. Bulk purchases
+  use the same atomic inventory/wallet transaction as normal purchases, and the bot
+  permits only one large GPT Free purchase to run at a time per app process. Delivery
+  still produces the account TXT and full JSON files; preview messages show only the
+  first 10 accounts. Keep at least 1000 available inventory rows before advertising
+  the maximum quantity and monitor the app's 768 MB memory limit during the first run.
 - Automated warehouse imports use a separate HMAC key and endpoint documented in
   `deploy/WAREHOUSE_IMPORT_API.md`; this key must never be reused for partner shop API
   clients or exposed in frontend code.
@@ -137,6 +153,19 @@ and binds port 8080 only to localhost. Caddy is the public reverse proxy.
 - Main-bot messages and keyboards use the custom emoji IDs in `app/custom_emoji.py`.
   The brand pack is `vietshare_brands_by_phptool_bot`; do not delete it because ChatGPT,
   Netflix, and Google logo IDs are referenced by production messages.
+- The `Lấy auth` button accepts GPT Free account lines or `.txt`/`.json` files. It only
+  processes emails found in the requesting user's completed product-28 orders, runs one
+  queued job at a time, and sends success/die TXT plus full OAuth JSON files. The bundled
+  runner is under `app/vendor/vercodex_runner`; optional proxy rotation uses private files
+  mounted at `/app/auth-runner-secrets/config.json` and `proxy.txt`, never Git or logs.
+  The private JSON may contain `master_key_proxyvn`, `loai_gia_han`, `thoigian_gia_han`,
+  and `doi_ip`; `proxy.txt` contains one rotating-proxy key per line.
+  The in-memory queue is bounded by `AUTH_RUNNER_MAX_PENDING_JOBS` (default 20), so a
+  burst of requests cannot exhaust VPS memory; queued work is intentionally discarded
+  on process restart and should be submitted again.
+  Before accepting or starting work, the service pauses when the container reaches 80%
+  of its memory limit or `/tmp` has less than 8 MiB free. Only one runner account is
+  executed at a time, and temporary files are removed plus garbage-collected afterwards.
 
 ## 6. Standard local workflow
 
@@ -179,6 +208,27 @@ Never use `git reset --hard` or overwrite unrelated local changes.
 
 ## 7. Deploy application code to the VPS
 
+### 7.0 Mandatory deployment preflight
+
+Run this immediately before every application deploy:
+
+```powershell
+git status --short
+git branch --show-current
+git rev-parse --short HEAD
+```
+
+- If `git status --short` is empty, the normal clean-tree procedure in section 7.1 may
+  use `git archive HEAD`.
+- If it is not empty, **do not run section 7.1**. Use section 7.2 to overlay every modified
+  and untracked source file onto a `HEAD` baseline, or stop and ask the owner whether all
+  current working-tree changes should be deployed.
+- Never silently deploy only `HEAD` when the task says to deploy the current changes.
+- Before recreating `app`, make a remote code backup and verify the archive contains the
+  changed files. Do not copy `.env`; do not run `docker compose down -v`.
+
+### 7.1 Clean-tree deployment (only when `git status --short` is empty)
+
 The VPS directory has no `.git`. Deployment uses `git archive`, preserving the production
 `.env` because `.env` is not tracked by Git.
 
@@ -212,6 +262,53 @@ Remove-Item -LiteralPath $archive
 
 This recreates only `app`; PostgreSQL and Redis remain running. Do not run
 `docker compose down -v`, because `-v` deletes persistent volumes.
+
+### 7.2 Dirty-tree deployment (when there are uncommitted or untracked changes)
+
+The clean-tree command above is unsafe for a dirty tree because it packages only `HEAD`.
+Build a payload from a `HEAD` baseline plus the complete current working-tree overlay:
+
+```powershell
+$tag = Get-Date -Format 'yyyyMMddHHmmss'
+$stage = Join-Path $env:TEMP "bot_ban_hang-working-tree-$tag"
+$archive = Join-Path $env:TEMP "bot_ban_hang-working-tree-$tag.tar"
+New-Item -ItemType Directory -Path $stage -Force | Out-Null
+$headTar = Join-Path $env:TEMP "bot_ban_hang-head-$tag.tar"
+git archive --format=tar -o $headTar HEAD
+tar -xf $headTar -C $stage
+
+$paths = @()
+$paths += @(git diff --name-only)
+$paths += @(git ls-files --others --exclude-standard)
+$paths = $paths | Where-Object {
+  $_ -and $_ -notmatch '^(\.git/|\.env$|build/|dist/|.*\.tar\.gz$)'
+} | Sort-Object -Unique
+foreach ($relativePath in $paths) {
+  $source = Join-Path (Get-Location) $relativePath
+  if (-not (Test-Path -LiteralPath $source -PathType Leaf)) { continue }
+  $destination = Join-Path $stage $relativePath
+  New-Item -ItemType Directory -Path (Split-Path -Parent $destination) -Force | Out-Null
+  Copy-Item -LiteralPath $source -Destination $destination -Force
+}
+foreach ($relativePath in @(git diff --name-only --diff-filter=D)) {
+  $destination = Join-Path $stage $relativePath
+  if (Test-Path -LiteralPath $destination) { Remove-Item -LiteralPath $destination -Force }
+}
+tar -cf $archive -C $stage .
+```
+
+Verify that every important changed file is present before upload:
+
+```powershell
+Test-Path (Join-Path $stage 'app')
+Get-ChildItem (Join-Path $stage 'app') -Recurse -File | Measure-Object
+```
+
+Upload `$archive` and extract it on the VPS using the same backup, `docker compose up -d
+--build --no-deps --wait app`, health check, and marker steps from section 7.1. Use a marker
+such as `6546cda-working-tree-YYYYMMDDHHMMSS` when the payload includes uncommitted files;
+do not claim that marker is a Git commit. Keep the remote pre-deploy code backup until the
+owner confirms the deployment is correct.
 
 When the portable Codex app changes, upload its ZIP separately before recreating `app`:
 
@@ -257,7 +354,9 @@ ssh -i "$HOME\.ssh\codex_vps" root@160.191.243.91 `
 
 Expected state:
 
-- `.deployed-commit` equals `git rev-parse --short HEAD`.
+- For a clean-tree deploy, `.deployed-commit` equals `git rev-parse --short HEAD`.
+  For a dirty-tree deploy, it uses the documented `*-working-tree-YYYYMMDDHHMMSS`
+  marker and must be checked against the deployment archive, not Git `HEAD`.
 - `app`, `postgres`, and `redis` are `healthy`.
 - `/health` returns `{"status":"ok"}`.
 - Logs contain no repeating traceback, database connection loop, or restart loop.
