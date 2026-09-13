@@ -105,6 +105,7 @@ def catalog_payload() -> dict[str, object]:
 
 def test_haji_product_matching_is_limited_to_requested_families() -> None:
     assert haji_product_kind("Netflix 4K Premium") == "netflix"
+    assert haji_product_kind("chatgptplus ChatGPT Plus BH 24H") == "gpt_plus"
     assert haji_product_kind("GPT Plus GCash") == "gpt_gcash"
     assert haji_product_kind("GPT K12") == "gpt_k12"
     assert haji_product_kind("KBH12") == "gpt_k12"
@@ -158,6 +159,62 @@ def test_haji_only_exposes_the_requested_claude_sku() -> None:
             "claude_addteam1x25"
         }
         await client.aclose()
+
+    asyncio.run(scenario())
+
+
+def test_haji_gpt_plus_product_is_imported_from_catalog() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/api/v2/catalog":
+            payload = catalog_payload()
+            payload["data"]["products"].append(
+                {
+                    "product_id": "chatgptplus",
+                    "name": "ChatGPT Plus BH 24H",
+                    "price": 100_000,
+                    "currency": "VND",
+                    "stock_count": 2,
+                    "available": True,
+                    "description": "Giao ngay",
+                }
+            )
+            return httpx.Response(200, json=payload)
+        if request.url.path == "/api/v2/me":
+            return httpx.Response(200, json={"ok": True, "data": {"balance": 250_000}})
+        raise AssertionError(f"Unexpected request: {request.method} {request.url}")
+
+    async def scenario() -> None:
+        engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+        async with engine.begin() as connection:
+            await connection.run_sync(Base.metadata.create_all)
+        sessions = async_sessionmaker(engine, expire_on_commit=False)
+        client = HajiClient(
+            "https://api.haji.in.net",
+            "dl_test_key_123456789",
+            transport=httpx.MockTransport(handler),
+        )
+
+        await ensure_haji_products(sessions, client, markup=5_000)
+
+        async with sessions() as session:
+            product, category = (
+                await session.execute(
+                    select(Product, Category)
+                    .join(Category, Category.id == Product.category_id)
+                    .where(Product.supplier_product_id == "chatgptplus")
+                )
+            ).one()
+            assert product.name_vi == "ChatGPT Plus BH 24H"
+            assert product.name_en == "ChatGPT Plus BH 24H"
+            assert product.price == 105_000
+            assert product.supplier_price == 100_000
+            assert product.supplier_markup == 5_000
+            assert product.product_type == "account"
+            assert product.allow_quantity is True and product.max_quantity == 100
+            assert category.name_vi == "Tài Khoản ChatGPT cá nhân"
+
+        await client.aclose()
+        await engine.dispose()
 
     asyncio.run(scenario())
 

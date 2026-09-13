@@ -52,7 +52,7 @@ HAJI_ALLOWED_CLAUDE_PRODUCT_IDS = frozenset({"claude_addteam1x25"})
 # not expose it as a second standalone product.
 HAJI_ROUTE_ONLY_PRODUCT_IDS = frozenset({"link_gemini_18moth"})
 HAJI_SUPPORTED_KINDS = frozenset(
-    {"netflix", "gpt_gcash", "gpt_k12", "codex", "claude", "gemini_18m"}
+    {"netflix", "gpt_plus", "gpt_gcash", "gpt_k12", "codex", "claude", "gemini_18m"}
 )
 
 
@@ -101,6 +101,11 @@ def haji_product_kind(value: object) -> str | None:
     normalized = re.sub(r"\s+", " ", normalized).strip()
     if "gemini" in normalized and re.search(r"\b18m(?:oth|onth)?\b", normalized):
         return "gemini_18m"
+    # Haji uses the compact product id ``chatgptplus`` for its 24-hour
+    # ChatGPT Plus account. Keep this exact id narrow so unrelated Plus
+    # listings (for example ChatGPT Plus iCloud) are not imported.
+    if normalized == "chatgptplus" or normalized.startswith("chatgptplus "):
+        return "gpt_plus"
     if "codex" in normalized and re.search(r"\b(?:10|50|100)\s*m\b", normalized):
         return "codex"
     if "claude" in normalized:
@@ -551,9 +556,20 @@ async def ensure_haji_products(
         )
         if client is None:
             for product in existing:
-                if product.supplier_product_id in HAJI_ROUTE_ONLY_PRODUCT_IDS:
-                    product.active = False
-                product.external_stock = 0
+                # Haji may be disabled while its accounts remain in the bot
+                # warehouse. Preserve visibility and expose local stock only.
+                local_stock = int(
+                    await session.scalar(
+                        select(func.count(InventoryItem.id)).where(
+                            InventoryItem.product_id == product.id,
+                            InventoryItem.status == "available",
+                        )
+                    )
+                    or 0
+                )
+                product.external_stock = local_stock
+                product.supplier_available_stock = 0
+                product.supplier_available_stock_initialized = True
             await session.commit()
             return
         if catalog_failed:
@@ -742,5 +758,8 @@ async def sync_haji_products(
             )
         )
         for product in products:
+            if not getattr(product, "haji_api_enabled", True):
+                await refresh_haji_product(session, product, None)
+                continue
             await refresh_haji_product(session, product, client)
         await session.commit()
