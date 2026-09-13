@@ -148,6 +148,7 @@ async def apply_supplier_price(
     supplier_price: int,
     *,
     alert_provider: str | None = None,
+    public_sale_price: int | None = None,
 ) -> bool:
     """Apply a dynamic supplier price and queue one durable alert for a real shop-price drop."""
     if supplier_price <= 0 or product.id is None:
@@ -164,7 +165,11 @@ async def apply_supplier_price(
 
     previous_supplier_price = locked_product.supplier_price
     previous_sale_price = int(locked_product.price)
-    new_sale_price = supplier_price + max(0, int(locked_product.supplier_markup))
+    new_sale_price = (
+        int(public_sale_price)
+        if public_sale_price is not None
+        else supplier_price + max(0, int(locked_product.supplier_markup))
+    )
     price_provider = alert_provider or locked_product.fulfillment_source
     if price_provider == "canboso":
         new_sale_price = round_vnd_to_thousand(new_sale_price)
@@ -248,7 +253,6 @@ async def apply_supplier_price(
         not was_synced
         or previous_supplier_price is None
         or previous_supplier_price <= 0
-        or supplier_price >= previous_supplier_price
         or new_sale_price >= previous_sale_price
     ):
         return False

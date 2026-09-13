@@ -131,6 +131,43 @@ def test_first_supplier_sync_does_not_create_a_fake_sale() -> None:
     asyncio.run(scenario())
 
 
+def test_sale_drop_is_alerted_when_supplier_cost_is_unchanged() -> None:
+    """A pricing-rule change can lower the sale price without lowering cost."""
+    async def scenario() -> None:
+        engine, sessions = await make_database()
+        async with sessions() as session:
+            category = Category(name_vi="Link GG", name_en="Google link")
+            session.add(category)
+            await session.flush()
+            product = Product(
+                category_id=category.id,
+                name_vi="Link GG 18M",
+                name_en="Link GG 18M",
+                price=24_000,
+                fulfillment_source="canboso",
+                supplier_markup=9_000,
+                supplier_price=9_625,
+                supplier_synced_at=datetime.now(UTC),
+                external_stock=1,
+            )
+            session.add(product)
+            await session.commit()
+
+            # The cost is unchanged, but the dynamic Canboso price drops to 19,000.
+            assert await apply_supplier_price(session, product, 9_625) is True
+            await session.commit()
+
+            alert = await session.scalar(select(ProductPriceAlert))
+            assert alert is not None
+            assert alert.supplier_price_before == 9_625
+            assert alert.supplier_price_after == 9_625
+            assert alert.sale_price_before == 24_000
+            assert alert.sale_price_after == 19_000
+        await engine.dispose()
+
+    asyncio.run(scenario())
+
+
 def test_disabled_sale_notifications_still_update_price_without_queuing() -> None:
     async def scenario() -> None:
         engine, sessions = await make_database()
